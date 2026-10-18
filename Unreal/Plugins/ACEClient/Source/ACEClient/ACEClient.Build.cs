@@ -42,6 +42,11 @@ public class ACEClient : ModuleRules
 			PublicSystemLibraries.Add("Ole32.lib");
 			PublicSystemLibraries.Add("Shell32.lib");
 		}
+		if (Target.Platform == UnrealTargetPlatform.Mac)
+		{
+			// Launcher passwords are stored in the macOS Keychain.
+			PublicFrameworks.Add("Security");
+		}
 		if (Target.Platform == UnrealTargetPlatform.Android)
 		{
 			PrivateDependencyModuleNames.Add("Launch");

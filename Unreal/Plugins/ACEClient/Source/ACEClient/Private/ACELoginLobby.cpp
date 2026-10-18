@@ -232,7 +232,7 @@ void UACELoginWidget::EnsureDefaultLayout()
 	AccountList=WidgetTree->ConstructWidget<UScrollBox>(); AccountList->SetScrollbarThickness(FVector2D(8,8));
 	auto* AccountSlot=Details->AddChildToVerticalBox(AccountList); AccountSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); AccountSlot->SetPadding(FMargin(0,0,0,12));
 	LoginButton=ActionButton(TEXT("Launch"),TEXT("launch"),FString(),true); AddLine(Details,LoginButton,8);
-	AddLine(Details,Label(PLATFORM_LINUX ? TEXT("Account names are saved. Enter your password on the Accounts tab after restarting.") : TEXT("Accounts are saved securely on this device."),14,true),0);
+	AddLine(Details,Label(PLATFORM_LINUX ? TEXT("Account names are saved. Enter your password on the Accounts tab after restarting.") : PLATFORM_MAC ? TEXT("Accounts are saved on this Mac. Passwords are stored in your macOS Keychain.") : TEXT("Accounts are saved securely on this device."),14,true),0);
 	// Server editor: explicit save/cancel avoids sending credentials to an edited endpoint by accident.
 	UVerticalBox* Edit; Pages->AddChild(Card(Edit));
 	AddLine(Edit,Label(TEXT("Server details"),30),18);
@@ -272,7 +272,7 @@ void UACELoginWidget::EnsureDefaultLayout()
 	Row(Files,{{TEXT("Save location"),TEXT("savedat")},{TEXT("Use default"),TEXT("defaultdat")}});
 #else
 	Row(Files,{{TEXT("Save location"),TEXT("savedat")},{TEXT("Use app DAT folder"),TEXT("defaultdat")}});
-	AddLine(Files,Label(PLATFORM_LINUX ? TEXT("Enter an absolute Linux folder path. DAT filenames are case sensitive.") : TEXT("On Quest, the folder must be accessible to this app. The installer uses the app's DAT folder."),18,true),20);
+	AddLine(Files,Label(PLATFORM_LINUX ? TEXT("Enter an absolute Linux folder path. DAT filenames are case sensitive.") : PLATFORM_MAC ? TEXT("Enter an absolute folder path, for example /Users/you/Games/Asheron's Call.") : TEXT("On Quest, the folder must be accessible to this app. The installer uses the app's DAT folder."),18,true),20);
 #endif
 	FileStatus=Label(TEXT(""),20); AddLine(Files,FileStatus,24);
 	AddLine(Files,Label(TEXT("Changing an already-loaded installation takes effect after restarting. No game files are moved or copied."),18,true));
@@ -337,7 +337,7 @@ void UACELoginWidget::EnsureDefaultLayout()
 	AccountBox=Field(UserColumn,TEXT("Username"),TEXT("AccountBox"));
 	PasswordBox=Field(PasswordColumn,TEXT("Password"),TEXT("PasswordBox"),true);
 	Row(Accounts,{{TEXT("Save account"),TEXT("saveaccount")},{TEXT("New account"),TEXT("newaccount")},{TEXT("Remove account"),TEXT("removeaccount")}});
-	AddLine(Accounts,Label(PLATFORM_LINUX ? TEXT("Passwords are kept for this session only. Enter them here after restarting.") : TEXT("Accounts are saved securely on this device."),14,true));
+	AddLine(Accounts,Label(PLATFORM_LINUX ? TEXT("Passwords are kept for this session only. Enter them here after restarting.") : PLATFORM_MAC ? TEXT("Passwords are saved securely in your macOS Keychain.") : TEXT("Accounts are saved securely on this device."),14,true));
 	Row(Accounts,{{TEXT("Back to play"),TEXT("play")}});
 	// Inline destructive-action confirmation is also fully usable with VR pointers.
 	FooterSize=WidgetTree->ConstructWidget<USizeBox>(); FooterSize->SetWidthOverride(1028);
@@ -384,7 +384,7 @@ void UACELoginWidget::NativeConstruct()
 		SetStatus(FString());
 		ValidateGameFiles();
 	}
-#if PLATFORM_LINUX
+#if (PLATFORM_LINUX || PLATFORM_MAC)
 	Profile.bAutoUpdate=false;
 #endif
 	AutoUpdateCheckBox->SetIsChecked(Profile.bAutoUpdate);
@@ -494,7 +494,7 @@ void UACELoginWidget::RefreshUpdateControls()
 	UpdateProgress->SetPercent(State==EACEUpdateState::Ready || State==EACEUpdateState::InstallNotice || State==EACEUpdateState::Installing?1.f:Updater->Progress());
 	CheckUpdateButton->SetIsEnabled(!Busy && State!=EACEUpdateState::Checking);
 	DownloadUpdateButton->SetVisibility(Available && !Busy && State!=EACEUpdateState::Ready?ESlateVisibility::Visible:ESlateVisibility::Collapsed);
-	InstallUpdateButton->SetVisibility(!PLATFORM_LINUX && State==EACEUpdateState::Ready?ESlateVisibility::Visible:ESlateVisibility::Collapsed);
+	InstallUpdateButton->SetVisibility(!(PLATFORM_LINUX || PLATFORM_MAC) && State==EACEUpdateState::Ready?ESlateVisibility::Visible:ESlateVisibility::Collapsed);
 	CancelUpdateButton->SetVisibility(State==EACEUpdateState::Downloading || State==EACEUpdateState::Verifying || State==EACEUpdateState::InstallNotice?ESlateVisibility::Visible:ESlateVisibility::Collapsed);
 	AutoUpdateCheckBox->SetIsEnabled(State!=EACEUpdateState::Installing);
 	LoginButton->SetIsEnabled(!Busy && Profile.SelectedServer()!=nullptr);
@@ -508,7 +508,7 @@ void UACELoginWidget::SaveLoginEntries()
 {
 	if (!bLoginSettingsLoaded || !bLoginEntriesDirty) return;
 	if (ACELoginSettings::Save(Profile, ProfilePath.IsEmpty()?ACELoginSettings::GetPath():ProfilePath)) bLoginEntriesDirty=false;
-	else SetStatus(TEXT("Could not save settings on this device. Check available storage."));
+	else SetStatus(PLATFORM_MAC ? TEXT("Could not save settings. Check available storage and allow Keychain access.") : TEXT("Could not save settings on this device. Check available storage."));
 }
 void UACELoginWidget::OnLoginClicked() { DoLogin(); }
 void UACELoginWidget::OnEnterWorldClicked() { DoEnterSelectedCharacter(); }
@@ -786,7 +786,7 @@ void UACELoginWidget::RunAction(const FString& Action, const FString& Value)
 	else if (Action==TEXT("files")) { Pages->SetActiveWidgetIndex(3); UpdateDatStatus(); }
 	else if (Action==TEXT("defaultdat"))
 	{
-#if PLATFORM_ANDROID || PLATFORM_LINUX
+#if PLATFORM_ANDROID || PLATFORM_LINUX || PLATFORM_MAC
 		DatBox->SetText(FText::FromString(FPaths::ProjectSavedDir()/TEXT("DAT")));
 #else
 		DatBox->SetText(FText::FromString(TEXT("C:/Turbine/Asheron's Call")));

@@ -12,8 +12,11 @@
 #elif PLATFORM_ANDROID
 #include "Android/AndroidApplication.h"
 #include "Android/AndroidJNI.h"
-#elif PLATFORM_LINUX
+#elif (PLATFORM_LINUX || PLATFORM_MAC)
 #include <sys/stat.h>
+#endif
+#if PLATFORM_MAC
+#include "ACELoginKeychain.h"
 #endif
 
 namespace ACELoginSettings
@@ -40,6 +43,42 @@ namespace ACELoginSettings
 		return Valid;
 	}
 #endif
+#if PLATFORM_MAC
+	// Passwords never go into the JSON file on Mac. They are kept together in one
+	// Keychain item per settings file (one access prompt after an app re-sign).
+	static FString KeychainKey(const FString& Path)
+	{
+		return TEXT("logins:") + FPaths::ConvertRelativePathToFull(Path);
+	}
+
+	static bool SaveKeychainPasswords(const FACELoginSettings& Settings, const FString& Path)
+	{
+		auto Json = MakeShared<FJsonObject>();
+		auto Accounts = MakeShared<FJsonObject>();
+		bool bAny = !Settings.Password.IsEmpty();
+		Json->SetStringField(TEXT("password"), Settings.Password);
+		for (const auto& A : Settings.Accounts)
+		{
+			if (A.Id.IsEmpty() || A.Password.IsEmpty()) continue;
+			Accounts->SetStringField(A.Id, A.Password); bAny = true;
+		}
+		Json->SetObjectField(TEXT("accounts"), Accounts);
+		FString Text;
+		if (bAny && !FJsonSerializer::Serialize(Json, TJsonWriterFactory<>::Create(&Text))) return false;
+		return ACELoginKeychain::Write(KeychainKey(Path), Text);
+	}
+
+	static void LoadKeychainPasswords(FACELoginSettings& Settings, const FString& Path)
+	{
+		FString Text; TSharedPtr<FJsonObject> Json;
+		if (!ACELoginKeychain::Read(KeychainKey(Path), Text) || Text.IsEmpty()
+			|| !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Json) || !Json) return;
+		Json->TryGetStringField(TEXT("password"), Settings.Password);
+		const TSharedPtr<FJsonObject>* Accounts = nullptr;
+		if (!Json->TryGetObjectField(TEXT("accounts"), Accounts) || !Accounts) return;
+		for (auto& A : Settings.Accounts) (*Accounts)->TryGetStringField(A.Id, A.Password);
+	}
+#endif
 	FString GetPath()
 	{
 		return FPaths::ProjectSavedDir() / TEXT("Login/LastLogin.dat");
@@ -51,7 +90,7 @@ namespace ACELoginSettings
 		Json->SetStringField(TEXT("host"), Settings.Host);
 		Json->SetStringField(TEXT("port"), Settings.Port);
 		Json->SetStringField(TEXT("account"), Settings.Account);
-        Json->SetStringField(TEXT("password"), PLATFORM_LINUX ? FString() : Settings.Password);
+        Json->SetStringField(TEXT("password"), (PLATFORM_LINUX || PLATFORM_MAC) ? FString() : Settings.Password);
 		if (Settings.bProfileFormat)
 		{
 			Json->SetNumberField(TEXT("version"), 3);
@@ -74,7 +113,7 @@ namespace ACELoginSettings
 				auto J = MakeShared<FJsonObject>();
 				J->SetStringField(TEXT("id"), A.Id);
 				J->SetStringField(TEXT("alias"), A.Alias);
-                J->SetStringField(TEXT("username"), A.Username); J->SetStringField(TEXT("password"), PLATFORM_LINUX ? FString() : A.Password);
+                J->SetStringField(TEXT("username"), A.Username); J->SetStringField(TEXT("password"), (PLATFORM_LINUX || PLATFORM_MAC) ? FString() : A.Password);
 				Accounts.Add(MakeShared<FJsonValueObject>(J));
 			}
 			Json->SetArrayField(TEXT("servers"), Servers); Json->SetArrayField(TEXT("accounts"), Accounts);
@@ -92,8 +131,9 @@ namespace ACELoginSettings
 		LocalFree(Protected.pbData);
 #elif PLATFORM_ANDROID
 		if (!AndroidCrypt(reinterpret_cast<const uint8*>(Utf8.Get()), Utf8.Length(), true, Bytes)) return false;
-#elif PLATFORM_LINUX
-        // Persist nonsecret profile data only; passwords remain in memory for this session.
+#elif (PLATFORM_LINUX || PLATFORM_MAC)
+        // Persist nonsecret profile data only. Linux keeps passwords in memory for this session;
+        // Mac stores them in the Keychain (see SaveKeychainPasswords).
         Bytes.Append(reinterpret_cast<const uint8*>(Utf8.Get()), Utf8.Length());
 #else
 		return false;
@@ -102,11 +142,14 @@ namespace ACELoginSettings
 		if (!IFileManager::Get().MakeDirectory(*Directory, true)) return false;
 		const FString TemporaryPath = Path + TEXT(".tmp");
         bool Saved = FFileHelper::SaveArrayToFile(Bytes, *TemporaryPath);
-#if PLATFORM_LINUX
+#if (PLATFORM_LINUX || PLATFORM_MAC)
         Saved = Saved && chmod(TCHAR_TO_UTF8(*FPaths::ConvertRelativePathToFull(TemporaryPath)), S_IRUSR | S_IWUSR) == 0;
 #endif
         Saved = Saved && IFileManager::Get().Move(*Path, *TemporaryPath, true, false);
 		if (!Saved) IFileManager::Get().Delete(*TemporaryPath, false, true);
+#if PLATFORM_MAC
+		Saved = Saved && SaveKeychainPasswords(Settings, Path);
+#endif
 		return Saved;
 	}
 
@@ -137,7 +180,7 @@ namespace ACELoginSettings
 			Text = FString(Utf8.Length(), Utf8.Get());
 		}
 		FMemory::Memzero(Plain.GetData(), Plain.Num());
-#elif PLATFORM_LINUX
+#elif (PLATFORM_LINUX || PLATFORM_MAC)
         if (Bytes.Num() > 524288) return false;
         const FUTF8ToTCHAR Utf8(reinterpret_cast<const ANSICHAR*>(Bytes.GetData()), Bytes.Num());
         Text = FString(Utf8.Length(), Utf8.Get());
@@ -151,7 +194,7 @@ namespace ACELoginSettings
 			|| !Json->TryGetStringField(TEXT("port"), Loaded.Port)
 			|| !Json->TryGetStringField(TEXT("account"), Loaded.Account)
 			|| !Json->TryGetStringField(TEXT("password"), Loaded.Password)) return false;
-#if PLATFORM_LINUX
+#if (PLATFORM_LINUX || PLATFORM_MAC)
         Loaded.Password.Reset();
 #endif
 		double Version = 0;
@@ -186,7 +229,7 @@ namespace ACELoginSettings
 					|| !(*J)->TryGetStringField(TEXT("username"), A.Username) || !(*J)->TryGetStringField(TEXT("password"), A.Password)) return false;
 				// Optional for existing saved logins; identity remains the entry ID.
 				(*J)->TryGetStringField(TEXT("alias"), A.Alias);
-#if PLATFORM_LINUX
+#if (PLATFORM_LINUX || PLATFORM_MAC)
                 A.Password.Reset();
 #endif
 				AccountIds.Add(A.Id);
@@ -204,6 +247,9 @@ namespace ACELoginSettings
 			if (!Loaded.Accounts.ContainsByPredicate([&](const auto& A) { return A.Id == Loaded.SelectedAccountId; }))
 				Loaded.SelectedAccountId.Reset();
 		}
+#if PLATFORM_MAC
+		LoadKeychainPasswords(Loaded, Path);
+#endif
 		Settings = MoveTemp(Loaded);
 		return true;
 	}
