@@ -45,20 +45,15 @@ namespace ACELoginKeychain
 		{
 			const FTCHARToUTF8 Utf8(*Secret);
 			CFDataRef Data = CFDataCreate(kCFAllocatorDefault, reinterpret_cast<const UInt8*>(Utf8.Get()), Utf8.Length());
-			CFMutableDictionaryRef Update = CFDictionaryCreateMutable(kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-			CFDictionarySetValue(Update, kSecValueData, Data);
-			Status = SecItemUpdate(Query, Update);
-			if (Status != errSecSuccess)
-			{
-				// Missing item, or an item created by a differently signed build: replace it.
-				if (Status != errSecItemNotFound) SecItemDelete(Query);
-				CFMutableDictionaryRef Add = CFDictionaryCreateMutableCopy(kCFAllocatorDefault, 0, Query);
-				CFDictionarySetValue(Add, kSecValueData, Data);
-				CFDictionarySetValue(Add, kSecAttrLabel, CFSTR("ACUnreal saved logins"));
-				Status = SecItemAdd(Add, nullptr);
-				CFRelease(Add);
-			}
-			CFRelease(Update);
+			// Replace the item rather than update it, so the running build becomes its owner.
+			SecItemDelete(Query);
+			CFMutableDictionaryRef Add = CFDictionaryCreateMutableCopy(kCFAllocatorDefault, 0, Query);
+			CFDictionarySetValue(Add, kSecValueData, Data);
+			CFDictionarySetValue(Add, kSecAttrLabel, CFSTR("ACUnreal saved logins"));
+			// Default access: only the build that created the item reads it silently. Replacing the item
+			// makes the running build its owner, so after one prompt per new build nothing else asks.
+			Status = SecItemAdd(Add, nullptr);
+			CFRelease(Add);
 			CFRelease(Data);
 		}
 		CFRelease(Query);

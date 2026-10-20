@@ -51,6 +51,14 @@ namespace ACELoginSettings
 		return TEXT("logins:") + FPaths::ConvertRelativePathToFull(Path);
 	}
 
+	// Last value read from or written to each Keychain item this session. Every Keychain
+	// call can raise an access prompt, so read once per launch and skip unchanged writes.
+	static TMap<FString, FString>& KeychainCache()
+	{
+		static TMap<FString, FString> Cache;
+		return Cache;
+	}
+
 	static bool SaveKeychainPasswords(const FACELoginSettings& Settings, const FString& Path)
 	{
 		auto Json = MakeShared<FJsonObject>();
@@ -65,13 +73,25 @@ namespace ACELoginSettings
 		Json->SetObjectField(TEXT("accounts"), Accounts);
 		FString Text;
 		if (bAny && !FJsonSerializer::Serialize(Json, TJsonWriterFactory<>::Create(&Text))) return false;
-		return ACELoginKeychain::Write(KeychainKey(Path), Text);
+		const FString Key = KeychainKey(Path);
+		if (const FString* Cached = KeychainCache().Find(Key); Cached && *Cached == Text) return true;
+		if (!ACELoginKeychain::Write(Key, Text)) return false;
+		KeychainCache().Add(Key, Text);
+		return true;
 	}
 
 	static void LoadKeychainPasswords(FACELoginSettings& Settings, const FString& Path)
 	{
 		FString Text; TSharedPtr<FJsonObject> Json;
-		if (!ACELoginKeychain::Read(KeychainKey(Path), Text) || Text.IsEmpty()
+		const FString Key = KeychainKey(Path);
+		if (const FString* Cached = KeychainCache().Find(Key)) Text = *Cached;
+		else if (ACELoginKeychain::Read(Key, Text))
+		{
+			// Re-save once so this build owns the item; later saves this session then never prompt.
+			if (!Text.IsEmpty()) ACELoginKeychain::Write(Key, Text);
+			KeychainCache().Add(Key, Text);
+		}
+		if (Text.IsEmpty()
 			|| !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Json) || !Json) return;
 		Json->TryGetStringField(TEXT("password"), Settings.Password);
 		const TSharedPtr<FJsonObject>* Accounts = nullptr;
