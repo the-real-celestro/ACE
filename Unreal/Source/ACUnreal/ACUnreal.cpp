@@ -1,6 +1,9 @@
 #include "ACUnreal.h"
 #include "Modules/ModuleManager.h"
 #include "Misc/CoreDelegates.h"
+#if PLATFORM_MAC
+#include "Mac/MacApplication.h"
+#endif
 
 #if PLATFORM_LINUX && !WITH_EDITOR
 #include "ACELinuxExitGuard.h"
@@ -15,6 +18,12 @@ namespace
 
 void FACUnrealModule::StartupModule()
 {
+#if PLATFORM_MAC
+    // macOS turns Ctrl+left-click into a right click. Ctrl is the default
+    // Quick-show key, so held Ctrl made the Unpin button and frame drag
+    // unclickable on pinned plugin windows. Two-finger click still right-clicks.
+    FCoreDelegates::OnPostEngineInit.AddLambda([]{ if (MacApplication) MacApplication->SetIsRightClickEmulationEnabled(false); });
+#endif
 #if PLATFORM_LINUX && !WITH_EDITOR
     // Independent of frame ticks and window focus. Covers Quit/update teardown
     // and fatal-error handling, without killing slow or minimized gameplay.

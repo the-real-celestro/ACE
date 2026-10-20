@@ -21,5 +21,10 @@ public class ACUnreal : ModuleRules
 		{
 			"Landscape"
 		});
+
+		if (Target.Platform == UnrealTargetPlatform.Mac)
+		{
+			PrivateDependencyModuleNames.Add("ApplicationCore");
+		}
 	}
 }
