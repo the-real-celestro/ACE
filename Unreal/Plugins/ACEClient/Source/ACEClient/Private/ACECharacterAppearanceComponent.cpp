@@ -1,4 +1,5 @@
 #include "ACECharacterAppearanceComponent.h"
+#include "ACEAttackMotion.h"
 #include "ACEProfiling.h"
 #include "ACELoadingScreenActor.h"
 #include "ACERegionSceneryActor.h"
@@ -106,6 +107,13 @@ void UACECharacterAppearanceComponent::EnsureMeshRoot()
 	MeshRoot->SetRelativeRotation(FRotator(0.f, MeshFacingYawDegrees, 0.f));
 }
 
+void UACECharacterAppearanceComponent::SetPreviewCapture(bool bEnabled)
+{
+	bPreviewCapture = bEnabled;
+	for (UProceduralMeshComponent* Part : PartMeshes)
+		if (Part) Part->SetForceHighestDetail(bPreviewCapture || bLocalPlayerAppearance);
+}
+
 float UACECharacterAppearanceComponent::GetVisualHeightCm() const
 {
 	FBox VisualBounds(ForceInit);
@@ -113,7 +121,7 @@ float UACECharacterAppearanceComponent::GetVisualHeightCm() const
 	{
 		if (Part && Part->IsRegistered() && Part->GetNumSections() > 0)
 		{
-			VisualBounds += Part->Bounds.GetBox();
+			VisualBounds += Part->GetHighestDetailBounds().GetBox();
 		}
 	}
 	return VisualBounds.IsValid ? VisualBounds.GetSize().Z : 0.f;
@@ -126,7 +134,7 @@ bool UACECharacterAppearanceComponent::GetVisualWorldBounds(FBox& OutBox) const
 	{
 		if (Part && Part->IsRegistered() && Part->GetNumSections() > 0)
 		{
-			OutBox += Part->Bounds.GetBox();
+			OutBox += Part->GetHighestDetailBounds().GetBox();
 		}
 	}
 	return OutBox.IsValid != 0;
@@ -361,7 +369,7 @@ void UACECharacterAppearanceComponent::TickObjectAnimFrame(float DeltaTime)
 	FVector OmegaUe = FVector::ZeroVector;
 	if (AACEWorldEntityActor* Entity = Cast<AACEWorldEntityActor>(GetOwner()))
 	{
-		OmegaUe = FACEPosition::AceVectorToUnreal(Entity->GetAcePhysicsOmega(), 1.f);
+		OmegaUe = -FACEPosition::AceVectorToUnreal(Entity->GetAcePhysicsOmega(), 1.f);
 	}
 	else if (AActor* Owner = GetOwner())
 	{
@@ -376,11 +384,7 @@ void UACECharacterAppearanceComponent::TickObjectAnimFrame(float DeltaTime)
 	{
 		return;
 	}
-	const FVector DeltaRad = OmegaUe * DeltaTime;
-	const FQuat DeltaQ(FRotator(
-		FMath::RadiansToDegrees(-DeltaRad.X),
-		FMath::RadiansToDegrees(DeltaRad.Z),
-		FMath::RadiansToDegrees(-DeltaRad.Y)));
+	const FQuat DeltaQ(OmegaUe.GetSafeNormal(), OmegaUe.Size() * DeltaTime);
 	ObjectAnimFrame.SetRotation((DeltaQ * ObjectAnimFrame.GetRotation()).GetNormalized());
 }
 
@@ -639,6 +643,7 @@ void UACECharacterAppearanceComponent::ClearAppearance()
 	AppliedTranslucencyKey = -1.f;
 	AppliedWorldScale = 0.f;
 	AppliedPartCollision = false;
+	AppliedDistanceLevels = false;
 	LocomotionForward = 0.f;
 	LocomotionStrafe = 0.f;
 	LocomotionPlayRate = 1.f;
@@ -660,7 +665,11 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 {
 	ACE_PROFILE_SCOPE(Appearance);
 	WorldScale = InWorldScale;
+	bLocalPlayerAppearance = Object.bIsSelf;
+	for (UProceduralMeshComponent* Part : PartMeshes)
+		if (Part) Part->SetForceHighestDetail(bLocalPlayerAppearance || bPreviewCapture);
 	const int32 NewSetupId = Object.SetupId;
+	const bool bCreatureLike = (Object.ItemType & ACEItemType::Creature) != 0 || Object.bIsPlayer || Object.bIsSelf;
 	int32 PlacementId = Object.PlacementId;
 	const bool bUsesOnOff = Object.UsesOnOffMotion();
 	const bool bHeld = Object.ParentGuid != 0 && Object.ParentLocation != 0;
@@ -712,7 +721,8 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 		&& AppliedAppearanceHash == AppearanceHash
 		&& FMath::IsNearlyEqual(AppliedTranslucencyKey, TranslucencyKey)
 		&& FMath::IsNearlyEqual(AppliedWorldScale, InWorldScale)
-		&& AppliedPartCollision == bEnablePartCollision)
+		&& AppliedPartCollision == bEnablePartCollision
+		&& AppliedDistanceLevels == bCreatureLike)
 	{
 		MotionTableId = Object.MotionTableId != 0 ? Object.MotionTableId : MotionTableId;
 		DefaultAnimationId = Object.DefaultAnimationId != 0 ? Object.DefaultAnimationId : DefaultAnimationId;
@@ -760,8 +770,6 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 	}
 	bHasMesh = false;
 	const bool bIsCorpse = Object.IsCorpse();
-	const bool bCreatureLike = (Object.ItemType & ACEItemType::Creature) != 0
-		|| Object.bIsPlayer || Object.bIsSelf;
 	bPlayIdleMotion = bIsCorpse || bCreatureLike || bUsesOnOff;
 	SetComponentTickEnabled(bPlayIdleMotion);
 
@@ -783,7 +791,8 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 	}
 
 	const double BuildStart = FPlatformTime::Seconds();
-	const auto SharedBuilt = Dat->GetOrBuildSetupAppearanceShared(static_cast<uint32>(SetupId), Appearance, WorldScale, PlacementId);
+	const auto SharedBuilt = Dat->GetOrBuildSetupAppearanceShared(static_cast<uint32>(SetupId), Appearance, WorldScale, PlacementId,
+		/*bDistanceLevels*/ bCreatureLike);
 	if (!SharedBuilt || SharedBuilt->Parts.Num() == 0)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("ACEAppearance: failed Setup 0x%08X for '%s'"), SetupId, *Object.Name);
@@ -804,6 +813,7 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 	for (int32 i = 0; i < Built.Parts.Num(); ++i)
 	{
 		Meshes.Add(PartMeshes[i]);
+		PartMeshes[i]->SetForceHighestDetail(Object.bIsSelf || bPreviewCapture);
 	}
 
 	uint32 DefaultMT = 0;
@@ -931,6 +941,7 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 	AppliedTranslucencyKey = TranslucencyKey;
 	AppliedWorldScale = InWorldScale;
 	AppliedPartCollision = bEnablePartCollision;
+	AppliedDistanceLevels = bCreatureLike;
 
 	// Doors/chests: apply held On/Off AFTER the mesh exists. Calling SetDoorHeldCommand earlier
 	// returned without posing, leaving the Setup bind pose (chests often look permanently open).
@@ -1062,7 +1073,7 @@ void UACECharacterAppearanceComponent::ConfigurePartCollision(bool bBlocking, bo
 			if (!Section) continue;
 			const bool bPhysics = Proc->ComponentTags.Contains(
 				FName(*FString::Printf(TEXT("ACEPhysicsSection_%d"), Index)));
-			const bool bCollide = bBlocking ? bPhysics : (!bPhysics && (bQueryVisibilityOnly || bSelectOnMesh));
+			const bool bCollide = bBlocking ? bPhysics : (!bPhysics && Proc->IsHighestDetailSection(Index) && (bQueryVisibilityOnly || bSelectOnMesh));
 			if (Section->bEnableCollision != bCollide)
 			{
 				FProcMeshSection Updated = *Section;
@@ -1268,6 +1279,12 @@ void UACECharacterAppearanceComponent::SetPreferredStyle(int32 Style)
 
 void UACECharacterAppearanceComponent::BeginPoseBlendFromCurrent(float Duration)
 {
+	if (Duration <= 0.f)
+	{
+		StanceBlendFrom.Reset();
+		StanceBlendAlpha = 1.f;
+		return;
+	}
 	PoseBlendDuration = FMath::Max(.001f, Duration);
 	StanceBlendFrom.SetNum(PartMeshes.Num());
 	for (int32 i = 0; i < PartMeshes.Num(); ++i)
@@ -1378,6 +1395,14 @@ void UACECharacterAppearanceComponent::PlayActionMotion(int32 InActionCommand, f
 	}
 	const bool bFromEmote = AnimMode == EACEAnimMode::ActionOneShot && ACEIsEmoteSubstate(ActionCommand)
 		&& !(bNewAction && ActionCommand == Cmd);
+	if (bNewAction && AnimMode == EACEAnimMode::ActionOneShot && !bHoldActionFinal
+		&& ACEAttackMotion::IsAction(ActionCommand) && ACEAttackMotion::IsAction(Cmd))
+	{
+		// CMotionTable::GetObjectSequence appends actions before the cyclic
+		// tail. Changing height or hand must not truncate the preceding swing.
+		QueueActionMotion(Cmd, PlayRate, Style, bHoldFinalPose);
+		return;
+	}
 	const bool bFromMissile = AnimMode == EACEAnimMode::ActionOneShot && ACEIsMissileSubstate(ActionCommand)
 		&& (ACEIsMissileSubstate(Cmd) || Cmd == ACEMotion::Ready);
 	if (AnimMode == EACEAnimMode::ActionOneShot && (ActionCommand & 0xFF000000u) == 0x80000000u
@@ -1403,7 +1428,10 @@ void UACECharacterAppearanceComponent::PlayActionMotion(int32 InActionCommand, f
 	bActionUsesStateTransition = bFromEmote || bFromMissile;
 	// Falling already contains retail's takeoff link (~0.2 s). A full stance
 	// cross-fade hid it behind the previous jump's frozen endpoint.
-	BeginPoseBlendFromCurrent(bFromEmote || bFromMissile || ACEIsMissileSubstate(Cmd) || Cmd == 0x40000015u ? .06f : StanceBlendDuration);
+	// Attack links already contain their authored approach and recovery poses.
+	// A wall-clock stance blend flattens the height/arc, especially at fast speeds.
+	BeginPoseBlendFromCurrent(ACEAttackMotion::IsAttack(Cmd) ? 0.f
+		: bFromEmote || bFromMissile || ACEIsMissileSubstate(Cmd) || Cmd == 0x40000015u ? .06f : StanceBlendDuration);
 	AnimMode = EACEAnimMode::ActionOneShot;
 	ActionCommand = Cmd;
 	PendingActionCommands.Reset();
@@ -1916,11 +1944,14 @@ void UACECharacterAppearanceComponent::SetDoorHeldCommand(int32 CommandU16)
 	}
 	if (!bOk)
 	{
-		if (Cmd == ACEMotion::Off)
-		{
-			ApplyBindPartTransforms();
-			RestoreClosedVisuals();
-		}
+		// CMotionTable rejects unsupported commands without replacing the
+		// default state. Corpse-looking chests can use a human MTable with no
+		// On/Off cycle at all; restoring the setup bind pose makes them stand.
+		AnimMode = EACEAnimMode::Locomotion;
+		AnimTime = 0.f;
+		ResetHookTracking();
+		if (Dat->EvaluateIdleMotion(MotionTableId, 0.f, PartMeshes.Num(), Animated, WorldScale, AnimatedCount))
+			for (int32 I=0; I<AnimatedCount; ++I) ApplyPartTransform(I, Animated[I]);
 		return;
 	}
 	// An already settled object starts in the destination cycle. Keep the link's
@@ -2221,7 +2252,7 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 				// Start next without wiping the rest of the scarab/cast queue.
 				ActionFromCommand = ACEIsEmoteSubstate(ActionCommand) || ACEIsMissileSubstate(ActionCommand) ? ActionCommand : ACEMotion::Ready;
 				bActionUsesStateTransition = ActionFromCommand != ACEMotion::Ready;
-				BeginPoseBlendFromCurrent(bActionUsesStateTransition ? .06f : StanceBlendDuration);
+				BeginPoseBlendFromCurrent(ACEAttackMotion::IsAttack(Next) ? 0.f : bActionUsesStateTransition ? .06f : StanceBlendDuration);
 				AnimMode = EACEAnimMode::ActionOneShot;
 				ActionCommand = Next;
 				bHoldActionFinal = false;
@@ -2261,7 +2292,7 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 			}
 			else
 			{
-				BeginPoseBlendFromCurrent(bActionUsesStateTransition ? .06f : StanceBlendDuration);
+				BeginPoseBlendFromCurrent(ACEAttackMotion::IsAttack(ActionCommand) ? 0.f : bActionUsesStateTransition ? .06f : StanceBlendDuration);
 				ActionCommand = 0;
 				ActionFromCommand = ACEMotion::Ready;
 				bActionUsesStateTransition = false;
@@ -2330,6 +2361,14 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 			}
 			// The evaluator crosses link hooks only once, then dispatches cycle hooks.
 			DispatchCrossedHooks(Hooks);
+		}
+		else
+		{
+			// A live unsupported On/Off must not trap the object in a failed
+			// door evaluator forever. Resume its authored idle on the next tick.
+			AnimMode = EACEAnimMode::Locomotion;
+			AnimTime = 0.f;
+			ResetHookTracking();
 		}
 		return;
 	}

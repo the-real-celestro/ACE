@@ -1,6 +1,8 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "Mods/ACELedger.h"
+#include "Mods/ACEWaypoint.h"
+#include "Misc/ScopeExit.h"
 #include "ACEClientSubsystem.h"
 #include "ACEDatSubsystem.h"
 #include "ACESession.h"
@@ -49,6 +51,12 @@ bool FACELedgerTest::RunTest(const FString&)
     TestEqual(TEXT("Long runs have bounded rolling history"),L.LastFiveMinutes(101400).XP,int64(300));
     TestEqual(TEXT("Long run totals retain all gains"),L.XP,int64(100000));
 
+    FACEHuntLedger Pending;Pending.Reset(0);FACEPlayerVitals Partial;Partial.bValid=true;
+    Pending.Observe(Partial,1);
+    TestFalse(TEXT("Early attribute updates do not invent a zero luminance baseline"),Pending.HasLum);
+    Partial.QualityInt64s.Add(6,500);Partial.AvailableLuminance=500;Pending.Observe(Partial,2);
+    TestEqual(TEXT("A first explicit balance without a login snapshot is a baseline"),Pending.Lum,int64(0));
+
     TMap<int32,FACEWorldObject> Objects;
     // ACE's Prismatic Taper (20631): use its real item icon, not toolbar artwork.
     auto Item=[&](int32 Id,int32 Parent,int32 Count,int32 Class=20631){FACEWorldObject O;O.Guid=Id;O.ContainerId=Parent;O.WeenieClassId=Class;
@@ -67,6 +75,62 @@ bool FACELedgerTest::RunTest(const FString&)
     auto* Manager=GI->GetSubsystem<UACEClientSubsystem>()->GetUIElementManager();Manager->SetUiLocked(false);
     H->StorageRoot=FPaths::ProjectSavedDir()/TEXT("Automation/Ledgers");H->Settings=MakeShared<FJsonObject>();
     const auto Session=GI->GetSubsystem<UACEClientSubsystem>()->GetSession();
+    {
+        auto P=H->Find(TEXT("ucm"));const bool WasEnabled=P->Enabled;P->Enabled=true;
+        ON_SCOPE_EXIT{P->Enabled=WasEnabled;};
+        auto Json=[](const TCHAR* Text){TSharedPtr<FJsonObject> Result;FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text),Result);return Result;};
+        const auto OldState=Session->State;const auto OldProfile=P->Profile;const auto OldRuntime=H->RuntimeRoute;const int32 OldPoint=H->RoutePoint;
+        ON_SCOPE_EXIT{Session->State=OldState;P->Profile=OldProfile;H->RuntimeRoute=OldRuntime;H->RoutePoint=OldPoint;};
+        P->Profile=Json(TEXT(R"({"route_preview":false,"route":[{"cell":21168385,"x":10,"y":10,"z":0}]})"));
+        TestTrue(TEXT("Map route is hidden while logged out"),H->GetWaypointMapRoute(true).IsEmpty());
+        Session->State=EACESessionState::InWorld;FACEPosition Position;Position.CellId=0x01430171;Session->SetLocalPosition(Position);
+        TestEqual(TEXT("Map route is independent of world route preview"),H->GetWaypointMapRoute(true).Num(),1);
+        H->RuntimeRoute=Json(TEXT(R"({"route":[{"cell":21168385,"x":20,"y":10,"z":0},{"cell":21168386,"x":30,"y":10,"z":0}]})"));H->RoutePoint=2;
+        const auto MapRoute=H->GetWaypointMapRoute(true);
+        TestTrue(TEXT("Map uses active runtime route and current waypoint instead of the saved profile"),MapRoute.Num()==2&&MapRoute[0].Position.Location.X==20&&MapRoute[1].Current);
+    }
+    // Exercise the real packet -> session -> subsystem -> ledger path, including
+    // luminance-only updates (no XP notification and no UI/ticker refresh).
+    auto LoginLedger=[&](int32 Player,TOptional<int64> Balance,int64 Capacity=1500)
+    {
+        Session->State=EACESessionState::EnteringWorld;Session->PlayerGuid=Player;
+        Session->PlayerVitals=FACEPlayerVitals();H->LedgerCharacter.Empty();H->UpdateLedgers();
+        FACEBinaryWriter Login;Login.WriteUInt32(0x80);Login.WriteUInt32(1);
+        Login.WriteUInt16(Balance.IsSet()?3:2);Login.WriteUInt16(64);
+        Login.WriteUInt32(1);Login.WriteUInt64(1000000);
+        if(Balance.IsSet()){Login.WriteUInt32(6);Login.WriteUInt64(Balance.GetValue());}
+        Login.WriteUInt32(7);Login.WriteUInt64(Capacity);
+        for(int32 I=0;I<8;++I)Login.WriteUInt32(0);
+        FACEBinaryReader R(Login.GetData());Session->HandlePlayerDescription(R);
+        Session->State=EACESessionState::InWorld;
+    };
+    uint8 Sequence=0;
+    auto Quad=[&](int32 Key,int64 Value,int32 PublicPlayer=0)
+    {
+        FACEBinaryWriter W;W.WriteUInt32(PublicPlayer?ACEOpcode::PublicUpdatePropertyInt64:ACEOpcode::PrivateUpdatePropertyInt64);
+        W.WriteUInt8(++Sequence);if(PublicPlayer)W.WriteUInt32(PublicPlayer);
+        W.WriteUInt32(Key);W.WriteUInt64(Value);Session->HandleGameMessage(W.GetData());
+    };
+    LoginLedger(1,500);
+    TestEqual(TEXT("Packet login balance is not earned luminance"),H->GetHuntLedger().Lum,int64(0));
+    Quad(6,650);
+    TestEqual(TEXT("Luminance-only packet immediately reaches Hunt Ledger"),H->GetHuntLedger().Lum,int64(150));
+    Quad(7,2000);Quad(6,100);Quad(6,175);
+    TestEqual(TEXT("Spend and gain in one frame preserve actual income"),H->GetHuntLedger().Lum,int64(225));
+    Quad(6,175);Quad(6,999,2);Quad(6,200,1);
+    TestEqual(TEXT("Duplicate and other-player updates do not inflate earnings"),H->GetHuntLedger().Lum,int64(250));
+    Quad(6,2000);Quad(6,2000);Quad(1,1000600);
+    TestEqual(TEXT("Cap credits only the balance increase, independent of XP"),H->GetHuntLedger().Lum,int64(2050));
+    TestEqual(TEXT("Packet XP tracking is unchanged"),H->GetHuntLedger().XP,int64(600));
+    H->ResetHuntLedger();Quad(6,1800);Quad(6,1840);
+    TestEqual(TEXT("Reset and subsequent spending preserve new gains only"),H->GetHuntLedger().Lum,int64(40));
+    LoginLedger(2,5000000000LL,6000000000LL);Quad(6,5000000123LL);
+    TestEqual(TEXT("Character switch rebases large custom-server balances without truncation"),H->GetHuntLedger().Lum,int64(123));
+    LoginLedger(1,TOptional<int64>());Quad(6,60);
+    TestEqual(TEXT("First reward from an omitted zero login balance is income"),H->GetHuntLedger().Lum,int64(60));
+    LoginLedger(1,TOptional<int64>(),0);Quad(7,1500);Quad(6,50);
+    TestEqual(TEXT("Unlocking luminance during the session does not lose the first reward"),H->GetHuntLedger().Lum,int64(50));
+    H->LedgerCharacter.Empty();
     Session->State=EACESessionState::InWorld;Session->PlayerGuid=1;Session->PlayerVitals=V;
     H->UpdateLedgers();const FString FirstCharacter=H->LedgerCharacter;
     Session->WorldObjects=Objects;++Session->InventoryDataRevision;H->UpdateLedgers();
@@ -90,7 +154,7 @@ bool FACELedgerTest::RunTest(const FString&)
     }
     H->SavePluginWindowPosition(TEXT("huntledger.size"),FVector2D(290,180));
     auto Dock=SNew(SACEPluginDesktop).Host(H);Dock->Tick(FGeometry::MakeRoot(FVector2D(1400,900),FSlateLayoutTransform()),1,.016f);
-    TestEqual(TEXT("Legacy fixed Hunt Ledger height does not gain duplicate editor chrome"),Dock->DisplaySize(Dock->Windows[TEXT("huntledger")]).Y,180.);
+    TestEqual(TEXT("Legacy fixed Hunt Ledger height adapts to current rows without duplicate editor chrome"),Dock->DisplaySize(Dock->Windows[TEXT("huntledger")]).Y,H->LedgerSize(TEXT("huntledger")).Y);
     TestTrue(TEXT("Saved HUD visibility restores without UCM running"),Dock->IsOpen(TEXT("supplyledger"))&&Dock->IsOpen(TEXT("huntledger")));
     TestEqual(TEXT("Supply HUD defaults to a compact width"),Dock->DisplaySize(Dock->Windows[TEXT("supplyledger")]).X,200.);
     const auto InitialSize=Dock->DisplaySize(Dock->Windows[TEXT("supplyledger")]);
@@ -122,6 +186,8 @@ bool FACELedgerTest::RunTest(const FString&)
     {
         H->LedgerSupplies=Entries;H->LedgerSupplies[0].Count=56;++H->SupplyRevision;
         H->HuntLedger=L;H->HuntLedger.Started=FPlatformTime::Seconds()-3600;
+        H->HuntLedger.Lum=75;
+        Session->PlayerVitals.AvailableLuminance=100;Session->PlayerVitals.MaximumLuminance=100;
         int64 NextThreshold=0;GI->GetSubsystem<UACEDatSubsystem>()->TryGetXpToNextLevel(0,100,NextThreshold);
         Session->PlayerVitals.Level=100;Session->PlayerVitals.TotalExperience=NextThreshold-100000;
         Manager->SetUiLocked(false);H->Find(TEXT("ucm"))->Enabled=true;H->SavePluginWindowPosition(TEXT("ucm"),FVector2D(430,40));Dock->Toggle(TEXT("ucm"));
@@ -145,6 +211,21 @@ bool FACELedgerTest::RunTest(const FString&)
         {if(!W->GetVisibility().IsVisible())return 0;int32 N=W->GetTag()==Tag?1:0;auto Children=W->GetChildren();for(int32 I=0;I<Children->Num();++I)N+=CountControls(Children->GetChildAt(I),Tag);return N;};
         TFunction<TSharedPtr<SWidget>(TSharedRef<SWidget>,FName)> FindTagged=[&](TSharedRef<SWidget> W,FName Tag)->TSharedPtr<SWidget>
         {if(W->GetTag()==Tag)return W;auto Children=W->GetChildren();for(int32 I=0;I<Children->Num();++I)if(auto Found=FindTagged(Children->GetChildAt(I),Tag))return Found;return nullptr;};
+        auto LumTotal=StaticCastSharedPtr<SACEPluginText>(FindTagged(Dock,TEXT("HuntLuminance2")));
+        auto LumAvailable=StaticCastSharedPtr<SACEPluginText>(FindTagged(Dock,TEXT("HuntLuminance3")));
+        if(!TestTrue(TEXT("Luminance earned and available cells exist"),LumTotal.IsValid()&&LumAvailable.IsValid()))return false;
+        TestEqual(TEXT("Visible luminance total shows earned income"),LumTotal->GetText().ToString(),FString(TEXT("75")));
+        TestEqual(TEXT("Available balance explains the luminance cap"),LumAvailable->GetText().ToString(),FString(TEXT("100 (cap)")));
+        Session->PlayerVitals.AvailableLuminance=20;
+        ++GFrameCounter;Renderer.DrawWidget(Target,Dock,Size,0);FlushRenderingCommands();
+        TestEqual(TEXT("Spending immediately refreshes available luminance without changing earned totals"),LumAvailable->GetText().ToString(),FString(TEXT("20")));
+        TestEqual(TEXT("Spending leaves displayed earnings intact"),LumTotal->GetText().ToString(),FString(TEXT("75")));
+        auto ResetControl=FindTagged(Dock,TEXT("LedgerReset"));
+        const auto HuntBounds=Dock->Windows[TEXT("huntledger")].Widget->GetCachedGeometry();
+        if(!TestTrue(TEXT("Hunt Ledger has a reset control"),ResetControl.IsValid()))return false;
+        const auto ResetBounds=ResetControl->GetCachedGeometry();
+        TestTrue(TEXT("Reset stays above the window resize handle"),ResetBounds.GetAbsolutePosition().Y+ResetBounds.GetAbsoluteSize().Y
+            <=HuntBounds.GetAbsolutePosition().Y+HuntBounds.GetAbsoluteSize().Y-20.);
         const auto SupplyContent=FindTagged(Dock->Windows[TEXT("supplyledger")].Widget.ToSharedRef(),TEXT("LedgerContent"));
         const auto HuntContent=FindTagged(Dock->Windows[TEXT("huntledger")].Widget.ToSharedRef(),TEXT("LedgerContent"));
         if(!TestTrue(TEXT("Both ledger frames expose their content"),SupplyContent.IsValid()&&HuntContent.IsValid()))return false;
@@ -303,6 +384,12 @@ bool FACELedgerTest::RunTest(const FString&)
         TestFalse(TEXT("Removing and adding supplies retains global names preference"),H->AreSupplyNamesVisible());
         H->SetWaypointMapZoom(true,false,12.);H->SetWaypointMapZoom(true,true,4.5);
         H->SetWaypointMapZoom(false,false,2.);H->SetWaypointMapZoom(false,true,6.);
+        H->SetWaypointOption(TEXT("fill_dungeon"),true);H->SetWaypointOption(TEXT("show_route"),false);
+        const auto Waypoint=H->Find(TEXT("waypoint"));const FString WaypointProfile=Waypoint->ProfileName;
+        Waypoint->Profile=MakeShared<FJsonObject>();
+        TestTrue(TEXT("Map profile reload succeeds"),H->LoadProfile(TEXT("waypoint"),WaypointProfile));
+        TestTrue(TEXT("Walkable fill survives profile reload"),H->WaypointOption(TEXT("fill_dungeon"),false));
+        TestFalse(TEXT("Route visibility survives profile reload"),H->WaypointOption(TEXT("show_route"),true));
         Dock->SaveOverlayLayout();const auto SavedPosition=Dock->Windows[TEXT("supplyledger")].Position;
         FString AppearanceSaved;FFileHelper::LoadFileToString(AppearanceSaved,*(H->StorageRoot/TEXT("settings.json")));
         TSharedPtr<FJsonObject> Restored;FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(AppearanceSaved),Restored);H->Settings=Restored;
@@ -328,11 +415,14 @@ bool FACELedgerTest::RunTest(const FString&)
         PNG.Reset();FImageUtils::PNGCompressImageArray(Target->SizeX,Target->SizeY,[&]{TArray<FColor> Pixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);return Pixels;}(),PNG);
         FFileHelper::SaveArrayToFile(PNG,*(H->StorageRoot/TEXT("plugin-icons.png")));
         auto Labels=SNew(SVerticalBox);
+        double PreviousTextHeight=0;
         for(int32 FontSize:{10,12,14,16,18,24})
         {
             auto Label=SNew(SACEPluginText).Text(FText::FromString(TEXT("Pin map to interface - illi iii Inventory"))).Font(FCoreStyle::GetDefaultFontStyle("Regular",FontSize));
             Labels->AddSlot().AutoHeight()[Label];
-            TestTrue(TEXT("Bitmap labels never compress native one-pixel strokes"),Label->ComputeDesiredSize(1).Y>=Style->Typeface(FontSize)->Font.MaxCharHeight);
+            const double TextHeight=Label->ComputeDesiredSize(1).Y;
+            TestTrue(TEXT("Requested plugin text sizes produce increasing line heights"),TextHeight>PreviousTextHeight);
+            PreviousTextHeight=TextHeight;
         }
         Renderer.DrawWidget(Target,Labels,FVector2D(770,220),0);FlushRenderingCommands();
         PNG.Reset();FImageUtils::PNGCompressImageArray(Target->SizeX,Target->SizeY,[&]{TArray<FColor> Pixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);return Pixels;}(),PNG);

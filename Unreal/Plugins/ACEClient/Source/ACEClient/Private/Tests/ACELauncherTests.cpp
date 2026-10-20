@@ -34,6 +34,7 @@
 #include "Slate/WidgetRenderer.h"
 #include "RenderingThread.h"
 #include "UObject/StrongObjectPtr.h"
+#include "Input/DragAndDrop.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACELauncherDirectoryTest,"ACE.Launcher.DirectoryAndProfiles",
  EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
@@ -180,6 +181,58 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
         TestTrue(TEXT("Play and Accounts rows display alias with username"),Title&&Title->GetText().ToString()==TEXT("Coldeve crafter (Adventurer)"));
         TestTrue(TEXT("Rows distinguish duplicate usernames by stable ID"),Button&&Button->Value==SecondAccountId);
     }
+    W->RunAction(TEXT("accounts"));
+    TFunction<TSharedPtr<SWidget>(TSharedRef<SWidget>,FName)> FindTag=[&](TSharedRef<SWidget> Widget,FName Tag)->TSharedPtr<SWidget>
+    {
+        if (Widget->GetTag()==Tag) return Widget;
+        auto* Children=Widget->GetChildren();
+        for (int32 I=0;I<Children->Num();++I) if (auto Found=FindTag(Children->GetChildAt(I),Tag)) return Found;
+        return nullptr;
+    };
+    const auto RowGeometry=FGeometry::MakeRoot(FVector2D(600,40),FSlateLayoutTransform());
+    const FString EditedAlias=TEXT("Unsaved account label");
+    W->AccountAliasBox->SetText(FText::FromString(EditedAlias));
+    auto DragAccount=[&](const FString& Source,const FString& Target,bool After)
+    {
+        const FString PreviousFirst=W->Profile.Accounts[0].Id;
+        auto Grip=FindTag(W->ManagedAccountList->TakeWidget(),FName(*(TEXT("AccountOrderGrip.")+Source)));
+        auto Row=FindTag(W->ManagedAccountList->TakeWidget(),FName(*(TEXT("AccountOrderRow.")+Target)));
+        if (!TestTrue(TEXT("Account rows expose a grip and full-width drop target"),Grip&&Row)) return;
+        const FVector2D Position(10,After?35:5);
+        const FPointerEvent Mouse(0,Position,Position,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState());
+        const auto Drag=Grip->OnDragDetected(RowGeometry,Mouse).GetDragDropContent();
+        if (!TestTrue(TEXT("Account grip starts a drag"),Drag.IsValid())) return;
+        TestTrue(TEXT("Drag decorator works without a native popup"),Drag->IsWindowlessOperation()&&Drag->GetDefaultDecorator().IsValid());
+        TestFalse(TEXT("Unrelated payload cannot reorder accounts"),Row->OnDrop(RowGeometry,FDragDropEvent(Mouse,MakeShared<FDragDropOperation>())).IsEventHandled());
+        TestTrue(TEXT("Hover accepts account drag and shows insertion marker"),Row->OnDragOver(RowGeometry,FDragDropEvent(Mouse,Drag)).IsEventHandled());
+        Row->OnDragLeave(FDragDropEvent(Mouse,Drag));
+        TestEqual(TEXT("Dragging without dropping leaves the order unchanged"),W->Profile.Accounts[0].Id,PreviousFirst);
+        TestTrue(TEXT("Dropping account onto another row is handled"),Row->OnDrop(RowGeometry,FDragDropEvent(Mouse,Drag)).IsEventHandled());
+        W->NativeTick(W->GetCachedGeometry(),0);
+    };
+    // Move down to the end, then back up, exercising both insertion halves.
+    DragAccount(FirstAccountId,SecondAccountId,true);
+    TestEqual(TEXT("Lower-half drop puts the account last"),W->Profile.Accounts.Last().Id,FirstAccountId);
+    TestEqual(TEXT("Dragging does not change selected identity"),W->Profile.SelectedAccountId,SecondAccountId);
+    TestEqual(TEXT("Dragging preserves unsaved account form edits"),W->AccountAliasBox->GetText().ToString(),EditedAlias);
+    TestEqual(TEXT("Dragging preserves the selected password"),W->PasswordBox->GetText().ToString(),FString(TEXT("fixture-two")));
+    TestFalse(TEXT("Dropping in the same position does nothing"),W->MoveAccountInOrder(FirstAccountId,SecondAccountId,true));
+    TestFalse(TEXT("A removed drag identity cannot change the list"),W->MoveAccountInOrder(TEXT("missing"),SecondAccountId,false));
+    TestFalse(TEXT("Self-drop does nothing"),W->MoveAccountInOrder(FirstAccountId,FirstAccountId,true));
+    // Verify the saved order before restoring the original sequence below.
+    FACELoginSettings Ordered;
+    TestTrue(TEXT("Drag order is saved immediately"),ACELoginSettings::Load(Ordered,W->ProfilePath));
+    TestTrue(TEXT("Saved order retains both duplicate identities and selection"),Ordered.Accounts.Num()==2
+        && Ordered.Accounts[0].Id==SecondAccountId && Ordered.Accounts[1].Id==FirstAccountId && Ordered.SelectedAccountId==SecondAccountId);
+    TestTrue(TEXT("Drag does not save unfinished alias edits"),Ordered.Accounts[0].Alias==TEXT("Coldeve crafter"));
+    for (auto* List:{W->AccountList.Get(),W->ManagedAccountList.Get()})
+        TestEqual(TEXT("Both account lists show the saved order"),CastChecked<UACELoginActionButton>(List->GetChildAt(0))->Value,SecondAccountId);
+    W->AccountAliasBox->SetText(FText::FromString(TEXT("Coldeve crafter")));
+    // Restore upward without disturbing selection or any credentials.
+    DragAccount(FirstAccountId,SecondAccountId,false);
+    TestEqual(TEXT("Moving up restores the first account"),W->Profile.Accounts[0].Id,FirstAccountId);
+    W->RunAction(TEXT("play"));
+    TestFalse(TEXT("An old drag cannot reorder from another page"),W->MoveAccountInOrder(FirstAccountId,SecondAccountId,true));
     W->RunAction(TEXT("removeaccount")); W->RunAction(TEXT("cancelremove"));
     TestEqual(TEXT("Cancelled removal keeps accounts"),W->Profile.Accounts.Num(),2);
     W->Profile.Servers[0].Description.Reset(); W->SelectServer(HomeId);
@@ -189,8 +242,17 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
     TestNotNull(TEXT("Updates page provides a real checkbox"),W->AutoUpdateCheckBox.Get());
     TestFalse(TEXT("Checkbox starts unchecked"),W->AutoUpdateCheckBox->IsChecked());
 #if PLATFORM_LINUX
-    TestFalse(TEXT("Linux hides unsupported automatic installation"),W->AutoUpdateCheckBox->IsVisible());
-    TestFalse(TEXT("Linux launcher keeps installation manual"),W->Updater->IsAutoUpdateEnabled());
+    TestTrue(TEXT("Linux exposes supported automatic installation"),W->AutoUpdateCheckBox->IsVisible());
+    TestFalse(TEXT("Linux automatic updates are opt-in"),W->Updater->IsAutoUpdateEnabled());
+    W->AutoUpdateCheckBox->SetIsChecked(true);
+    W->AutoUpdateCheckBox->OnCheckStateChanged.Broadcast(true);
+    FACELoginSettings UpdatePreference;
+    TestTrue(TEXT("Linux checking enables and persists automatic updates"),W->Updater->IsAutoUpdateEnabled()
+        && ACELoginSettings::Load(UpdatePreference,W->ProfilePath) && UpdatePreference.bAutoUpdate);
+    W->AutoUpdateCheckBox->SetIsChecked(false);
+    W->AutoUpdateCheckBox->OnCheckStateChanged.Broadcast(false);
+    TestTrue(TEXT("Linux unchecking disables and persists automatic updates"),!W->Updater->IsAutoUpdateEnabled()
+        && ACELoginSettings::Load(UpdatePreference,W->ProfilePath) && !UpdatePreference.bAutoUpdate);
 #else
     W->AutoUpdateCheckBox->SetIsChecked(true);
     W->AutoUpdateCheckBox->OnCheckStateChanged.Broadcast(true);
@@ -286,14 +348,12 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
         W->Updater->State=EACEUpdateState::Available;
         W->Updater->Message=TEXT("A new version is available (320 MB).");
         W->RunAction(TEXT("updates")); Capture(TEXT("UpdatesVR"),FIntPoint(1100,900));
-#if !PLATFORM_LINUX
         TestTrue(TEXT("Auto-update checkbox has a usable headset hit target"),W->AutoUpdateCheckBox->GetCachedGeometry().GetLocalSize().Y>=26);
         W->AutoUpdateCheckBox->SetIsChecked(true);
         W->AutoUpdateCheckBox->OnCheckStateChanged.Broadcast(true);
         Capture(TEXT("AutoUpdateEnabledVR"),FIntPoint(1100,900));
         W->AutoUpdateCheckBox->SetIsChecked(false);
         W->AutoUpdateCheckBox->OnCheckStateChanged.Broadcast(false);
-#endif
         Capture(TEXT("Updates720p"),FIntPoint(1280,720));
         TestTrue(TEXT("Download update is available in the shared VR/desktop lobby"),W->DownloadUpdateButton->IsVisible());
         TestFalse(TEXT("Install remains hidden until verification"),W->InstallUpdateButton->IsVisible());
@@ -301,11 +361,6 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
         TestFalse(TEXT("Cannot log in while replacing client files"),W->LoginButton->GetIsEnabled());
         W->Updater->State=EACEUpdateState::Ready; W->Updater->Message=FString(TEXT("Update ready. "))+ACEUpdates::InstallationNotice(PLATFORM_ANDROID);
         W->RefreshUpdateControls(); Capture(TEXT("UpdateReadyVR"),FIntPoint(1100,900));
-#if PLATFORM_LINUX
-        TestFalse(TEXT("Linux never displays an install action"),W->InstallUpdateButton->IsVisible());
-        W->RunAction(TEXT("installupdate")); W->RefreshUpdateControls();
-        TestEqual(TEXT("Linux cannot schedule an installation through the action router"),W->Updater->State,EACEUpdateState::Ready);
-#else
         TestTrue(TEXT("Verified update presents install action"),W->InstallUpdateButton->IsVisible());
         W->RunAction(TEXT("installupdate")); W->RefreshUpdateControls();
         TestEqual(TEXT("Manual installation opens the closure notice"),W->Updater->State,EACEUpdateState::InstallNotice);
@@ -320,7 +375,6 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
         W->Updater->State=EACEUpdateState::Installing;
         W->Updater->Message=ACEUpdates::InstallationNotice(true);
         W->RefreshUpdateControls(); Capture(TEXT("QuestUpdateClosureNotice"),FIntPoint(1100,900));
-#endif
         W->Updater->Cancel(); W->RefreshUpdateControls();
 
     }

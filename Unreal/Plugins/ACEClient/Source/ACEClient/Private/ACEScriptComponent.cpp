@@ -195,7 +195,8 @@ void UACEScriptComponent::InitializeFromObject(const FACEWorldObject& Object, fl
 	if (!Omega.IsNearlyZero())
 	{
 		// Omega is AC-space radians/sec.
-		Omega = FACEPosition::AceVectorToUnreal(Omega, 1.f);
+		// Angular velocity is axial: the X reflection reverses handedness.
+		Omega = -FACEPosition::AceVectorToUnreal(Omega, 1.f);
 	}
 
 	SetPhysicsHidden((Object.PhysicsState & ACEPhysicsState::Hidden) != 0);
@@ -1245,11 +1246,8 @@ void UACEScriptComponent::ApplyRootOmegaRotation(float DeltaTime)
 {
 	if (AActor* Owner = GetOwner(); Owner && !Omega.IsNearlyZero() && !bSuppressRootOmega)
 	{
-		const FVector DeltaRadians = Omega * DeltaTime;
-		const FQuat Delta(FRotator(
-			FMath::RadiansToDegrees(-DeltaRadians.X),
-			FMath::RadiansToDegrees(DeltaRadians.Z),
-			FMath::RadiansToDegrees(-DeltaRadians.Y)));
+		// Frame::grotate is an axis-angle quaternion, not three Euler rotations.
+		const FQuat Delta(Omega.GetSafeNormal(), Omega.Size() * DeltaTime);
 		Owner->AddActorWorldRotation(Delta);
 	}
 }
@@ -1443,7 +1441,7 @@ void UACEScriptComponent::ExecuteHook(
 		// Retail SetOmegaHook::Execute → set_omega(axis) with no intensity scale.
 		// animate_static_object then Frame::grotate(omega) once per ~MinQuantum (1/30s),
 		// treating |omega| as radians per tick — convert to rad/s for Dt integration.
-		Omega = FACEPosition::AceVectorToUnreal(FVector(Hook.Vector), 1.f) * 30.f;
+		Omega = -FACEPosition::AceVectorToUnreal(FVector(Hook.Vector), 1.f) * 30.f;
 		WakeEffectTick();
 		break;
 	case EACEAnimationHookType::Ethereal:
@@ -2251,7 +2249,8 @@ void UACEScriptComponent::CreateEmitter(
 	Emitter.EmissiveBoost = 1.f;
 	if (Dat && bAllowInferredParticleLights && !bEnvironmentWeather && !IsBloodSplatter(SourcePlayScript))
 	{
-		Dat->TryEstimateGfxLight(DrawId, Emitter.LightColor, Emitter.LightLum);
+		if (!Dat->TryEstimateGfxLight(DrawId, Emitter.LightColor, Emitter.LightLum))
+			Emitter.LightLum = 0.f;
 	}
 
 	Emitter.HookFrame = NewHookFrame;
@@ -3112,6 +3111,16 @@ void UACEScriptComponent::TickParticleLights(bool bPresentationOnly)
 		Request.EmitterId = Emitter.InstanceId;
 		Request.Position = Position;
 		Request.Color = Emitter.LightColor;
+		if (bWielded)
+		{
+			// The texture estimate supplies the hue. Dark/transparent padding in
+			// small spark textures must not attenuate carried illumination again:
+			// its strength already comes from authored luminosity and live opacity.
+			const float Peak = FMath::Max3(Request.Color.R, Request.Color.G, Request.Color.B);
+			if (Peak <= KINDA_SMALL_NUMBER) { Requests.Pop(EAllowShrinking::No); continue; }
+			Request.Color /= Peak;
+			Request.Color.A = 1.f;
+		}
 		Request.Radius = bWielded ? 320.f : 480.f;
 		Request.bPortal = bPortal;
 		const float Strength = Emitter.LightLum * Weight;

@@ -886,6 +886,7 @@ namespace ACEPhysicsState
 	constexpr int32 ParticleEmitter = 0x00001000;
 	/** Retail CPhysicsObj hidden bit — set during portal/teleport until destination is ready. */
 	constexpr int32 Hidden = 0x00004000;
+	constexpr int32 Inelastic = 0x00020000;
 	constexpr int32 HasDefaultAnim = 0x00040000;
 	constexpr int32 HasDefaultScript = 0x00080000;
 	constexpr int32 Cloaked = 0x00100000;
@@ -1074,9 +1075,11 @@ struct ACECLIENT_API FACEPlayerVitals
 	/** PropertyInt64.TotalExperience / AvailableExperience. */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int64 TotalExperience = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int64 AvailableExperience = 0;
-	/** PropertyInt64.AvailableLuminance / MaximumLuminance (0 when not enlightened). */
+	/** PropertyInt64.AvailableLuminance / MaximumLuminance (0 before luminance is unlocked). */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int64 AvailableLuminance = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int64 MaximumLuminance = 0;
+	/** A complete login description also establishes a zero balance when the optional quality is absent. */
+	bool bHasLuminanceBalance = false;
 
 	/** Run skill current (init + ranks + Quickness formula) — feeds prediction speed. */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 RunSkillCurrent = 0;
@@ -1298,7 +1301,14 @@ struct ACECLIENT_API FACEWorldObject
 	/** PublicWeenieDesc has HookItemTypes: this container displays a house-hook item. */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE")
 	bool bIsHouseHook = false;
+	/** Public hook compatibility and ownership, used by ItemHolder::CheckHookStatus. */
+	uint32 HookItemTypes = 0;
+	uint16 HookType = 0;
+	int32 HouseOwnerId = 0;
 	float Friction = .95f;
+	float Elasticity = .05f;
+	/** CPhysicsObj::set_elasticity limits restitution to [0, 0.1]. */
+	float GetValidElasticity() const { return FMath::IsFinite(Elasticity) ? FMath::Clamp(Elasticity, 0.f, .1f) : .05f; }
 
 	/** Retail physics/model scale is server-authored, including custom weenies. */
 	float GetValidObjectScale() const { return FMath::IsFinite(Scale) && Scale > 0.f ? Scale : 1.f; }

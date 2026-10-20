@@ -196,6 +196,7 @@ bool FACERetailInventoryOrderTest::RunTest(const FString& Parameters)
         };
         auto View=[&](int32 Container,TArray<FACEContainerItemRef> Refs)
         {
+            if (Container != 701) Session.BeginPendingUse(Container,0);
             FACEBinaryWriter W; W.WriteUInt32(Container); W.WriteUInt32(Refs.Num());
             for (const auto& Ref:Refs) {W.WriteUInt32(Ref.ItemGuid); W.WriteUInt32(Ref.ContainerType);}
             FACEBinaryReader R(W.GetData()); Session.HandleViewContents(R);
@@ -285,6 +286,31 @@ bool FACERetailInventoryOrderTest::RunTest(const FString& Parameters)
         Contains(Removing,100,0);
         TestEqual(TEXT("Failed removal cannot later equip the requested item"),Session.CachedC2SPackets.Num(),Sent);
         TestEqual(TEXT("Failure cancels pending swap"),Session.PendingEquipmentGuid,0);
+    }
+    // Every launcher pair, including a matching-ammo swap, uses the same
+    // acknowledged transaction for manual equips and UCM equip intents.
+    for(int32 OldAmmo : {1,2,4})for(int32 NewAmmo : {1,2,4})
+    {
+        Session.ClearWorldState();Session.PlayerGuid=100;Session.State=EACESessionState::InWorld;
+        auto New=Item(900,100,0);New.ItemType=ACEItemType::MissileWeapon;New.AmmoType=NewAmmo;Session.UpsertWorldObject(New);
+        auto Old=Item(901,0,-1);Old.WielderId=100;Old.CurrentWieldedLocation=ACEEquipMask::MissileWeapon;
+        Old.ItemType=ACEItemType::MissileWeapon;Old.AmmoType=OldAmmo;Session.UpsertWorldObject(Old);
+        auto Ammo=Old;Ammo.Guid=902;Ammo.ItemType=0x20000;Ammo.CurrentWieldedLocation=ACEEquipMask::MissileAmmo;Ammo.StackSize=73;Session.UpsertWorldObject(Ammo);
+        Session.CachedC2SPackets.Reset();Session.SendGetAndWieldItem(900,ACEEquipMask::MissileWeapon);
+        TestEqual(TEXT("Only incompatible ammo is scheduled for removal"),Session.PendingEquipmentRemovals.Contains(902),OldAmmo!=NewAmmo);
+        TestEqual(TEXT("Launcher and incompatible ammunition are both conflicts"),Session.PendingEquipmentRemovals.Num(),OldAmmo==NewAmmo?1:2);
+        while(!Session.PendingEquipmentRemovals.IsEmpty())
+        {
+            const int32 Removing=Session.PendingEquipmentRemovals[0];
+            TestFalse(TEXT("Wield waits for every removal acknowledgement"),Session.bPendingEquipmentWieldSent);
+            Contains(Removing,100,0);
+        }
+        TestTrue(TEXT("Replacement is wielded after ammunition is stowed"),Session.bPendingEquipmentWieldSent);
+        TestEqual(TEXT("Ammunition count is preserved"),Session.WorldObjects[902].StackSize,73);
+        TestEqual(TEXT("Matching ammo stays equipped"),Session.WorldObjects[902].CurrentWieldedLocation,OldAmmo==NewAmmo?ACEEquipMask::MissileAmmo:int64(0));
+        FACEBinaryWriter Wield;Wield.WriteUInt32(900);Wield.WriteInt32(int32(ACEEquipMask::MissileWeapon));
+        FACEBinaryReader R(Wield.GetData());Session.HandleWieldItem(R);
+        TestEqual(TEXT("Ranged swap completes"),Session.PendingEquipmentGuid,0);
     }
     // Full main pack: retail chooses the first side pack that can hold each
     // dequip, before sending it. Reconstruct normal ACE property + ContainID
@@ -495,6 +521,36 @@ bool FACERetailInventoryOrderTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("Empty-cell drop appends after source removal"),ACEInventoryRules::DropInsertionIndex(CurrentItems,4003,0,true),3);
     TestEqual(TEXT("Partial stack keeps its source slot"),ACEInventoryRules::DropInsertionIndex(CurrentItems,4003,4005,false),3);
     TestEqual(TEXT("Cross-pack drop does not remove a destination slot"),ACEInventoryRules::DropInsertionIndex(CurrentItems,5000,4005,true),3);
+    // UIQueue bag snapshots can precede all SmartboxQueue descriptions and
+    // PlayerDescription. Preserve both lists, including reverse GUID order.
+    Session.ClearWorldState(); Session.PlayerGuid=100;
+    auto View=[&](int32 Bag,const TArray<FACEContainerItemRef>& Refs)
+    {
+        FACEBinaryWriter W; W.WriteInt32(Bag); W.WriteUInt32(Refs.Num());
+        for(const auto& Ref:Refs){W.WriteInt32(Ref.ItemGuid);W.WriteInt32(Ref.ContainerType);}
+        FACEBinaryReader R(W.GetData()); Session.HandleViewContents(R);
+    };
+    View(10,{{109,0},{103,0},{107,0}});
+    View(20,{{209,0},{203,0},{207,0}});
+    TestEqual(TEXT("Unsolicited pack snapshots do not open ground containers"),Session.OpenExternalContainerGuid,0);
+    Check(10,{109,103,107}); Check(20,{209,203,207});
+    Session.ContainerContents.Add(100,{{10,1},{20,1}}); Session.ApplyPlayerInventoryProfile();
+    for(int32 Bag:{10,20})
+    {
+        Session.UpsertWorldObject(Item(Bag,100,INDEX_NONE,true));
+        // The middle item arrives first; absent descriptions must not move.
+        Session.UpsertWorldObject(Item(Bag*10+3,Bag,INDEX_NONE));
+        Check(Bag,{Bag*10+9,Bag*10+3,Bag*10+7});
+        Contains(Bag*10+7,Bag,0);
+        Check(Bag,{Bag*10+7,Bag*10+9,Bag*10+3});
+        Session.UpsertWorldObject(Item(Bag*10+9,Bag,INDEX_NONE));
+        Session.UpsertWorldObject(Item(Bag*10+7,Bag,INDEX_NONE));
+        Check(Bag,{Bag*10+7,Bag*10+9,Bag*10+3});
+        TArray<int32> Ordered;Session.GetPackItemGuids(Bag,Ordered);
+        const int32 Position=ACEInventoryRules::DropInsertionIndex(Ordered,Bag*10+3,Bag*10+9,true);
+        Send(Bag*10+3,Bag,Position);Contains(Bag*10+3,Bag,Position);
+        Check(Bag,{Bag*10+7,Bag*10+3,Bag*10+9});
+    }
     Session.SocketC2S->Close(); Sockets->DestroySocket(Session.SocketC2S); Session.SocketC2S=nullptr;
     Receiver->Close(); Sockets->DestroySocket(Receiver);
     return true;

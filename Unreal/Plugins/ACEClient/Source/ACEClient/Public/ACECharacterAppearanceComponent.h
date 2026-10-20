@@ -30,6 +30,7 @@ class ACECLIENT_API UACECharacterAppearanceComponent : public UActorComponent
 	friend class FACERunSpeedParityTest;
 	friend class FACEEmoteTransitionTest;
 	friend class FACEArcheryMotionTest;
+	friend class FACEAttackHeightMotionTest;
 	friend class FACEPortalMotionTest;
 	friend class FACEWalkingStepTest;
 	friend class FACEMultipartUpdateTest;
@@ -65,7 +66,7 @@ public:
 	/** Retail examination viewport sequence: independent of world distance/placement. */
 	void SetPreviewAnimation(uint32 AnimationId, bool bAnimate, int32 StartFrame = 0);
 	/** UI captures animate relative to their own camera, outside the playable scene. */
-	void SetPreviewCapture(bool bEnabled) { bPreviewCapture = bEnabled; }
+	void SetPreviewCapture(bool bEnabled);
 
 	UFUNCTION(BlueprintCallable, Category = "ACE|Appearance")
 	bool ApplyWorldObject(const FACEWorldObject& Object, float InWorldScale = 100.f, bool bEnablePartCollision = false);
@@ -283,6 +284,7 @@ protected:
 	float DeferredPoseDeltaTime = 0.f;
 	bool bPreviewAnimation = false;
 	bool bPreviewCapture = false;
+	bool bLocalPlayerAppearance = false;
 	int32 PreviewStartFrame = 0;
 	bool bHasMesh = false;
 	bool bNeedsInitialPropPose = false;
@@ -320,6 +322,7 @@ protected:
 	float AppliedWorldScale = 0.f;
 	uint64 AppearanceRevision = 0;
 	bool AppliedPartCollision = false;
+	bool AppliedDistanceLevels = false;
 
 	enum class EACEAnimMode : uint8
 	{
