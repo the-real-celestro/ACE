@@ -54,6 +54,15 @@ namespace ACELoginKeychain
 			// makes the running build its owner, so after one prompt per new build nothing else asks.
 			Status = SecItemAdd(Add, nullptr);
 			CFRelease(Add);
+			if (Status == errSecDuplicateItem)
+			{
+				// Another running copy (multiboxing) re-added the item between our delete and add,
+				// or the delete was refused. Update the existing item's data instead.
+				CFMutableDictionaryRef Update = CFDictionaryCreateMutable(kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+				CFDictionarySetValue(Update, kSecValueData, Data);
+				Status = SecItemUpdate(Query, Update);
+				CFRelease(Update);
+			}
 			CFRelease(Data);
 		}
 		CFRelease(Query);

@@ -17,6 +17,7 @@
 #endif
 #if PLATFORM_MAC
 #include "ACELoginKeychain.h"
+#include "HAL/PlatformProcess.h"
 #endif
 
 namespace ACELoginSettings
@@ -160,7 +161,8 @@ namespace ACELoginSettings
 #endif
 		const FString Directory = FPaths::GetPath(Path);
 		if (!IFileManager::Get().MakeDirectory(*Directory, true)) return false;
-		const FString TemporaryPath = Path + TEXT(".tmp");
+		// Per-process temp name so two running copies saving at once never clobber each other.
+		const FString TemporaryPath = FString::Printf(TEXT("%s.%u.tmp"), *Path, FPlatformProcess::GetCurrentProcessId());
         bool Saved = FFileHelper::SaveArrayToFile(Bytes, *TemporaryPath);
 #if (PLATFORM_LINUX || PLATFORM_MAC)
         Saved = Saved && chmod(TCHAR_TO_UTF8(*FPaths::ConvertRelativePathToFull(TemporaryPath)), S_IRUSR | S_IWUSR) == 0;
