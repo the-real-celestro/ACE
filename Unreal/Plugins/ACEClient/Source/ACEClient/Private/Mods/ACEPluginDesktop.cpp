@@ -70,20 +70,20 @@ namespace
                 Title->AddSlot().FillWidth(1).HAlign(HAlign_Center).VAlign(VAlign_Center)
                     [SNew(SBox).WidthOverride(22).HeightOverride(2)
                     [SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(.6f,.65f,.7f))]];
-                Title->AddSlot().AutoWidth()[SNew(SButton).Tag(TEXT("PluginBarMinimize")).ButtonStyle(&DockButtonStyle()).IsFocusable(false).ContentPadding(FMargin(5,0))
+                Title->AddSlot().AutoWidth()[SNew(SButton).Tag(TEXT("PluginBarMinimize")).Cursor(EMouseCursor::Default).ButtonStyle(&DockButtonStyle()).IsFocusable(false).ContentPadding(FMargin(5,0))
                     .ToolTipText_Lambda([Mini=Args._Minimized](){return FText::FromString(Mini.Get()?TEXT("Expand plugin bar"):TEXT("Minimize plugin bar"));})
                     .OnClicked_Lambda([Toggle=Args._ToggleMinimized](){Toggle();return FReply::Handled();})
                     [SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Bold",12))
                         .Text_Lambda([Mini=Args._Minimized](){return FText::FromString(Mini.Get()?TEXT("+"):TEXT("-"));})]];
             }
             else Title->AddSlot().FillWidth(1).VAlign(VAlign_Center)[SNew(SACEPluginText).Text_Lambda([Title=Args._Title]{return FText::FromString(Title.Get());}).Font(FCoreStyle::GetDefaultFontStyle("Regular",12))];
-            if(!IsBar&&Host.IsValid())Title->AddSlot().AutoWidth()[SNew(SButton).Tag(TEXT("PluginFramePin"))
+            if(!IsBar&&Host.IsValid())Title->AddSlot().AutoWidth()[SNew(SButton).Tag(TEXT("PluginFramePin")).Cursor(EMouseCursor::Default)
                 .IsFocusable(false).ButtonStyle(&Retail->DockButton).ContentPadding(FMargin(4,0))
                 .ToolTipText(FText::FromString(TEXT("Pin and hide frame. Hold Quick-show pinned windows to move or unpin.")))
                 .OnClicked_Lambda([H=Host,Window=Id]{if(H.IsValid())H->SetPluginWindowPinned(Window,!H->IsPluginWindowPinned(Window));return FReply::Handled();})
                 [SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",12))
                     .Text_Lambda([H=Host,Window=Id]{return FText::FromString(H.IsValid()&&H->IsPluginWindowPinned(Window)?TEXT("Unpin"):TEXT("Pin"));})]];
-            if (Args._Close) Title->AddSlot().AutoWidth()[SNew(SButton).IsFocusable(false).ButtonStyle(&DockButtonStyle())
+            if (Args._Close) Title->AddSlot().AutoWidth()[SNew(SButton).Cursor(EMouseCursor::Default).IsFocusable(false).ButtonStyle(&DockButtonStyle())
                 .ToolTipText(FText::FromString(TEXT("Hide window (plugin keeps running)")))
                 .OnClicked_Lambda([Close=Args._Close](){Close();return FReply::Handled();})[Caption(TEXT("X"))]];
             ChildSlot[SNew(SBorder).BorderImage(&Retail->Frame).Padding(IsBar?0:3)
