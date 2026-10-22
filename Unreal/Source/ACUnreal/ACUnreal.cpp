@@ -5,8 +5,13 @@
 #include "Mac/MacApplication.h"
 #endif
 
-#if PLATFORM_LINUX && !WITH_EDITOR
+#if (PLATFORM_WINDOWS || PLATFORM_LINUX) && !WITH_EDITOR
+#if PLATFORM_WINDOWS
+#include "Windows/WindowsHWrapper.h"
+#include "ACEWindowsExitGuard.h"
+#else
 #include "ACELinuxExitGuard.h"
+#endif
 #include <atomic>
 namespace
 {
@@ -24,15 +29,24 @@ void FACUnrealModule::StartupModule()
     // unclickable on pinned plugin windows. Two-finger click still right-clicks.
     FCoreDelegates::OnPostEngineInit.AddLambda([]{ if (MacApplication) MacApplication->SetIsRightClickEmulationEnabled(false); });
 #endif
-#if PLATFORM_LINUX && !WITH_EDITOR
+#if (PLATFORM_WINDOWS || PLATFORM_LINUX) && !WITH_EDITOR
     // Independent of frame ticks and window focus. Covers Quit/update teardown
     // and fatal-error handling, without killing slow or minimized gameplay.
+    // Windows broadcasts this as soon as Quit/window-close/update requests
+    // exit, before the main loop and render teardown can hang. PreExit alone
+    // is too late for a stall before engine cleanup begins.
+    FCoreDelegates::GetApplicationWillTerminateDelegate().AddStatic(MarkExit);
     FCoreDelegates::OnEnginePreExit.AddStatic(MarkExit);
     FCoreDelegates::OnPreExit.AddStatic(MarkExit);
     FCoreDelegates::OnHandleSystemError.AddStatic(MarkExit);
     FCoreDelegates::OnShutdownAfterError.AddStatic(MarkExit);
-    if (!ACELinuxExitGuard::Start(IsStopping))
-        UE_LOG(LogTemp, Warning, TEXT("AC:Unreal could not start the Linux exit guard"));
+#if PLATFORM_WINDOWS
+    const bool Started = ACEWindowsExitGuard::Start(IsStopping);
+#else
+    const bool Started = ACELinuxExitGuard::Start(IsStopping);
+#endif
+    if (!Started)
+        UE_LOG(LogTemp, Warning, TEXT("AC:Unreal could not start the shutdown guard"));
 #endif
 }
 
