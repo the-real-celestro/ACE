@@ -153,6 +153,180 @@ namespace
 
 const FACELobbyArt* ACELobbyArt::Get() { return GArt; }
 
+UTexture2D* ACELobbyArt::ExtendedBackdrop(UACEDatSubsystem* Dat, uint32 ImageId, int32 ExtX, int32 ExtY, int32 Spread, int32 SplitX)
+{
+	static uint32 SrcId = 0;
+	static FImg Src;
+	if (!ImageId || !Dat || !Dat->IsDatReady() || !Dat->GetTextureResolver()) return nullptr;
+	if (SrcId != ImageId)
+	{
+		FImg Img;
+		if (!Decode(Dat->GetTextureResolver(), ImageId, Img)) return nullptr;
+		Src = MoveTemp(Img);
+		SrcId = ImageId;
+	}
+	const int32 AW = Src.W, AH = Src.H;
+	ExtX = FMath::Clamp(ExtX, 0, 2048);
+	ExtY = FMath::Clamp(ExtY, 0, 2048);
+	// Plain stone used for texture: the 68 columns between the "Characters" title and the logo
+	// (0x06007576). Narrower art (never expected) just mirrors its edges.
+	constexpr int32 PatchX = 214, PatchW = 68, Step = 52, Overlap = PatchW - Step;
+	const bool bPatch = AW >= PatchX + PatchW && AH >= 32;
+
+	auto V3 = [](const FColor& C) { return FVector3f(C.R, C.G, C.B); };
+	auto Reflect = [](int32 V, int32 N) { const int32 M = ((V % (2 * N)) + 2 * N) % (2 * N); return M < N ? M : 2 * N - 1 - M; };
+	auto BoxBlur = [](TArray<FVector3f>& V, int32 W, int32 H, int32 R, bool bX, bool bY)
+	{
+		TArray<FVector3f> T; T.SetNumUninitialized(V.Num());
+		for (int32 Pass = 0; Pass < 2; ++Pass)
+		{
+			if (bX)
+			{
+				for (int32 Y = 0; Y < H; ++Y) for (int32 X = 0; X < W; ++X)
+				{
+					FVector3f S(0);
+					for (int32 K = -R; K <= R; ++K) S += V[Y * W + FMath::Clamp(X + K, 0, W - 1)];
+					T[Y * W + X] = S / float(2 * R + 1);
+				}
+				V = T;
+			}
+			if (bY)
+			{
+				for (int32 Y = 0; Y < H; ++Y) for (int32 X = 0; X < W; ++X)
+				{
+					FVector3f S(0);
+					for (int32 K = -R; K <= R; ++K) S += V[FMath::Clamp(Y + K, 0, H - 1) * W + X];
+					T[Y * W + X] = S / float(2 * R + 1);
+				}
+				V = T;
+			}
+		}
+	};
+
+	// High-pass detail of the art (art minus a soft blur): stone grain without its tone.
+	TArray<FVector3f> Detail;
+	Detail.SetNumUninitialized(AW * AH);
+	for (int32 I = 0; I < AW * AH; ++I) Detail[I] = V3(Src.Px[I]);
+	{
+		TArray<FVector3f> Soft = Detail;
+		BoxBlur(Soft, AW, AH, 4, true, true);
+		for (int32 I = 0; I < AW * AH; ++I) Detail[I] -= Soft[I];
+	}
+	auto Rms = [&](int32 X0, int32 Y0, int32 X1, int32 Y1)
+	{
+		double S = 0; int32 N = 0;
+		for (int32 Y = FMath::Max(0, Y0); Y < FMath::Min(AH, Y1); ++Y) for (int32 X = FMath::Max(0, X0); X < FMath::Min(AW, X1); ++X)
+		{
+			S += Detail[Y * AW + X].SizeSquared(); ++N;
+		}
+		return N ? float(FMath::Sqrt(S / N)) : 0.f;
+	};
+	const float PatchRms = bPatch ? FMath::Max(1.f, Rms(PatchX, 0, PatchX + PatchW, AH)) : 1.f;
+	auto Gain = [&](float EdgeRms) { return bPatch ? FMath::Clamp(EdgeRms / PatchRms, .4f, 1.6f) : 0.f; };
+	const float GainL = Gain(Rms(0, 0, 20, AH)), GainR = Gain(Rms(AW - 10, 0, AW, AH));
+	const float GainT = Gain(Rms(0, 0, AW, 10)), GainB = Gain(Rms(0, AH - 10, AW, AH));
+
+	// Each edge's own colour, row by row (or column by column), softened so it reads as tone.
+	auto EdgeTone = [&](bool bRows, int32 From, int32 To)
+	{
+		const int32 N = bRows ? AH : AW;
+		TArray<FVector3f> Tone; Tone.SetNumZeroed(N);
+		for (int32 I = 0; I < N; ++I)
+		{
+			for (int32 K = From; K < To; ++K) Tone[I] += V3(bRows ? Src.At(K, I) : Src.At(I, K));
+			Tone[I] /= float(To - From);
+		}
+		BoxBlur(Tone, bRows ? 1 : N, bRows ? N : 1, 8, !bRows, bRows);
+		return Tone;
+	};
+	const TArray<FVector3f> ToneL = EdgeTone(true, 0, 8), ToneR = EdgeTone(true, AW - 8, AW);
+	const TArray<FVector3f> ToneT = EdgeTone(false, 0, 6), ToneB = EdgeTone(false, AH - 6, AH);
+	// Asheron's robe runs off the bottom edge; below the art its colours fade into the stone
+	// tone of the plain bottom-left so the figure does not appear to continue.
+	FVector3f StoneB(0);
+	{
+		const int32 N = FMath::Clamp(AW * 13 / 20, 1, AW);
+		for (int32 X = 0; X < N; ++X) StoneB += ToneB[X];
+		StoneB /= float(N);
+	}
+
+	// Patch grain laid in overlapping, cross-faded tiles, each from a different height and
+	// some flipped, so no repeat or mirror axis shows.
+	auto TileGrain = [&](int32 K, int32 U, int32 Y)
+	{
+		const uint32 H = ::GetTypeHash(K * 2654435761u + 0x9E3779B9u) * 2246822519u;
+		const int32 SY = Reflect(Y + int32(H % uint32(AH)), AH);
+		const int32 SX = (H >> 20) & 1 ? PatchW - 1 - U : U;
+		return Detail[SY * AW + PatchX + SX];
+	};
+	auto Grain = [&](int32 X, int32 Y)
+	{
+		if (!bPatch) return FVector3f(0);
+		const int32 K = X / Step, L = X - K * Step;
+		FVector3f G = TileGrain(K, L, Y);
+		if (L < Overlap && K > 0) G = FMath::Lerp(TileGrain(K - 1, L + Step, Y), G, (L + .5f) / Overlap);
+		return G;
+	};
+	auto Smooth = [](float T) { T = FMath::Clamp(T, 0.f, 1.f); return T * T * (3.f - 2.f * T); };
+	// How far the mirrored edge reaches before it has fully turned into stone: only as far as
+	// each edge stays clear of the titles, logo and Asheron's sleeve.
+	constexpr float BlendL = 24.f, BlendR = 10.f, BlendT = 10.f, BlendB = 8.f;
+
+	// The composition may open up at Split: the left part stays, the right part moves Spread
+	// columns right, and the opening continues the plain art on both sides into stone toned
+	// like the art just right of the split.
+	const int32 Split = FMath::Clamp(SplitX, 1, AW - 1);
+	Spread = bPatch ? FMath::Clamp(Spread, 0, 1024) : 0;
+	const int32 SW = AW + Spread;
+	constexpr float BlendM = 30.f;
+	const TArray<FVector3f> ToneM = EdgeTone(true, Split, FMath::Min(Split + 60, AW));
+	auto Composite = [&](int32 SX, int32 SY, int32 GX, int32 GY)
+	{
+		if (SX < Split) return V3(Src.At(SX, SY));
+		if (SX >= Split + Spread) return V3(Src.At(SX - Spread, SY));
+		const int32 Near = FMath::Min(SX - Split, Split + Spread - 1 - SX);
+		const FVector3f Cont = V3(Src.At(FMath::Min(Split + Near, AW - 1), SY));
+		return FMath::Lerp(Cont, ToneM[SY] + Grain(GX, GY), Smooth(Near / BlendM));
+	};
+	auto ArtColumn = [&](int32 SX) { return SX < Split ? SX : SX >= Split + Spread ? SX - Spread : Split; };
+
+	FImg Out; Out.W = SW + 2 * ExtX; Out.H = AH + 2 * ExtY;
+	Out.Px.SetNumUninitialized(Out.W * Out.H);
+	for (int32 Y = 0; Y < Out.H; ++Y) for (int32 X = 0; X < Out.W; ++X)
+	{
+		const int32 AX = X - ExtX, AY = Y - ExtY;
+		FVector3f C;
+		if (AX >= 0 && AX < SW && AY >= 0 && AY < AH)
+		{
+			if (AX < Split || AX >= Split + Spread) { Out.At(X, Y) = Src.At(ArtColumn(AX), AY); continue; }
+			C = Composite(AX, AY, X, Y);
+		}
+		else
+		{
+			FVector3f Tone; float G;
+			if (AX < 0 || AX >= SW)
+			{
+				Tone = (AX < 0 ? ToneL : ToneR)[FMath::Clamp(AY, 0, AH - 1)];
+				G = AX < 0 ? GainL : GainR;
+			}
+			else
+			{
+				const int32 CX = ArtColumn(AX);
+				Tone = AY < 0 ? ToneT[CX] : FMath::Lerp(ToneB[CX], StoneB, FMath::Clamp((AY - AH + 1) / 48.f, 0.f, 1.f));
+				G = AY < 0 ? GainT : GainB;
+			}
+			const FVector3f Stone = Tone + Grain(X, Y) * G;
+			const float WX = AX < 0 ? Smooth(-AX / BlendL) : AX >= SW ? Smooth((AX - SW + 1) / BlendR) : 0.f;
+			const float WY = AY < 0 ? Smooth(-AY / BlendT) : AY >= AH ? Smooth((AY - AH + 1) / BlendB) : 0.f;
+			const FVector3f Mirror = Composite(Reflect(AX, SW), Reflect(AY, AH), X, Y);
+			C = FMath::Lerp(Mirror, Stone, FMath::Max(WX, WY));
+		}
+		Out.At(X, Y) = FColor(uint8(FMath::Clamp(FMath::RoundToInt(C.X), 0, 255)), uint8(FMath::Clamp(FMath::RoundToInt(C.Y), 0, 255)),
+			uint8(FMath::Clamp(FMath::RoundToInt(C.Z), 0, 255)), 255);
+	}
+	return FACEDatTextureResolver::CreateTransientRgbaUi(Out.W, Out.H, Out.Px);
+}
+
 const FACELobbyArt* ACELobbyArt::Load(UACEDatSubsystem* Dat)
 {
 	if (GArt || !Dat || !Dat->IsDatReady() || GAttempts >= 3) return GArt;

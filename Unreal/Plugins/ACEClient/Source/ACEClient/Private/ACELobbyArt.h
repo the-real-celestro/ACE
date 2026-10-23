@@ -5,6 +5,7 @@
 #include "Widgets/SLeafWidget.h"
 
 class UACEDatSubsystem;
+class UTexture2D;
 
 /**
  * Retail launcher artwork, decoded once from client_portal.dat after it loads and shared by
@@ -41,6 +42,16 @@ namespace ACELobbyArt
 	const FACELobbyArt* Get();
 	/** Decodes the art once the DAT is ready (cheap no-op afterwards). Returns Get(). */
 	const FACELobbyArt* Load(UACEDatSubsystem* Dat);
+	/**
+	 * A new transient texture holding the 800x600 image ImageId with ExtX columns added on each
+	 * side and ExtY rows above and below, painted to look like the art simply continues: each
+	 * edge is mirrored for a few pixels and cross-faded into stone texture taken from a plain
+	 * part of the art, tinted to that edge's own colours. Nothing of the art's figures, logo or
+	 * titles is repeated. Spread columns are opened at SplitX (between the left and right
+	 * halves of the composition) and filled the same way. Null if the DAT is not ready. The
+	 * caller keeps the texture alive.
+	 */
+	UTexture2D* ExtendedBackdrop(UACEDatSubsystem* Dat, uint32 ImageId, int32 ExtX, int32 ExtY, int32 Spread = 0, int32 SplitX = 212);
 
 	extern const FLinearColor Gold;      // headings, retail orange-gold
 	extern const FLinearColor Cream;     // body text

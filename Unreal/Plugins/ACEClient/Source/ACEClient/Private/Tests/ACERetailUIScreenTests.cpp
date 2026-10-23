@@ -450,9 +450,9 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     if (const auto Field=Manager->FindElementByName(TEXT("CharacterManagementField")))
         TestEqual(TEXT("Character selection spans a 21:9 window"),Field->Width,1423);
     if (const auto Exit=Manager->FindElementByName(TEXT("ExitButton")))
-        TestEqual(TEXT("EXIT follows the right edge"),Exit->GetScreenOrigin().X,Exit->X+623);
+        TestEqual(TEXT("EXIT opens up by the capped spread"),Exit->GetScreenOrigin().X,Exit->X+231+160);
     if (const auto List=Manager->FindElementByName(TEXT("CharacterListBoxFrame")))
-        TestEqual(TEXT("The character list stays on the left"),List->GetScreenOrigin().X,List->X);
+        TestEqual(TEXT("The character list stays with the centered composition"),List->GetScreenOrigin().X,List->X+231);
     Manager->ApplyEdgeAnchoredLayout(800,600);
     const auto Enter=Manager->FindElementByName(TEXT("EnterGameButton"));
     if (!TestTrue(TEXT("Character-select Enter element exists"),Enter.IsValid())) return false;

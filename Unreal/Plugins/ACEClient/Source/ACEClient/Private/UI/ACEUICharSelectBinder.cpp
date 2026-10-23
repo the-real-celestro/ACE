@@ -6,6 +6,7 @@
 #include "UI/ACEUIResourceResolver.h"
 #include "ACEClientSubsystem.h"
 #include "ACEDatSubsystem.h"
+#include "ACELobbyArt.h"
 #include "ACESession.h"
 #include "ACEPlayerController.h"
 #include "Blueprint/WidgetTree.h"
@@ -151,6 +152,9 @@ void UACEUICharSelectBinder::Shutdown()
 	for (TObjectPtr<UBorder>& B : BackdropTiles) { RemoveOverlay(B.Get()); }
 	BackdropTiles.Reset();
 	BackdropBrushes.Reset();
+	BackdropTexture = nullptr;
+	BackdropExtent = FIntPoint(-1, -1);
+	BackdropSpread = -1;
 	RemoveOverlay(WorldNameImage);
 	WorldNameImage = nullptr;
 	for (TObjectPtr<UBorder>& L : CharNameImages) { RemoveOverlay(L.Get()); }
@@ -582,129 +586,69 @@ void UACEUICharSelectBinder::PlaceListFrameChrome(float LayoutX, float LayoutY, 
 	PlacePart(7, DidListSideEdge, LayoutX + LayoutW - EdgeS, LayoutY + Corner, EdgeS, InnerH);
 }
 
-namespace
-{
-	// One run of backdrop art along an axis: where it goes (layout units) and which texels it shows.
-	struct FBackdropSpan
-	{
-		float Pos = 0.f, Size = 0.f, UV0 = 0.f, UV1 = 1.f;
-		bool bMirror = false;
-	};
-
-	// Fills Count spans of equal size from Pos, alternating mirrored/plain copies of the art run
-	// [Edge, Edge + Size) (or [Edge - Size, Edge) when bBefore), so each copy meets its neighbour
-	// at the same texel column and the extension has no seams. bFirstMirrored picks the start.
-	void AddMirroredRun(TArray<FBackdropSpan>& Out, float Pos, float Length, float Edge, float MaxRun, float Ref, bool bBefore, bool bFirstMirrored)
-	{
-		if (Length <= KINDA_SMALL_NUMBER)
-		{
-			return;
-		}
-		const int32 Count = FMath::Max(1, FMath::CeilToInt(Length / MaxRun));
-		const float Size = Length / Count;
-		const float A = bBefore ? Edge - Size : Edge;
-		for (int32 K = 0; K < Count; ++K)
-		{
-			FBackdropSpan Span;
-			Span.Pos = Pos + K * Size;
-			Span.Size = Size;
-			Span.UV0 = A / Ref;
-			Span.UV1 = (A + Size) / Ref;
-			Span.bMirror = ((K & 1) != 0) != bFirstMirrored;
-			Out.Add(Span);
-		}
-	}
-}
-
 void UACEUICharSelectBinder::PlaceBackdrop(const TSharedPtr<FACEUIElement>& Root, const FVector2D& ViewSize)
 {
 	const float S = Canvas->GetLastScaleX();
 	if (!BackdropImageId) BackdropImageId = FindBackdropImage(Root);
-	UTexture2D* Art = BackdropImageId && Canvas->GetResourceResolver() ? Canvas->GetResourceResolver()->ResolveTexture(BackdropImageId) : nullptr;
-	int32 Used = 0;
-	if (Art && Root.IsValid() && S > KINDA_SMALL_NUMBER && ViewSize.X >= 1.f && ViewSize.Y >= 1.f)
+	bool bShown = false;
+	if (BackdropImageId && Root.IsValid() && S > KINDA_SMALL_NUMBER && ViewSize.X >= 1.f && ViewSize.Y >= 1.f)
 	{
-		// The panel keeps its height-fit scale. The art's left strip (the World and Characters
-		// titles) stays with the left column and the rest (Asheron, the logo) with CREDITS/EXIT,
-		// both anchored like ApplyEdgeAnchoredLayout. The space between is filled with alternating
-		// mirrored copies of a plain stretch of the art just right of the titles, and extra height
-		// (windows narrower than 4:3) with mirrored copies of the top and bottom rows, so the art
-		// covers the whole window with no seams, letterbox or crop.
-		const float W = float(ACEUI::ReferenceWidth), H = float(ACEUI::ReferenceHeight);
-		constexpr float SplitX = 212.f;   // just right of the "Characters" title and World box
-		constexpr float MaxRunX = 70.f;   // plain art from SplitX to the logo's first letter
-		constexpr float MaxRunY = 16.f;   // above the logo / along the bottom edge
-		const float Gap = float(FMath::Max(0, Root->Width - ACEUI::ReferenceWidth));
-		const float Y0 = float(FMath::Max(0, Root->Height - ACEUI::ReferenceHeight) / 2);
-		const float LW = FMath::Max(float(ViewSize.X) / S, float(Root->Width));
-		const float LH = FMath::Max(float(ViewSize.Y) / S, float(Root->Height));
-
-		TArray<FBackdropSpan> Cols;
-		Cols.Add({0.f, SplitX, 0.f, SplitX / W, false});
-		AddMirroredRun(Cols, SplitX, Gap, SplitX, MaxRunX, W, false, false);
-		if (Gap > KINDA_SMALL_NUMBER && (Cols.Num() - 1) % 2 != 0)
+		// The authored composition stays one centered block (ApplyEdgeAnchoredLayout); the art
+		// behind it is continued outward to the window edges by ExtendedBackdrop, so the join
+		// at the block's edge is invisible and nothing is letterboxed, cropped or repeated.
+		const int32 ExtraW = FMath::Max(0, Root->Width - ACEUI::ReferenceWidth);
+		const int32 ExtraH = FMath::Max(0, Root->Height - ACEUI::ReferenceHeight);
+		// The art splits where the composition opens up (CharacterSelectColumnShift).
+		const int32 Spread = UACEUIElementManager::CharacterSelectSpread(ExtraW);
+		const int32 Base = (ExtraW - Spread) / 2;
+		const float BlockX = float(Base), BlockY = float(ExtraH / 2);
+		const FIntPoint Extent(ExtraW - Spread - Base + 1, ExtraH - ExtraH / 2 + 1);
+		if (Extent != BackdropExtent || Spread != BackdropSpread || !BackdropTexture)
 		{
-			// Keep an even count so the last copy is mirrored and ends on column SplitX again.
-			const int32 Count = Cols.Num(); Cols.SetNum(1);
-			const float Size = Gap / Count;
-			AddMirroredRun(Cols, SplitX, Gap, SplitX, Size + KINDA_SMALL_NUMBER, W, false, false);
+			UACEDatSubsystem* Dat = Canvas->GetGameInstance() ? Canvas->GetGameInstance()->GetSubsystem<UACEDatSubsystem>() : nullptr;
+			if (UTexture2D* Texture = ACELobbyArt::ExtendedBackdrop(Dat, BackdropImageId, Extent.X, Extent.Y, Spread))
+			{
+				BackdropTexture = Texture;
+				BackdropExtent = Extent;
+				BackdropSpread = Spread;
+			}
 		}
-		Cols.Add({SplitX + Gap, W - SplitX, SplitX / W, 1.f, false});
-		if (LW > Gap + W + KINDA_SMALL_NUMBER)
+		if (BackdropTexture)
 		{
-			AddMirroredRun(Cols, Gap + W, LW - Gap - W, W, MaxRunX, W, true, true);
-		}
-
-		TArray<FBackdropSpan> Rows;
-		if (Y0 > KINDA_SMALL_NUMBER)
-		{
-			// Built top-down; the copy touching the art (the last) must be mirrored.
-			const int32 Count = FMath::Max(1, FMath::CeilToInt(Y0 / MaxRunY));
-			AddMirroredRun(Rows, 0.f, Y0, 0.f, Y0 / Count + KINDA_SMALL_NUMBER, H, false, (Count & 1) != 0);
-		}
-		Rows.Add({Y0, H, 0.f, 1.f, false});
-		AddMirroredRun(Rows, Y0 + H, LH - Y0 - H, H, MaxRunY, H, true, true);
-
-		for (const FBackdropSpan& Row : Rows) for (const FBackdropSpan& Col : Cols)
-		{
-			if (Used == BackdropTiles.Num())
+			if (BackdropTiles.IsEmpty())
 			{
 				UBorder* Tile = Canvas->WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
 				Tile->SetPadding(FMargin(0.f));
-				Tile->SetVisibility(ESlateVisibility::HitTestInvisible);
 				BackdropTiles.Add(Tile);
 			}
-			UBorder* Tile = BackdropTiles[Used++];
+			UBorder* Tile = BackdropTiles[0];
 			if (Tile->GetParent() != Canvas->GetElementLayer()) Canvas->GetElementLayer()->AddChild(Tile);
+			const FVector2D TexSize(BackdropTexture->GetSizeX(), BackdropTexture->GetSizeY());
 			FSlateBrush Brush;
 			Brush.DrawAs = ESlateBrushDrawType::Image;
-			Brush.SetResourceObject(Art);
-			Brush.ImageSize = FVector2D(Col.Size, Row.Size);
-			Brush.SetUVRegion(FBox2f(FVector2f(Col.UV0, Row.UV0), FVector2f(Col.UV1, Row.UV1)));
-			Brush.Mirroring = Col.bMirror && Row.bMirror ? ESlateBrushMirrorType::Both : Col.bMirror ? ESlateBrushMirrorType::Horizontal
-				: Row.bMirror ? ESlateBrushMirrorType::Vertical : ESlateBrushMirrorType::NoMirror;
-			if (!BackdropBrushes.IsValidIndex(Used - 1) || !(BackdropBrushes[Used - 1] == Brush))
+			Brush.SetResourceObject(BackdropTexture);
+			Brush.ImageSize = TexSize;
+			if (BackdropBrushes.Num() != 1 || !(BackdropBrushes[0] == Brush))
 			{
-				BackdropBrushes.SetNum(FMath::Max(BackdropBrushes.Num(), Used));
-				BackdropBrushes[Used - 1] = Brush;
+				BackdropBrushes = { Brush };
 				Tile->SetBrush(Brush);
 			}
 			Tile->SetVisibility(ESlateVisibility::HitTestInvisible);
-			// Whole viewport pixels, each piece starting where the previous ends, so no seam shows.
-			const float PX0 = FMath::RoundToFloat(Col.Pos * S), PX1 = FMath::RoundToFloat((Col.Pos + Col.Size) * S);
-			const float PY0 = FMath::RoundToFloat(Row.Pos * S), PY1 = FMath::RoundToFloat((Row.Pos + Row.Size) * S);
+			// One art texel per layout unit, exactly like the block's own elements, so the art
+			// under them lines up with the titles and frames.
 			if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Tile->Slot))
 			{
 				Slot->SetAnchors(FAnchors(0.f, 0.f));
 				Slot->SetAlignment(FVector2D(0.f, 0.f));
 				Slot->SetAutoSize(false);
-				Slot->SetPosition(FVector2D(PX0, PY0));
-				Slot->SetSize(FVector2D(FMath::Max(1.f, PX1 - PX0), FMath::Max(1.f, PY1 - PY0)));
+				Slot->SetPosition(FVector2D((BlockX - BackdropExtent.X) * S, (BlockY - BackdropExtent.Y) * S));
+				Slot->SetSize(TexSize * S);
 				Slot->SetZOrder(1);
 			}
+			bShown = true;
 		}
 	}
-	for (int32 I = Used; I < BackdropTiles.Num(); ++I)
+	for (int32 I = bShown ? 1 : 0; I < BackdropTiles.Num(); ++I)
 		if (BackdropTiles[I]) BackdropTiles[I]->SetVisibility(ESlateVisibility::Collapsed);
 }
 

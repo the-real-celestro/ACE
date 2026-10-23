@@ -37,8 +37,11 @@ public:
 	 * Gameplay: (1,1) — floaties edge-anchor instead of stretching.
 	 */
 	FVector2D GetCanvasScale(FVector2D ViewportSize) const;
-	/** Horizontal layout offset of a character-select column when the window is ExtraWidth
-	 *  layout pixels wider than 800: 0 for the left column, all of it for the right, half otherwise. */
+	/** How far (layout pixels) character select's left and right halves open up when the window
+	 *  is ExtraWidth layout pixels wider than 800; capped so the middle never goes empty. */
+	static int32 CharacterSelectSpread(int32 ExtraWidth);
+	/** Horizontal offset of a character-select element: the composition is centered, with the
+	 *  left column at its left, CREDITS/EXIT Spread further right, everything else halfway. */
 	static int32 CharacterSelectColumnShift(const FString& ElementName, int32 ExtraWidth);
 
 	/**

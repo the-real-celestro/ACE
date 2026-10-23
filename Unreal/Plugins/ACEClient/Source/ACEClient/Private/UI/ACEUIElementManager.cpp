@@ -331,18 +331,26 @@ namespace
 	}
 }
 
+int32 UACEUIElementManager::CharacterSelectSpread(int32 ExtraWidth)
+{
+	// About 16:10's worth: the halves open up a little on wide windows, never into a gulf.
+	return FMath::Clamp(ExtraWidth, 0, 160);
+}
+
 int32 UACEUIElementManager::CharacterSelectColumnShift(const FString& ElementName, int32 ExtraWidth)
 {
+	const int32 Spread = CharacterSelectSpread(ExtraWidth);
+	const int32 Base = (ExtraWidth - Spread) / 2;
 	if (ElementName == TEXT("WorldName") || ElementName == TEXT("CharacterListBoxFrame")
 		|| ElementName == TEXT("DeleteCharacterButton") || ElementName == TEXT("RestoreCharacterButton"))
 	{
-		return 0;
+		return Base;
 	}
 	if (ElementName == TEXT("CreditsButton") || ElementName == TEXT("ExitButton"))
 	{
-		return ExtraWidth;
+		return Base + Spread;
 	}
-	return ExtraWidth / 2;
+	return Base + Spread / 2;
 }
 
 void UACEUIElementManager::ApplyEdgeAnchoredLayout(int32 ViewportWidth, int32 ViewportHeight)
@@ -371,11 +379,11 @@ void UACEUIElementManager::ApplyEdgeAnchoredLayout(int32 ViewportWidth, int32 Vi
         }
 		if (Root->ElementName == TEXT("CharacterManagementField"))
 		{
-			// The field covers the whole window (the binder paints its backdrop edge to edge).
-			// Wide windows spread the authored columns like a native widescreen layout: the
-			// world and character list stay on the left, CREDITS/EXIT follow the right edge with
-			// the backdrop's Asheron and logo, and Create Character/ENTER (and dialogs) center.
-			// Windows narrower than 4:3 center everything vertically instead.
+			// The field covers the whole window so the binder can continue the backdrop art
+			// out to the edges. The authored composition stays together, uniformly scaled and
+			// centered; on wide windows its left column and its right side (Asheron, logo,
+			// CREDITS/EXIT) open up by at most CharacterSelectSpread, with Create Character,
+			// ENTER and dialogs centered between them.
 			const int32 ExtraW = FMath::Max(0, FMath::CeilToInt(static_cast<float>(ViewportWidth) / CharS - .01f) - ACEUI::ReferenceWidth);
 			const int32 ExtraH = FMath::Max(0, FMath::CeilToInt(static_cast<float>(ViewportHeight) / CharS - .01f) - ACEUI::ReferenceHeight);
 			const int32 OffsetY = (ExtraH + 1) / 2;

@@ -98,6 +98,11 @@ private:
 	TArray<TObjectPtr<UBorder>> BackdropTiles;
 	TArray<FSlateBrush> BackdropBrushes;
 	uint32 BackdropImageId = 0;
+	/** The backdrop art continued out to the window edges (ACELobbyArt::ExtendedBackdrop),
+	 *  rebuilt when the extension it needs (BackdropExtent, art pixels per side) changes. */
+	UPROPERTY() TObjectPtr<class UTexture2D> BackdropTexture;
+	FIntPoint BackdropExtent = FIntPoint(-1, -1);
+	int32 BackdropSpread = -1;
 	UPROPERTY()
 	TObjectPtr<UBorder> WorldNameImage = nullptr;
 	UPROPERTY()
