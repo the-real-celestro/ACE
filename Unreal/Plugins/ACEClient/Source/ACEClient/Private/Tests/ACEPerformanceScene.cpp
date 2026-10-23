@@ -7,6 +7,7 @@
 #include "ACERenderAudit.h"
 #include "ACEFrameDiagnostics.h"
 #include "ACETerrainPresenterComponent.h"
+#include "Dat/ACEEnvCellMeshBuilder.h"
 #include "ACELandblockActor.h"
 #include "ACEWorldEntityActor.h"
 #include "ACEScriptComponent.h"
@@ -74,7 +75,7 @@ public:
    return;
   }
   const FString Scene=Args.Num()?Args[0]:TEXT("outdoor");
-  if(Scene!=TEXT("outdoor") && Scene!=TEXT("indoor") && Scene!=TEXT("effects") && Scene!=TEXT("caul") && Scene!=TEXT("swarm") && Scene!=TEXT("wasps") && Scene!=TEXT("frozen") && Scene!=TEXT("frozen-tuskers") && Scene!=TEXT("glenden"))return;
+  if(Scene!=TEXT("outdoor") && Scene!=TEXT("indoor") && Scene!=TEXT("effects") && Scene!=TEXT("caul") && Scene!=TEXT("swarm") && Scene!=TEXT("wasps") && Scene!=TEXT("frozen") && Scene!=TEXT("frozen-tuskers") && Scene!=TEXT("glenden") && Scene!=TEXT("facility"))return;
   UE_LOG(LogTemp,Display,TEXT("ACE PerfScene preparing %s"),*Scene);
   // The login path intentionally defers cell DAT indexing. This offline setup
   // phase is outside the timed sample and needs both databases immediately.
@@ -108,6 +109,30 @@ public:
   {
    // Authored Glenden Wood Dungeon drop, from ACViewer Locations.txt.
    Spawn.CellId=0x01E3033D;Spawn.Location=FVector(161,-150,0);
+   if(FParse::Param(FCommandLine::Get(),TEXT("ACEPerfGlendenHall"))
+    || FParse::Param(FCommandLine::Get(),TEXT("ACEPerfGlendenFlash")))
+   {
+    // Corridor in the reported video (approximately 79.40N, 100.73W).
+    // Resolve its real DAT volume rather than retaining the entrance cell.
+    const auto Info=Dat->GetLandblockInfo(0x01E30000);
+    if(!Info.IsValid())return;
+    for(uint32 I=0;I<Info->NumCells;++I)Dat->GetOrBuildEnvCellMesh(0x01E30100+I,100);
+    Spawn.Location=FVector(100,-60,.005);
+    // v122 flashing.mp4: stationary camera orbit at 79.60N, 100.74W.
+    if(FParse::Param(FCommandLine::Get(),TEXT("ACEPerfGlendenFlash")))Spawn.Location=FVector(98.4,-12,.005);
+    uint32 Cell=0;
+    for(uint32 I=0;I<Info->NumCells && !Cell;++I)
+     if(Dat->IsPointInsideEnvCell(0x01E30100+I,Spawn.ToUnrealLocation(100)+FVector(0,0,100),100))Cell=0x01E30100+I;
+    if(!Cell)
+    {UE_LOG(LogTemp,Error,TEXT("Glenden hallway fixture is outside a DAT cell"));return;}
+    Spawn.CellId=Cell;
+   }
+   if(!Dat->GetOrBuildEnvCellMesh(Spawn.CellId,100))return;
+  }
+  else if(Scene==TEXT("facility"))
+  {
+   // Facility Hub entrance, then the staircase/tiled room in the reported clip.
+   Spawn.CellId=0x8A020212;Spawn.Location=FVector(60,-90,6.005);
    if(!Dat->GetOrBuildEnvCellMesh(Spawn.CellId,100))return;
   }
   else if(Scene==TEXT("indoor"))
@@ -150,9 +175,10 @@ public:
   Client->OnEnteredWorld.Broadcast(Self.Guid,Spawn);
   // A static camera benchmark has no walking input. Keep the reported cell
   // while the asynchronous dungeon loads instead of predicting a fall in it.
-  if(Scene==TEXT("wasps") || Scene==TEXT("glenden"))PC->bSyncPossessedPawn=false;
-  int32 Count=Scene==TEXT("frozen")?0:Scene==TEXT("frozen-tuskers")?12:Scene==TEXT("swarm")?64:(Scene==TEXT("indoor") || Scene==TEXT("glenden"))?8:32;
-  if(Scene==TEXT("wasps"))
+  if(Scene==TEXT("wasps") || Scene==TEXT("glenden") || Scene==TEXT("facility"))PC->bSyncPossessedPawn=false;
+  int32 Count=(Scene==TEXT("frozen") || Scene==TEXT("facility"))?0:Scene==TEXT("frozen-tuskers")?12:Scene==TEXT("swarm")?64:(Scene==TEXT("indoor") || Scene==TEXT("glenden"))?8:32;
+  Run->bCrowdMotion=FParse::Param(FCommandLine::Get(),TEXT("ACEPerfCrowdMotion"));
+  if(Scene==TEXT("wasps") || (Scene==TEXT("glenden") && Run->bCrowdMotion))
   {
    FParse::Value(FCommandLine::Get(),TEXT("ACEPerfWaspCount="),Count);Count=FMath::Clamp(Count,1,128);
    FParse::Value(FCommandLine::Get(),TEXT("ACEPerfVolleyInterval="),Run->VolleyInterval);
@@ -176,7 +202,7 @@ public:
     ACECreatureFixtures::Apply(NPC,I);
     NPC.Position.Location=Spawn.Location+FVector((I%8-3.5)*.45,(I/8-3.5)*.45,0);
    }
-   if(Scene==TEXT("wasps"))
+   if(Scene==TEXT("wasps") || (Scene==TEXT("glenden") && Run->bCrowdMotion))
    {
     ACECreatureFixtures::Apply(NPC,2);NPC.SoundTableId=0x2000000E;NPC.PhysicsEffectTableId=0x34000022;
     // WCID 7105: clothing 10000564, White (61), shade .5.
@@ -195,7 +221,7 @@ public:
    Session->WorldObjects.Add(NPC.Guid,NPC);Client->OnObjectCreated.Broadcast(NPC);
    if(Scene==TEXT("frozen-tuskers"))Run->SnowCreatures.Add(NPC);
   }
-  if(Scene==TEXT("wasps") && FParse::Param(FCommandLine::Get(),TEXT("ACEPerfNetworkLag")))
+  if(!Run->Wasps.IsEmpty() && FParse::Param(FCommandLine::Get(),TEXT("ACEPerfNetworkLag")))
   {
    Run->LagSession=Session;Run->LagLink=MakeUnique<FACEWaspLagLink>(*Session);
    if(!Run->LagLink->Open()){UE_LOG(LogTemp,Error,TEXT("Wasp lag loopback transport failed"));return;}
@@ -229,7 +255,7 @@ public:
   // through the model and hides much of the measured scene. Keep outdoor runs
   // behind/above it, looking over the synthetic crowd. The indoor eye sits
   // just in front of the avatar, still inside the same authored room.
-  const bool Interior=Scene==TEXT("indoor") || Scene==TEXT("glenden") || Scene==TEXT("swarm") || Scene==TEXT("wasps");
+  const bool Interior=Scene==TEXT("indoor") || Scene==TEXT("glenden") || Scene==TEXT("swarm") || Scene==TEXT("wasps") || Scene==TEXT("facility");
   FVector Eye=Interior ? Center+Forward*100+FVector(0,0,170)
    : Center-Forward*900+FVector(0,0,600);
   const FVector LookAt=Center+Forward*800+FVector(0,0,100);
@@ -253,7 +279,7 @@ public:
   Run->StartTime=FPlatformTime::Seconds();
   FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([Run](float){return Run->Tick();}));
   UE_LOG(LogTemp,Display,TEXT("ACE PerfScene %s: %d synthetic NPCs, 45-second warmup, %.0f-second sample."),*Scene,Count,
-   Scene==TEXT("wasps")?(Run->CastingSeconds>0?Run->CastingSeconds:60.f):30.f);
+   Run->CastingSeconds>0?Run->CastingSeconds:Run->Wasps.IsEmpty()?30.f:60.f);
  }
 private:
  TWeakObjectPtr<UWorld> World;
@@ -265,6 +291,8 @@ private:
  double StartTime=0;
  double LastEffectTime=0;
  bool bSampling=false, bWarmupCapture=false, bControlledView=false;
+ double LastFlashCapture=0;
+ int32 FlashCapture=0;
  double SampleStartTime=0;
  uint64 PreviousFrame=uint64(-1);
  TArray<double> Frames;
@@ -284,6 +312,8 @@ private:
  bool bCombatChat=false,bConfigPanel=false,bPanelOpened=false;
  double LastChat=0;
  bool bPlayerMotion=false,bMotionStarted=false,bWasAirborne=false;
+ bool bCrowdMotion=false;
+ double LastCrowdMotion=0;
  FVector PlayerOrigin=FVector::ZeroVector,PreviousPlayerPosition=FVector::ZeroVector;
  TSet<FKey> HeldKeys;
  int32 JumpCount=0,AirborneFrames=0,MovementFrames=0,MotionTarget=0,VolleyCount=0;
@@ -388,6 +418,16 @@ private:
  void TickWasps(double Now,double Elapsed)
  {
   if(Wasps.IsEmpty())return;
+  if(bCrowdMotion && Elapsed>15 && Now-LastCrowdMotion>=1)
+  {
+   LastCrowdMotion=Now;
+   FACEObjectMotionState Approach;
+   Approach.CurrentStyle=ACEMotion::StanceNonCombat;Approach.MovementType=6;
+   Approach.MoveToTargetGuid=0x7100F000;Approach.MoveToSpeed=1;
+   Approach.MoveToRunRate=1;Approach.MoveToFlags=0x65;
+   for(TActorIterator<AACEWorldEntityActor> It(World.Get());It;++It)
+    if(It->ACEGuid>0x7100F000 && It->ACEGuid<=0x7100F000+Wasps.Num())It->ApplyMotionState(Approach);
+  }
   // Warm shaders/meshes first, then compare idle, casts, stopped casts and death
   // in the same process. Movement is opt-in; no network traffic is sent.
   const int32 Phase=CastingSeconds>0 ? (Elapsed>20?1:0)
@@ -469,6 +509,52 @@ private:
  // This mode is opt-in and applies only to the disconnected swarm fixture.
  int32 CrowdMode=-1;
  TArray<double> CrowdFrames[6];
+ double LastFacilityReport=0;
+ TArray<double> FacilityFirstPassFrames;
+ bool bFacilityFirstPassReported=false;
+ void TickFacility(double Elapsed,double Ms)
+ {
+  if(Scene!=TEXT("facility"))return;
+  auto* GI=World->GetGameInstance();auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
+  auto* Client=GI->GetSubsystem<UACEClientSubsystem>();auto Session=Client->GetSession();
+  // Start walking immediately after entry instead of warming every room first.
+  const double Phase=FMath::Fmod(FMath::Max(0.,Elapsed-1),18.);
+  if(Elapsed>=1 && Elapsed<19)FacilityFirstPassFrames.Add(Ms);
+  if(Elapsed>=19 && !bFacilityFirstPassReported && !FacilityFirstPassFrames.IsEmpty())
+  {
+   bFacilityFirstPassReported=true;FacilityFirstPassFrames.Sort();double Total=0;int32 Slow=0;
+   for(double Frame:FacilityFirstPassFrames){Total+=Frame;Slow+=Frame>=50;}
+   const int32 N=FacilityFirstPassFrames.Num();
+   UE_LOG(LogTemp,Display,TEXT("Facility first pass: frames=%d mean=%.3f ms p99=%.3f ms max=%.3f ms frames_over_50ms=%d"),
+    N,Total/N,FacilityFirstPassFrames[FMath::Clamp(FMath::CeilToInt(N*.99)-1,0,N-1)],FacilityFirstPassFrames.Last(),Slow);
+  }
+  // Isolate room streaming/rendering with a deterministic eye/occupancy replay;
+  // this fixture does not claim to test keyboard movement or collision.
+  const double Travel=Phase<6?Phase/6:Phase<10?1:Phase<16?(16-Phase)/6:0;
+  FACEPosition Position=Session->PlayerPosition;Position.Location=FVector(60,-90+32*Travel,6.005);
+  Position.Location.Z=.005+6*FMath::Clamp((-65-Position.Location.Y)/10.,0.,1.);
+  const FVector Probe=Position.ToUnrealLocation(100)+FVector(0,0,100);
+  if(!Dat->IsPointInsideEnvCell(Position.CellId,Probe,100))
+  {
+   const auto Info=Dat->GetLandblockInfo(0x8A020000);
+   if(Info)for(uint32 I=0;I<Info->NumCells;++I)
+   {
+    const uint32 Id=0x8A020100+I;
+    if(Dat->FindEnvCellMesh(Id,100)&&Dat->IsPointInsideEnvCell(Id,Probe,100)){Position.CellId=Id;break;}
+   }
+  }
+  Session->PlayerPosition=Position;Client->OnPositionUpdate.Broadcast(Session->PlayerGuid,Position);
+  const double Yaw=Phase>=6&&Phase<10?(Phase-6)*90:Phase>=10&&Phase<16?180:0;
+  const FVector Forward=FACEPosition::AceVectorToUnreal(FRotator(0,Yaw,0).RotateVector(FVector(0,1,0)),1);
+  Camera->SetActorLocation(Position.ToUnrealLocation(100)-Forward*250+FVector(0,0,190));
+  Camera->SetActorRotation(Forward.Rotation());
+  if(Elapsed>=1 && Ms>35 && Elapsed-LastFacilityReport>.25)
+  {
+   LastFacilityReport=Elapsed;
+   UE_LOG(LogTemp,Display,TEXT("Facility replay slow frame t=%.2f phase=%.2f pos=%s"),Elapsed,Phase,*Position.Location.ToString());
+   for(const auto& Line:ACEFrameDiagnostics::Describe(World.Get(),Ms))UE_LOG(LogTemp,Display,TEXT("Facility replay: %s"),*Line);
+  }
+ }
  bool Tick()
  {
   if(!World.IsValid() || !Camera.IsValid())return false;
@@ -484,12 +570,27 @@ private:
   TickWasps(Now,Elapsed);
   TickPlayerMotion(Elapsed,Ms);
   TickLagTraffic(Now,Elapsed);
+  TickFacility(Elapsed,Ms);
   if(FParse::Param(FCommandLine::Get(),TEXT("ACEPerfCameraMotion")))
    Camera->SetActorLocation(CameraOrigin+FVector(8*FMath::Sin(Elapsed),8*FMath::Cos(Elapsed),2*FMath::Sin(2*Elapsed)));
   if(Scene==TEXT("glenden"))
   {
    Camera->SetActorLocation(CameraOrigin+FVector(80*FMath::Sin(Elapsed*.4),80*FMath::Cos(Elapsed*.4),20*FMath::Sin(Elapsed)));
    Camera->SetActorRotation(FRotator(15*FMath::Sin(Elapsed*.5),Elapsed*30,0));
+   if(FParse::Param(FCommandLine::Get(),TEXT("ACEPerfGlendenFlash")))
+   {
+    // Use a fixed eye to isolate changing portal admission from player collision.
+    Camera->SetActorLocation(CameraOrigin);
+    Camera->SetActorRotation(FRotator(-10,Elapsed*30,0));
+    if(Elapsed>20 && Elapsed<32 && Now-LastFlashCapture>.1
+     && !FParse::Param(FCommandLine::Get(),TEXT("ACEPerfNoCapture")))
+    {
+     LastFlashCapture=Now;
+     const FString CapturePath=FPaths::ProjectSavedDir()/TEXT("Performance/glenden/flash");
+     IFileManager::Get().MakeDirectory(*CapturePath,true);
+     FScreenshotRequest::RequestScreenshot(CapturePath/FString::Printf(TEXT("%04d.png"),FlashCapture++),false,false);
+    }
+   }
   }
   auto* PC=World->GetFirstPlayerController();
   if(auto* Controller=Cast<AACEPlayerController>(PC);Elapsed>15 && Controller && Controller->DatGameplayBinder)
@@ -647,7 +748,7 @@ private:
  }
 };
 static FAutoConsoleCommandWithWorldAndArgs GACEPerfScene(TEXT("ace.PerfScene"),
- TEXT("Disconnected development benchmark: outdoor, indoor, glenden (dungeon camera sweep), effects, caul, swarm, wasps (idle/cast/stop/death), frozen or frozen-tuskers (spawn/death/corpse cycles). Writes Saved/Performance after 75 seconds (wasps: 105). -ACEPerfCleanView hides HUD; -ACEPerfResolution=WxH overrides 1920x1080. Wasps: -ACEPerfPlayerMotion exercises keyboard movement/jumps, -ACEPerfWaspCount=32 (1-128), -ACEPerfVolleyInterval=3 (.5-3 seconds), -ACEPerfVolleyWasps limits each staggered volley, -ACEPerfCastingSeconds runs sustained casts instead of phases. -ACEPerfCombatChat floods combat messages; -ACEPerfConfigPanel opens Options."),
+ TEXT("Disconnected development benchmark: outdoor, indoor, glenden (dungeon camera sweep), facility (Hub stairs/room replay), effects, caul, swarm, wasps (idle/cast/stop/death), frozen or frozen-tuskers (spawn/death/corpse cycles). Writes Saved/Performance after 75 seconds (wasps: 105). -ACEPerfCleanView hides HUD; -ACEPerfResolution=WxH overrides 1920x1080. Wasps: -ACEPerfPlayerMotion exercises keyboard movement/jumps, -ACEPerfWaspCount=32 (1-128), -ACEPerfVolleyInterval=3 (.5-3 seconds), -ACEPerfVolleyWasps limits each staggered volley, -ACEPerfCastingSeconds runs sustained casts instead of phases. -ACEPerfCombatChat floods combat messages; -ACEPerfConfigPanel opens Options."),
  FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&FACEPerformanceScene::Start));
 #endif
 

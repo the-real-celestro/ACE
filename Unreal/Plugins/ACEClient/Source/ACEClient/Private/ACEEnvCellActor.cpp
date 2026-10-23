@@ -1,4 +1,5 @@
 #include "ACEEnvCellActor.h"
+#include "ACERuntimeOptions.h"
 #include "Components/PointLightComponent.h"
 #include "Components/SpotLightComponent.h"
 #include "ACEDatSubsystem.h"
@@ -25,6 +26,23 @@ namespace
 	uint64 GEnvStabBudgetFrame = MAX_uint64;
 	double GEnvStabBudgetUsedSec = 0.0;
 	constexpr double GEnvStabGlobalBudgetSec = 0.002;
+	TMap<TWeakObjectPtr<UWorld>, TMap<int32, TWeakObjectPtr<AACEEnvCellActor>>> GEnvCollisionCells;
+	void UnregisterCollisionCell(AACEEnvCellActor* Actor)
+	{
+		const TWeakObjectPtr<UWorld> World(Actor->GetWorld());
+		if (auto* Cells = GEnvCollisionCells.Find(World))
+		{
+			if (Cells->FindRef(Actor->EnvCellId).Get() == Actor) Cells->Remove(Actor->EnvCellId);
+			if (Cells->IsEmpty()) GEnvCollisionCells.Remove(World);
+		}
+	}
+}
+
+bool AACEEnvCellActor::HasActiveCollision(UWorld* World, int32 CellId)
+{
+	const auto* Cells = GEnvCollisionCells.Find(World);
+	const auto* Actor = Cells ? Cells->FindRef(CellId).Get() : nullptr;
+	return Actor && !Actor->IsActorBeingDestroyed() && Actor->bAppliedCollisionActive && Actor->bCollisionCooked;
 }
 
 AACEEnvCellActor::AACEEnvCellActor()
@@ -37,6 +55,10 @@ AACEEnvCellActor::AACEEnvCellActor()
 
 	CellMesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("CellMesh"));
 	CellMesh->bPreferCachedDraws = true;
+	// PView already selects room shells from this frame's eye and portal apertures.
+	// Reusing a previous GPU occlusion result can hide a newly admitted room for
+	// a frame, exposing the sky through its doorway while the camera turns.
+	CellMesh->bDisableOcclusionQueries = true;
 	CellMesh->SetupAttachment(Root);
 	CellMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	CellMesh->SetCastShadow(false);
@@ -226,15 +248,18 @@ void AACEEnvCellActor::SetEnvCellHiddenInGame(bool bHide)
 
 void AACEEnvCellActor::SetSunCastShadow(bool bCast)
 {
+	bRequestedSunCastShadow = bCast;
 	if (!CellMesh)
 	{
 		return;
 	}
 	// The room also occludes its local entrance light when PView hides its draw.
-	bCast = bCast || !DoorwayLights.IsEmpty();
-	CellMesh->bCastHiddenShadow = !DoorwayLights.IsEmpty();
-	if (static_cast<bool>(CellMesh->CastShadow) != bCast || CellMesh->bCastDynamicShadow != bCast)
+	const bool bDoorwayShadows = ACERuntimeOptions::DynamicLightingQuality() == 2 && !DoorwayLights.IsEmpty();
+	bCast = bCast || bDoorwayShadows;
+	if (static_cast<bool>(CellMesh->CastShadow) != bCast || CellMesh->bCastDynamicShadow != bCast
+		|| CellMesh->bCastHiddenShadow != bDoorwayShadows)
 	{
+		CellMesh->bCastHiddenShadow = bDoorwayShadows;
 		CellMesh->SetCastShadow(bCast);
 		CellMesh->bCastDynamicShadow = bCast;
 		CellMesh->bCastShadowAsTwoSided = bCast;
@@ -243,6 +268,13 @@ void AACEEnvCellActor::SetSunCastShadow(bool bCast)
 		CellMesh->bCastContactShadow = false;
 		CellMesh->MarkRenderStateDirty();
 	}
+}
+
+void AACEEnvCellActor::RefreshLightingOptions()
+{
+	for (UPointLightComponent* Light : DoorwayLights)
+		if (IsValid(Light)) Light->SetVisibility(ACERuntimeOptions::DynamicLightingQuality() == 2);
+	SetSunCastShadow(bRequestedSunCastShadow);
 }
 
 void AACEEnvCellActor::SetLookInDepthBias(float DepthBiasCm)
@@ -502,6 +534,7 @@ void AACEEnvCellActor::EnsureStaticObjectsQueued()
 // Retail releases these objects with their owning cell/landblock.
 void AACEEnvCellActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+    UnregisterCollisionCell(this);
     ClearDoorwayLights();
     ClearStaticObjects();
     Super::EndPlay(EndPlayReason);
@@ -509,6 +542,7 @@ void AACEEnvCellActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 void AACEEnvCellActor::Destroyed()
 {
+    UnregisterCollisionCell(this);
     ClearDoorwayLights();
     ClearStaticObjects();
     Super::Destroyed();
@@ -764,7 +798,15 @@ void AACEEnvCellActor::QueueStaticObjects(const TArray<FACEDatStab>& StaticObjec
 
 bool AACEEnvCellActor::LoadEnvCell(int32 InEnvCellId, const FVector& LandblockOrigin, float InWorldScale)
 {
+	UnregisterCollisionCell(this);
 	EnvCellId = InEnvCellId;
+	if (!GEnvCollisionCells.Contains(GetWorld()))
+	{
+		// Editor/test worlds can be collected without ever entering BeginPlay.
+		for (auto It = GEnvCollisionCells.CreateIterator(); It; ++It)
+			if (!It.Key().IsValid()) It.RemoveCurrent();
+	}
+	GEnvCollisionCells.FindOrAdd(GetWorld()).Add(EnvCellId, this);
 	WorldScale = InWorldScale;
 	SetLookInDepthBias(0.f);
 
@@ -1024,6 +1066,7 @@ bool AACEEnvCellActor::LoadEnvCell(int32 InEnvCellId, const FVector& LandblockOr
 		Light->SetLightingChannels(true, true, false);
 		Light->MaxDrawDistance = 4000.f;
 		Light->MaxDistanceFadeRange = 2000.f;
+		Light->SetVisibility(ACERuntimeOptions::DynamicLightingQuality() == 2);
 		DoorwayLightActor->AddInstanceComponent(Light);
 		Light->RegisterComponent();
 		DoorwayLights.Add(Light);

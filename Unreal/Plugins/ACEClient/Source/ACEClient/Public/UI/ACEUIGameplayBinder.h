@@ -62,6 +62,8 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 {
 	GENERATED_BODY()
 	friend class FACERetailScreenTest;
+	friend class FACEPortalInterfaceTest;
+	friend struct FACERetailAugmentationUIFixture;
 	friend class FACEDungeonInterfacesTest;
 	friend class FACEDesktopHighlightTest;
 	friend class FACEPvPCombatParityTest;
@@ -74,6 +76,8 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 	friend class FACEVRChatTest;
 	friend class AACEPlayerController;
 	friend class FACEChatParityTest;
+	friend struct FACEChatUIFixture;
+	friend class FACEPluginPublicAPITest;
 	friend class FACEEmoteTest;
 	friend class FACEUILayoutCommandsTest;
 	friend class FACEUIInteractionParityTest;
@@ -87,6 +91,7 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 	friend class FACEBarberTest;
 	friend class FACEItemPresentationTest;
 	friend class FACESelectionToolbarTest;
+    friend class FACEActionDeckTest;
 
 public:
     /** Shared attack mark used by desktop controls, VR and plugin commands. */
@@ -103,7 +108,9 @@ public:
 	void SetCombatSpellBar(int32 Tab);
 
 	/** Called each canvas tick after layout sync. */
-	void TickRefresh();
+	void TickRefresh(bool bRefreshDesktopHUD = true);
+	/** Presentation only; native VR HUDs do not consume these desktop overlays. */
+	void RefreshDesktopHUD();
 	bool InspectSpellAt(FVector2D CanvasPoint);
 
 	UFUNCTION()
@@ -131,6 +138,8 @@ private:
 public:
 	void ToggleKeyboardMappingUI();
 	void PollKeyboardActions(APlayerController* PC);
+	/** Panel and window shortcuts which remain available during portal transitions. */
+	void PollInterfaceKeyboardActions(APlayerController* PC);
 	void HandleKeymapImport(const FString& Path);
 	bool ScrollKeyboard(float WheelDelta, FVector2D CanvasLocalPos);
 	void ToggleCombatModeHotkey();
@@ -227,6 +236,9 @@ public:
 
 	/** Number-key hotbar: cast when magic combat is up, else use shortcut slot. */
 	void ActivateHotbarSlot(int32 SlotIndex);
+    /** Manual deck actions use the same equip/target/charge paths as native UI. */
+    void UseActionDeckItem(int32 Guid) { CancelPendingUseWith(); UseInventoryItem(Guid); }
+    void RequestActionDeckAttack(uint32 Height) { BeginCombatPowerCharge(Height, false); }
 
 	/**
 	 * If a dual-use source is armed (key/tool targeting), complete UseWithTarget on TargetGuid.
@@ -349,6 +361,8 @@ private:
 
 	FString ActivePanelPage;
 	int32 CombatMode = 1; // ACECombatMode::NonCombat
+	bool bActionDeckCombatBarHidden = false;
+	void RefreshNativeCombatBarVisibility();
 	int32 SelectedPackGuid = 0;
 	int32 InventoryScrollOffset = 0;
 	TWeakPtr<FACEUIElement> ScrollDragBar;
@@ -391,6 +405,9 @@ private:
 	 */
 	int32 ChatSendChannel = 0;
 	bool bChatTargetPopupOpen = false;
+	bool bMainChatExpanded = false;
+	int32 MainChatRestoreY = 0, MainChatRestoreHeight = 0;
+	void ToggleMainChatExpanded();
 	FString LastOutgoingTellName;
 	FString LastOutgoingTellLineKey;
 	double LastOutgoingTellLineTime = 0.0;
@@ -464,6 +481,7 @@ private:
 	/** Last GetScrollOffsetOfEnd while sticking — re-snap when wrap grows content. */
 	float ChatStickEndOffset = -1.f;
 	bool bFloatyChatStickToBottom[4] = { true, true, true, true };
+	bool bChatUnread[5] = {};
 	int32 ScrollDragChatWindow = 0;
 	void RefreshChatRowLayout(int32 Window);
 	float ChatRowWidths[5] = {};
@@ -889,6 +907,7 @@ private:
 	void MoveInventoryAmount(int32 Guid, int32 Container, int32 Placement, int32 Amount);
 	bool MergeInventoryAmount(int32 Guid, int32 TargetGuid, int32 Amount);
 	bool TryDropInExternalContainer(int32 Guid, int32 Amount, FVector2D Absolute);
+	int32 ResolveInventoryDropPlacement(int32 Guid, int32 Amount, int32 Container, int32 TargetGuid) const;
 	/** Dual-use: source item waiting for a target click (GameAction UseWithTarget). */
 	int32 PendingUseWithSourceGuid = 0;
 	TSet<int32> KeyboardOpenedCorpses;
@@ -929,6 +948,8 @@ private:
 	TObjectPtr<UTextBlock> VendorFilterText;
 	UPROPERTY()
 	TArray<TObjectPtr<UTextBlock>> VendorFilterDropdownLabels;
+	UPROPERTY()
+	TArray<TObjectPtr<UBorder>> VendorFilterDropdownRows;
 	UPROPERTY()
 	TArray<TObjectPtr<UTextBlock>> VendorTabLabels;
 	UPROPERTY()
@@ -1368,7 +1389,7 @@ private:
 	const TCHAR* GetStatSelectionFooter() const;
 	void SyncChatScrollbar(int32 Window = 0);
 	/** Show/hide + place ChatLogNewNonVisibleTextIndicator; jump-to-bottom on click. */
-	void SyncChatJumpIndicator();
+	void SyncChatJumpIndicator(int32 Window = 0);
 	/** Parse @/ slash commands (@ls, @tell, @e, …). Returns true if handled (do not Talk). */
 	bool TryDispatchMiscCommand(const FString& Cmd, const FString& Args);
 	bool TryDispatchUILayoutCommand(const FString& Cmd, const FString& Args);
@@ -1544,6 +1565,7 @@ private:
 	/** Derethian calendar string from raw PortalYearTicks (hour phased via SkyDesc). */
 	FString FormatDerethDateTime(double GameTicks) const;
 	void EnsureSocialEntryBoxes();
+	int32 GetExternalContainerItemCapacity() const;
 	void SyncExternalContainerScrollbars();
 	void RefreshAttributeOverlays();
 	void RefreshSkillOverlays();
@@ -1650,7 +1672,7 @@ private:
 	void ExpandCombatFloatyForWideContent();
 	void ExpandEnvFloatyForWideContent();
 	bool HitTestInventorySlot(FVector2D Absolute, int32& OutGuid, int32& OutSlotIndex) const;
-	bool HitTestPackSlot(FVector2D Absolute, int32& OutPackGuid) const;
+	bool HitTestPackSlot(FVector2D Absolute, int32& OutPackGuid, bool IncludeEmpty = false) const;
 	bool HitTestDollSlot(FVector2D Absolute, FString& OutSlotName, int64& OutMask) const;
 	void PostInventorySystemMessage(const FString& Text);
 	/** Show the retail-style yellow center-top transient banner. */

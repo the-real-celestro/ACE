@@ -6,7 +6,9 @@
 #include "ACESkyDomeActor.h"
 #include "ACELandblockActor.h"
 #include "ACETerrainChunkActor.h"
+#include "ACEEnvCellActor.h"
 #include "ProceduralMeshComponent.h"
+#include "PrimitiveSceneProxy.h"
 #include "Components/SceneCaptureComponent2D.h"
 #include "Components/DirectionalLightComponent.h"
 #include "Engine/DirectionalLight.h"
@@ -22,6 +24,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "ImageUtils.h"
+#include "Scalability.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACECachedWorldDrawTest, "ACE.Rendering.CachedWorldDraws",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
@@ -108,6 +111,29 @@ bool FACECachedWorldDrawTest::RunTest(const FString&)
         Mesh->UpdateMeshSection(0, Smaller, {}, {}, {}, {}); Compare(TEXT("Vertex edit"), true);
         Mesh->ClearMeshSection(0); Compare(TEXT("Cleared"), false);
     }
+    // Portal admission must take effect immediately: old hardware occlusion
+    // results cannot suppress a room after PView exposes its doorway. Verify
+    // both render paths and that explicit portal hiding still removes pixels.
+    for (bool UseCache : {false, true})
+    {
+        auto* Room = World->SpawnActor<AACEEnvCellActor>();
+        auto* RoomMesh = Room->CellMesh.Get();
+        RoomMesh->bPreferCachedDraws = UseCache;
+        RoomMesh->SetMaterial(0, Material);
+        RoomMesh->CreateMeshSection(0, Vertices, {0,2,1,0,3,2,0,1,2,0,2,3}, {}, {}, {}, {}, false);
+        Capture->ShowOnlyComponents.Reset(); Capture->ShowOnlyComponents.Add(RoomMesh);
+        const auto VisiblePixels = Render();
+        if (TestNotNull(TEXT("Room has a render proxy"), RoomMesh->SceneProxy))
+            TestFalse(TEXT("Portal room cannot reuse stale GPU occlusion"), RoomMesh->SceneProxy->CanBeOccluded());
+        int32 Lit = 0; for (const auto& Pixel : VisiblePixels) Lit += FMath::Max3(Pixel.R,Pixel.G,Pixel.B)>20;
+        TestTrue(TEXT("Admitted room draws its wall"), Lit>100);
+        RoomMesh->SetMeshDrawVisible(false);
+        Lit = 0; for (const auto& Pixel : Render()) Lit += FMath::Max3(Pixel.R,Pixel.G,Pixel.B)>20;
+        TestEqual(TEXT("PView can still hide the room"), Lit, 0);
+        RoomMesh->SetMeshDrawVisible(true);
+        TestTrue(TEXT("Readmitted room restores its wall"), Render()==VisiblePixels);
+        Capture->ShowOnlyComponents.Reset(); Room->Destroy();
+    }
     // Hiding only terrain must preserve the uploaded building/furniture meshes
     // attached to that root, and leave their independently controlled draw visible.
     for(bool Chunk:{false,true})
@@ -142,13 +168,14 @@ bool FACECachedWorldDrawTest::RunTest(const FString&)
         Render();
         auto* TerrainProxy=TerrainMesh->SceneProxy;
         TestNotNull(TEXT("Terrain geometry has a resident render proxy"),TerrainProxy);
+        if (TerrainProxy) TestTrue(TEXT("Outdoor terrain retains hardware occlusion"), TerrainProxy->CanBeOccluded());
         for(bool Priority:{true,false,true,false})
         {
             if(Chunk)TerrainChunk->SetLandEnvCellFloorPriority(Priority,Dat,true);
             else Land->SetLandEnvCellFloorPriority(Priority,Dat,true);
             TestFalse(TEXT("Doorway depth priority does not rebuild terrain buffers"),TerrainMesh->IsRenderStateDirty());
             TestEqual(TEXT("Doorway retains the authored floor-depth adjustment"),
-                TerrainMaterial->K2_GetScalarParameterValue(TEXT("LandDepthBias")),Priority?.25f:0.f);
+                TerrainMaterial->K2_GetScalarParameterValue(TEXT("LandDepthBias")),Priority?.5f:0.f);
             const auto RetainedPixels=Render();
             TestTrue(TEXT("Crossing retains the terrain render proxy"),TerrainMesh->SceneProxy==TerrainProxy);
             // Compare with the former rebuild path: retaining buffers must not
@@ -167,6 +194,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEMobileShadowTest, "ACE.Rendering.MobileShad
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACEMobileShadowTest::RunTest(const FString&)
 {
+    const auto PreviousQuality=Scalability::GetQualityLevels();
+    auto Quality=PreviousQuality; Quality.ShadowQuality=3; Scalability::SetQualityLevels(Quality);
+    IConsoleManager::Get().CallAllConsoleVariableSinks();
+    ON_SCOPE_EXIT { Scalability::SetQualityLevels(PreviousQuality); IConsoleManager::Get().CallAllConsoleVariableSinks(); };
     const auto Values = UWorld::InitializationValues().AllowAudioPlayback(false)
         .RequiresHitProxies(false).CreatePhysicsScene(false).CreateNavigation(false).CreateAISystem(false);
     auto* World = UWorld::CreateWorld(EWorldType::Game,false,NAME_None,nullptr,true,ERHIFeatureLevel::Num,&Values);
@@ -267,6 +298,21 @@ bool FACEMobileShadowTest::RunTest(const FString&)
     for (int32 I=0;I<With.Num();++I) Darkened+=int32(Without[I].R)-With[I].R>12;
     AddInfo(FString::Printf(TEXT("Feature level %d: human shadow darkens %d receiver pixels"),int32(World->GetFeatureLevel()),Darkened));
     TestTrue(TEXT("Runtime cascades cast a human shadow at AC world coordinates"),Darkened>80);
+    Player->Appearance->SetPartsCastShadow(true,false);
+    Quality.ShadowQuality=0; Scalability::SetQualityLevels(Quality);
+    IConsoleManager::Get().CallAllConsoleVariableSinks(); Sky->UpdateWorldLighting(Key,Key,0,.5f);
+    const auto SettingsOff=Render(TEXT("Shadow-Settings-Off.png"));
+    int32 RemainingShadow=0;
+    for(int32 I=0;I<Without.Num();++I) RemainingShadow+=int32(Without[I].R)-SettingsOff[I].R>12;
+    TestTrue(TEXT("Video Shadows Off removes rendered shadows while preserving the scene"),RemainingShadow<10);
+    Quality.ShadowQuality=3; Scalability::SetQualityLevels(Quality);
+    // ApplyNonResolutionSettings runs these sinks in gameplay. They rebuild
+    // cached mesh passes that were created while shadow quality was zero.
+    IConsoleManager::Get().CallAllConsoleVariableSinks(); Sky->UpdateWorldLighting(Key,Key,0,.5f);
+    const auto SettingsRestored=Render(TEXT("Shadow-Settings-Restored.png"));
+    int32 RestoredShadow=0;
+    for(int32 I=0;I<Without.Num();++I) RestoredShadow+=int32(Without[I].R)-SettingsRestored[I].R>12;
+    TestTrue(TEXT("Video shadow quality restores real shadows without reloading the world"),RestoredShadow>80);
     // The first-person player hides body parts from the owner, but their actual
     // geometry must still cast shadows. HiddenInGame exercises the same hidden
     // shadow path without making this off-screen capture a player view.

@@ -1,4 +1,6 @@
 #include "UI/ACEUIGameplayBinder.h"
+#include "Mods/ACEPluginSubsystem.h"
+#include "Mods/ACEActionDeckSubsystem.h"
 #include "UI/ACERetailVendorCategories.h"
 #include "ACERetailChat.h"
 #include "ACESpellbookFilters.h"
@@ -65,6 +67,7 @@
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "Styling/CoreStyle.h"
+#include "Brushes/SlateRoundedBoxBrush.h"
 #include "UI/ACEUIFontStyles.h"
 #include "Dat/ACEDatTextLayout.h"
 #include "Misc/App.h"
@@ -550,6 +553,7 @@ void UACEUIGameplayBinder::Shutdown()
 	KeymapReportScroll=nullptr; KeymapReportText=nullptr; bKeymapReport=false;
 	SelectionFlashUntil=0;
 	TickSelectionFlash();
+	bActionDeckCombatBarHidden=false;
 	ACEInputBindings::Cancel();
 	for (UWidget* Row:KeyboardRows) if (Row) Row->RemoveFromParent();
 	for (UTextBlock* Label:KeyboardLabels) if (Label) Label->RemoveFromParent();
@@ -653,7 +657,19 @@ void UACEUIGameplayBinder::SetRetailTooltip(UWidget* Widget, const FText& Text)
 	UACEHoverTooltipWidget::SetWidgetTooltip(Widget, Text, UACEHoverTooltipWidget::ObjectTemplate);
 }
 
-void UACEUIGameplayBinder::TickRefresh()
+void UACEUIGameplayBinder::RefreshDesktopHUD()
+{
+	if (!bBound || !Canvas || !Manager) return;
+	Manager->BeginNameLookupPass();
+	ON_SCOPE_EXIT { if (Manager) Manager->EndNameLookupPass(); };
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshVitalsOverlays); RefreshVitalsOverlays(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshRadarOverlays); RefreshRadarOverlays(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshShortcutOverlays); RefreshShortcutOverlays(); }
+	RefreshEffectsOverlays(true);
+	RefreshEffectsOverlays(false);
+}
+
+void UACEUIGameplayBinder::TickRefresh(bool bRefreshDesktopHUD)
 {
 	if (!PendingScreenshotFilename.IsEmpty() && FPlatformTime::Seconds() - ScreenshotRequestTime > 10.0)
 		FinishGameplayScreenshot();
@@ -690,8 +706,7 @@ void UACEUIGameplayBinder::TickRefresh()
 	}
 	TickTransientInfo();
 	TickSelectionFlash();
-	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshVitalsOverlays); RefreshVitalsOverlays(); }
-	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshRadarOverlays); RefreshRadarOverlays(); }
+	RefreshNativeCombatBarVisibility();
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshSelectionOverlay); RefreshSelectionOverlay(); }
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshExaminationOverlay); RefreshExaminationOverlay(); }
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshInventoryOverlays); RefreshInventoryOverlays(); }
@@ -719,12 +734,10 @@ void UACEUIGameplayBinder::TickRefresh()
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshBookOverlays); RefreshBookOverlays(); }
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshMiniGameOverlays); RefreshMiniGameOverlays(); }
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshChatChromeOverlays); RefreshChatChromeOverlays(); }
-	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshShortcutOverlays); RefreshShortcutOverlays(); }
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshSkillTabLabels); RefreshSkillTabLabels(); }
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshPanelTitleOverlay); RefreshPanelTitleOverlay(); }
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshCombatPanelOverlays); RefreshCombatPanelOverlays(); }
-	RefreshEffectsOverlays(true);
-	RefreshEffectsOverlays(false);
+	if (bRefreshDesktopHUD) RefreshDesktopHUD();
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshVitaePanelOverlays); RefreshVitaePanelOverlays(); }
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshLinkStatusPanelOverlays); RefreshLinkStatusPanelOverlays(); }
 	TickStatusPanels(FApp::GetDeltaTime());
@@ -810,6 +823,18 @@ void UACEUIGameplayBinder::TickRefresh()
 void UACEUIGameplayBinder::OnElementActivated(TSharedPtr<FACEUIElement> Element)
 {
 	if (HandleHouseControl(Element)) return;
+	if (OpenLootContainerGuid && Element && (Element->ElementName == TEXT("ScrollBar_Left") || Element->ElementName == TEXT("ScrollBar_Right")))
+	{
+		for (auto Parent = Element->Parent.Pin(); Parent; Parent = Parent->Parent.Pin())
+		{
+			if (Parent->ElementName == TEXT("Ext_ItemListScroll"))
+			{
+				ExtItemScrollOffset += Element->ElementName == TEXT("ScrollBar_Left") ? -1 : 1;
+				RefreshExternalContainerOverlays();
+				return;
+			}
+		}
+	}
 	if(OpenSalvageToolGuid && Element && (Element->ElementName==TEXT("ScrollBar_Left") || Element->ElementName==TEXT("ScrollBar_Right")))
 		for(auto Parent=Element->Parent.Pin();Parent;Parent=Parent->Parent.Pin())
 			if(Parent->ElementName==TEXT("Salvage_ItemListScroll"))
@@ -1005,6 +1030,13 @@ void UACEUIGameplayBinder::OnElementActivated(TSharedPtr<FACEUIElement> Element)
 			for (TSharedPtr<FACEUIElement> Cur = Element; Cur.IsValid(); Cur = Cur->Parent.Pin())
 			{
 				const FString& N = Cur->ElementName;
+				if (N == TEXT("ChatLogNewNonVisibleTextIndicator"))
+				{
+					if (auto* Log=GetChatLogWidget(ChatWindow)) Log->ScrollToEnd();
+					bFloatyChatStickToBottom[ChatWindow-1]=true;
+					SyncChatJumpIndicator(ChatWindow);
+					return;
+				}
 				if (N == TEXT("SendButton"))
 				{
 					TrySendChatFromEntry(nullptr, ChatWindow);
@@ -1547,7 +1579,7 @@ bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
 	}
 	if (Name == TEXT("MaximizeButton"))
 	{
-		ToggleFloaty(TEXT("RootGameplay_FloatyMainChat_Field"));
+		ToggleMainChatExpanded();
 		return true;
 	}
 	if (Name == TEXT("Paperdoll_Slots_Checkbox"))
@@ -1574,7 +1606,7 @@ bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
 			{
 				if (!Client->SendCastSpell(BuiltInSpellId, BuiltInCasterGuid))
 				{
-					PostInventorySystemMessage(TEXT("You must select a target for that spell."));
+					PostInventorySystemMessage(Client->IsInPortalSpace() ? TEXT("You're too busy!") : TEXT("You must select a target for that spell."));
 				}
 				LastSpellClickSlot = INDEX_NONE;
 				LastSpellClickId = 0;
@@ -1881,6 +1913,12 @@ void UACEUIGameplayBinder::SetFloatyVisible(const FString& ElementName, bool bVi
 	{
 		return;
 	}
+	if (ElementName == TEXT("RootGameplay_FloatyCombatPanel_Field"))
+	{
+		auto* Deck = Client ? Client->GetGameInstance()->GetSubsystem<UACEActionDeckSubsystem>() : nullptr;
+		bActionDeckCombatBarHidden = Deck && Deck->HidesNativeBar(CombatMode);
+		bVisible &= !bActionDeckCombatBarHidden;
+	}
 	Manager->SetElementVisibleByName(ElementName, bVisible);
 	if (bVisible)
 	{
@@ -1889,6 +1927,15 @@ void UACEUIGameplayBinder::SetFloatyVisible(const FString& ElementName, bool bVi
 			Manager->BringFloatyToFront(El);
 		}
 	}
+}
+
+void UACEUIGameplayBinder::RefreshNativeCombatBarVisibility()
+{
+	if (!Client || !Manager) return;
+	auto* Deck = Client->GetGameInstance()->GetSubsystem<UACEActionDeckSubsystem>();
+	const bool Hidden = Deck && Deck->HidesNativeBar(CombatMode);
+	if (Hidden != bActionDeckCombatBarHidden)
+		SetFloatyVisible(TEXT("RootGameplay_FloatyCombatPanel_Field"), CombatMode != int32(ACECombatMode::NonCombat));
 }
 
 void UACEUIGameplayBinder::ToggleFloaty(const FString& ElementName)
@@ -2583,6 +2630,13 @@ void UACEUIGameplayBinder::ApplyCombatMode(int32 Mode)
 
 void UACEUIGameplayBinder::ApplyCombatModeInternal(int32 Mode, bool bSendToServer)
 {
+	// ClientCombatSystem::SetCombatMode rejects player requests in portal space.
+	// Server stance updates must still be applied, without optimistic UI changes.
+	if (bSendToServer && Client && Client->IsInPortalSpace())
+	{
+		Client->SendChangeCombatMode(Mode); // retail feedback, no packet
+		return;
+	}
 	if (Mode != CombatMode) CancelCombatAttack();
 	CombatMode = Mode;
 	if (bSendToServer)
@@ -2847,6 +2901,12 @@ void UACEUIGameplayBinder::RefreshCombatPanelOverlays()
 
 void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 {
+	if (Client && Client->IsInPortalSpace())
+	{
+		PendingAutoTargetLoss = 0;
+		CancelCombatAttack();
+		return;
+	}
 	if (Client && (CombatMode == int32(ACECombatMode::Melee) || CombatMode == int32(ACECombatMode::Missile)))
 	{
 		if (PendingAutoTargetLoss)
@@ -2875,6 +2935,7 @@ void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 	}
 
 	const double Now = FPlatformTime::Seconds();
+	const bool AdvancedCombat = Client && Client->IsCharacterOptionSet(0x0C);
 	if (Client && Client->GetSession())
 	{
 		const auto Session = Client->GetSession();
@@ -2901,11 +2962,11 @@ void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 				CombatPowerBuildStartTime = Now;
 				// Hold the requested mark through the swing and refill on AttackDone.
 				CombatPowerOrAccuracy = Session->IsServerAttackInProgress() && !bCombatAttackRequestPending
-					? RequestedAttackPower : 0.f;
+					? (AdvancedCombat ? LastCombatAttackPower : RequestedAttackPower) : 0.f;
 			}
 			// ClientCombatSystem::HandleAttackDone only replaces a server repeat when
 			// the desired slider power changed. Sending every second restarted melee turns.
-			if (!bCombatMovementBlocked && IsCombatPoseReady() && bCombatPowerCharging && bCombatRepeatActive && !bCombatAttackRequestPending
+			if (!AdvancedCombat && !bCombatMovementBlocked && IsCombatPoseReady() && bCombatPowerCharging && bCombatRepeatActive && !bCombatAttackRequestPending
 				&& !FMath::IsNearlyEqual(LastCombatAttackPower, RequestedAttackPower, .01f))
 			{
 				CombatPowerOrAccuracy = RequestedAttackPower;
@@ -2945,7 +3006,7 @@ void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 	CombatPowerOrAccuracy = FMath::Clamp(static_cast<float>(Now-CombatPowerBuildStartTime)
 		/ FMath::Max(.05f,T),0.f,1.f);
 	if (!bCombatAttackRequestPending && bCombatRepeatActive)
-		CombatPowerOrAccuracy = FMath::Min(CombatPowerOrAccuracy, RequestedAttackPower);
+		CombatPowerOrAccuracy = FMath::Min(CombatPowerOrAccuracy, AdvancedCombat ? LastCombatAttackPower : RequestedAttackPower);
 	if (bCombatAttackRequestPending && !bCombatAttackHeld
 		&& (!Client || !Client->GetSession() || !Client->GetSession()->IsServerAttackInProgress())
 		&& CombatPowerOrAccuracy >= ReleasedAttackPower - KINDA_SMALL_NUMBER)
@@ -2982,6 +3043,7 @@ float UACEUIGameplayBinder::GetCombatPowerChargeDuration() const
 
 void UACEUIGameplayBinder::BeginCombatPowerCharge(uint32 AttackHeight, bool bHeld)
 {
+	if (Client && Client->IsInPortalSpace()) return;
 	if (PlayerController && PlayerController->IsVRActive()) return;
 	if (CombatMode != static_cast<int32>(ACECombatMode::Melee)
 		&& CombatMode != static_cast<int32>(ACECombatMode::Missile))
@@ -3010,11 +3072,12 @@ void UACEUIGameplayBinder::ReleaseCombatPowerCharge()
 		bCombatAttackHeld = bCombatAttackRequestPending = bCombatPowerCharging = false;
 		return;
 	}
-	// ClientCombatSystem::EndAttackRequest: a quick click builds to the
-	// requested mark; holding beyond it uses the actual charged power.
+	// ClientCombatSystem::EndAttackRequest: AdvancedCombatUI uses the actual
+	// charge on release. Normal mode builds to at least the slider's mark.
 	const float Charged = FMath::Clamp(float(FPlatformTime::Seconds() - CombatPowerBuildStartTime)
 		/ GetCombatPowerChargeDuration(), 0.f, 1.f);
-	ReleasedAttackPower = FMath::Max(RequestedAttackPower, Charged);
+	ReleasedAttackPower = Client && Client->IsCharacterOptionSet(0x0C)
+		? Charged : FMath::Max(RequestedAttackPower, Charged);
 	bCombatAttackHeld = false;
 }
 
@@ -3084,12 +3147,18 @@ void UACEUIGameplayBinder::TryAutoTargetOnCombatEnter(int32 ExcludeGuid)
         || (CombatMode != int32(ACECombatMode::Melee) && CombatMode != int32(ACECombatMode::Missile))) return;
     bCombatAutoTarget = Client->IsCharacterOptionSet(0x0D);
     if (!bCombatAutoTarget) return;
+    FACEPosition PlayerPosition = Client->GetPlayerPosition();
+    PlayerController->TryGetLocallyPredictedPosition(PlayerPosition);
+    if (!PlayerPosition.IsValid()) return;
+    const FVector Origin = PlayerPosition.ToUnrealLocation(1.f);
+    const double RangeSquared = FMath::Square(ACERadarVisuals::RangeAc(uint32(PlayerPosition.CellId)));
     const auto Fellowship = Client->GetFellowship();
     auto Eligible = [&](int32 Guid)
     {
         FACEWorldObject Obj;
         return Guid && Guid != ExcludeGuid && Guid != Client->GetPlayerGuid()
             && Client->GetWorldObject(Guid,Obj) && Obj.IsSelectableWorldObject()
+            && FVector::DistSquaredXY(Obj.Position.ToUnrealLocation(1.f),Origin) <= RangeSquared
             && Client->GetSession()->IsCombatTarget(Guid)
             && !Obj.IsVendor()
             && !Obj.PetOwnerId
@@ -3098,13 +3167,16 @@ void UACEUIGameplayBinder::TryAutoTargetOnCombatEnter(int32 ExcludeGuid)
     if (Eligible(Client->GetSelectedObject().Guid)) return;
     const auto Session = Client->GetSession();
     const int32 Attacker = Session->GetLastAttackerGuid();
-    if (Eligible(Attacker) && FPlatformTime::Seconds()-Session->GetLastAttackerTimeSeconds()<15.)
+    // Retaliate on combat entry only. After a kill, choose the nearest eligible
+    // creature in radar range, even when a farther creature attacked recently.
+    if (!ExcludeGuid && Eligible(Attacker) && FPlatformTime::Seconds()-Session->GetLastAttackerTimeSeconds()<15.)
         Client->SelectObject(Attacker);
     else if (const int32 Nearest = PlayerController->FindNearbyTarget(true,0,ExcludeGuid))
         Client->SelectObject(Nearest);
 }
 bool UACEUIGameplayBinder::IsCombatPoseReady() const
 {
+	if (Client && Client->IsInPortalSpace()) return false;
 	if (CombatMode != int32(ACECombatMode::Missile)) return true;
 	const auto Session = Client ? Client->GetSession() : nullptr;
 	if (!Session) return false;
@@ -3323,7 +3395,7 @@ bool UACEUIGameplayBinder::TryBeginSpellDrag(FVector2D CanvasLocalPos)
 		{
 			if (!Client->SendCastSpell(SpellId))
 			{
-				PostInventorySystemMessage(TEXT("You must select a target for that spell."));
+				PostInventorySystemMessage(Client->IsInPortalSpace() ? TEXT("You're too busy!") : TEXT("You must select a target for that spell."));
 			}
 			LastSpellClickSlot = INDEX_NONE;
 			LastSpellClickId = 0;
@@ -3420,18 +3492,7 @@ void UACEUIGameplayBinder::UpdateSpellDrag(FVector2D CanvasLocalPos)
 	SetSpellIcon(SpellDragIcon, SpellDragId);
 	SpellDragIcon->SetBrushColor(FLinearColor(1.f, 1.f, 1.f, 0.85f));
 	SpellDragIcon->SetVisibility(ESlateVisibility::HitTestInvisible);
-	if (SpellDragIcon->GetParent() != Canvas->GetElementLayer())
-	{
-		Canvas->GetElementLayer()->AddChild(SpellDragIcon);
-	}
-	if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(SpellDragIcon->Slot))
-	{
-		Slot->SetAnchors(FAnchors(0.f, 0.f));
-		Slot->SetAutoSize(false);
-		Slot->SetPosition(CanvasLocalPos - FVector2D(16.f, 16.f));
-		Slot->SetSize(FVector2D(32.f, 32.f));
-		Canvas->SetOverlayOrder(SpellDragIcon, nullptr, 250000);
-	}
+    Canvas->ShowDragIcon(SpellDragIcon,CanvasLocalPos);
 	if (!SpellDropMarker)
 	{
 		SpellDropMarker = Canvas->WidgetTree->ConstructWidget<UBorder>();
@@ -3469,6 +3530,7 @@ bool UACEUIGameplayBinder::TryFinishSpellDrag(FVector2D CanvasLocalPos)
 	}
 	const int32 SpellId = SpellDragId;
 	const int32 SourceSlot = SpellDragSourceBarSlot;
+    const int32 SourceBar = SpellDragSourceBar;
 	const bool bWasDragging = bSpellDragActive;
 	CancelSpellDrag();
 	if (!Client || !bWasDragging)
@@ -3510,6 +3572,15 @@ bool UACEUIGameplayBinder::TryFinishSpellDrag(FVector2D CanvasLocalPos)
 	const FVector2D Absolute = Canvas
 		? Canvas->GetCachedGeometry().LocalToAbsolute(CanvasLocalPos)
 		: CanvasLocalPos;
+
+    if(auto* GI=Client->GetGameInstance())
+        if(auto* Deck=GI->GetSubsystem<UACEActionDeckSubsystem>();Deck&&Deck->DropAt(Absolute,0,SpellId))
+        {
+            // Native dragging lifts the favorite at drag start. The deck is a
+            // copy destination: restore its original slot.
+            if(SourceSlot!=INDEX_NONE)Client->SendAddSpellToBar(SpellId,SourceSlot,SourceBar);
+            RefreshSpellHotbarOverlays();return true;
+        }
 
 	int32 DestSlot = INDEX_NONE;
 	for (int32 Tab = 1; Tab <= 8; ++Tab)
@@ -3707,7 +3778,7 @@ void UACEUIGameplayBinder::ActivateHotbarSlot(int32 SlotIndex)
 			RefreshSpellHotbarOverlays();
 			if (!Client->SendCastSpell(SpellId))
 			{
-				PostInventorySystemMessage(TEXT("You must select a target for that spell."));
+				PostInventorySystemMessage(Client->IsInPortalSpace() ? TEXT("You're too busy!") : TEXT("You must select a target for that spell."));
 			}
 		}
 		return;
@@ -4457,6 +4528,7 @@ void UACEUIGameplayBinder::CancelInventoryDrag()
 	if (InvDragIcon)
 	{
 		InvDragIcon->SetVisibility(ESlateVisibility::Collapsed);
+        if(Canvas)Canvas->HideDragIcon(InvDragIcon);
 	}
 	SyncInventoryButtonVisual();
 }
@@ -4473,6 +4545,7 @@ void UACEUIGameplayBinder::CancelSpellDrag()
 	if (SpellDragIcon)
 	{
 		SpellDragIcon->SetVisibility(ESlateVisibility::Collapsed);
+        if(Canvas)Canvas->HideDragIcon(SpellDragIcon);
 	}
 }
 
@@ -4502,7 +4575,7 @@ bool UACEUIGameplayBinder::HitTestInventorySlot(FVector2D Absolute, int32& OutGu
 	return TestArray(InventorySlots) || TestArray(InventorySlotBgs);
 }
 
-bool UACEUIGameplayBinder::HitTestPackSlot(FVector2D Absolute, int32& OutPackGuid) const
+bool UACEUIGameplayBinder::HitTestPackSlot(FVector2D Absolute, int32& OutPackGuid, bool IncludeEmpty) const
 {
 	OutPackGuid = 0;
 	for (int32 i = 0; i < PackSlots.Num() && i < PackSlotGuids.Num(); ++i)
@@ -4515,7 +4588,7 @@ bool UACEUIGameplayBinder::HitTestPackSlot(FVector2D Absolute, int32& OutPackGui
 		if (Canvas->IsWidgetExposedAt(Border, Absolute))
 		{
 			OutPackGuid = PackSlotGuids[i];
-			return OutPackGuid != 0;
+			return IncludeEmpty || OutPackGuid != 0;
 		}
 	}
 	return false;
@@ -4933,19 +5006,7 @@ void UACEUIGameplayBinder::UpdateInventoryDrag(FVector2D CanvasLocalPos)
 	UpdateInventoryContainerDropFeedback(CanvasLocalPos);
 	InvDragIcon->SetBrushColor(FLinearColor(1.f, 1.f, 1.f, 0.85f));
 	InvDragIcon->SetVisibility(ESlateVisibility::HitTestInvisible);
-	if (InvDragIcon->GetParent() != Canvas->GetElementLayer())
-	{
-		Canvas->GetElementLayer()->AddChild(InvDragIcon);
-	}
-	if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(InvDragIcon->Slot))
-	{
-		Slot->SetAnchors(FAnchors(0.f, 0.f));
-		Slot->SetAutoSize(false);
-		Slot->SetPosition(CanvasLocalPos - FVector2D(16.f, 16.f));
-		Slot->SetSize(FVector2D(32.f, 32.f));
-		// Above SyncElementWidgets / inventory overlays (those climb past 20k).
-		Canvas->SetOverlayOrder(InvDragIcon, nullptr, 250000);
-	}
+    Canvas->ShowDragIcon(InvDragIcon,CanvasLocalPos);
 }
 
 void UACEUIGameplayBinder::AssignInventoryShortcut(int32 Guid, int32 SlotIndex, int32 SourceShortcut)
@@ -4990,7 +5051,6 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 	const int32 Amount = bHaveDraggedItem ? FMath::Clamp(InvDragAmount > 0 ? InvDragAmount : GetSelectedItemAmount(Guid),
 		1, FMath::Max(1, DraggedItem.StackSize)) : 0;
 	const int32 SourcePack = InvDragSourcePack;
-	const int32 SourceSlot = InvDragSourceSlot;
 	const int32 DragPackSlot = InvDragPackSlotIndex;
 	const int32 ShortcutSource = InvDragShortcutSlot;
 	const bool bWasDragging = bInvDragActive;
@@ -5001,6 +5061,12 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 	const bool bLootSource = OpenLootContainerGuid != 0
 		&& (SourcePack == OpenLootContainerGuid || SourcePack == OpenLootSelectedPackGuid);
 	CancelInventoryDrag();
+
+    if(bWasDragging&&Client&&Canvas)
+        if(auto* GI=Client->GetGameInstance())
+            if(auto* Deck=GI->GetSubsystem<UACEActionDeckSubsystem>();Deck
+                &&Deck->DropAt(Canvas->GetCachedGeometry().LocalToAbsolute(CanvasLocalPos),Guid))
+                return true;
 
 	// A swap may have begun before mouse-down. Never submit a second weapon
 	// relocation while its dequip/wield acknowledgments are still outstanding.
@@ -5282,9 +5348,12 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 
 	// Pack tab → move into that pack (or rearrange side packs onto player placement).
 	int32 PackGuid = 0;
-	if (HitTestPackSlot(Absolute, PackGuid))
+	if (HitTestPackSlot(Absolute, PackGuid, true))
 	{
-		if (DragPackSlot != INDEX_NONE)
+		FACEWorldObject SourceBag;
+        const bool HaveSourceBag = Client->GetWorldObject(Guid, SourceBag);
+		if (DragPackSlot != INDEX_NONE || (HaveSourceBag && ((SourceBag.ItemType & ACEItemType::Container) != 0
+            || (SourceBag.ObjectDescriptionFlags & ACEObjectDescFlag::RequiresPackSlot) != 0)))
 		{
 			int32 DestPlacement = 0;
 			for (int32 i = 0; i < PackSlots.Num() && i < PackSlotGuids.Num(); ++i)
@@ -5300,8 +5369,7 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 					break;
 				}
 			}
-			FACEWorldObject SourceBag;
-            if (Client->GetWorldObject(Guid, SourceBag) && SourceBag.PlacementPosition >= 0
+            if (HaveSourceBag && SourceBag.ContainerId == Client->GetPlayerGuid() && SourceBag.PlacementPosition >= 0
                 && SourceBag.PlacementPosition < DestPlacement) --DestPlacement;
             Client->SendPutItemInContainer(Guid, Client->GetPlayerGuid(), FMath::Max(0, DestPlacement));
 			return true;
@@ -5323,7 +5391,7 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 	if (HitTestInventorySlot(Absolute, DestGuid, DestSlot))
 	{
 		// Returning a drag to its source cell cancels it; it cannot arm a double-click.
-		if (DestSlot == SourceSlot && (SourcePack == 0 || SourcePack == SelectedPackGuid))
+		if (DestGuid == Guid)
 		{
 			LastInvClickGuid = 0;
 			LastInvClickTime = 0.0;
@@ -5331,9 +5399,7 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 		}
 		const int32 Container = SelectedPackGuid != 0 ? SelectedPackGuid
 			: (SourcePack != 0 ? SourcePack : Client->GetPlayerGuid());
-		// Removing the source shifts a later occupied destination one place left.
-		const int32 InsertSlot = DestSlot - ((Amount == FMath::Max(1, DraggedItem.StackSize) && SourcePack == Container && SourceSlot >= 0
-			&& SourceSlot < DestSlot && DestGuid != 0) ? 1 : 0);
+		const int32 InsertSlot = ResolveInventoryDropPlacement(Guid, Amount, Container, DestGuid);
 		const auto FinishLootPut = [&]()
 		{
 			if (bLootSource)
@@ -5341,8 +5407,8 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 				PlayLocalPickupMotion(PlayerController);
 			}
 		};
-		if (!MergeInventoryAmount(Guid, DestGuid, Amount))
-			MoveInventoryAmount(Guid, Container, FMath::Max(0, InsertSlot), Amount);
+		if (InsertSlot != INDEX_NONE && !MergeInventoryAmount(Guid, DestGuid, Amount))
+			MoveInventoryAmount(Guid, Container, InsertSlot, Amount);
 		FinishLootPut();
 		return true;
 	}
@@ -6155,7 +6221,7 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 						SelectCombatSpellSlot(i + SpellHotbarScrollOffset);
 						if (!Client->SendCastSpell(SpellId))
 						{
-							PostInventorySystemMessage(TEXT("You must select a target for that spell."));
+							PostInventorySystemMessage(Client->IsInPortalSpace() ? TEXT("You're too busy!") : TEXT("You must select a target for that spell."));
 						}
 						LastSpellClickSlot = INDEX_NONE;
 						LastSpellClickId = 0;
@@ -6190,7 +6256,7 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 				{
 					if (!Client->SendCastSpell(BuiltInSpellId, BuiltInCasterGuid))
 					{
-						PostInventorySystemMessage(TEXT("You must select a target for that spell."));
+						PostInventorySystemMessage(Client->IsInPortalSpace() ? TEXT("You're too busy!") : TEXT("You must select a target for that spell."));
 					}
 					LastSpellClickSlot = INDEX_NONE;
 					LastSpellClickId = 0;
@@ -6382,7 +6448,9 @@ void UACEUIGameplayBinder::HandleChatMessage(const FString& Text, const FString&
 
 	// Main window honours the quick filter cycle; retail floaty windows use their
 	// own 64-bit type filters and only receive lines while visible.
-	if (PassesChatFilter(FilterType) && (MainChatTypeFilter & (1ull << (static_cast<uint32>(FilterType) & 63))) != 0)
+	const auto* Plugins = Client ? Client->GetGameInstance()->GetSubsystem<UACEPluginSubsystem>() : nullptr;
+	const uint8 PluginHidden = Plugins ? Plugins->FilterPluginChatWindows(Text, Sender, ChatType) : 0;
+	if (!(PluginHidden & 1) && PassesChatFilter(FilterType) && (MainChatTypeFilter & (1ull << (static_cast<uint32>(FilterType) & 63))) != 0)
 	{
 		AppendChatLineToLog(0, Line, Color, ClickSender);
 	}
@@ -6394,6 +6462,7 @@ void UACEUIGameplayBinder::HandleChatMessage(const FString& Text, const FString&
 	{
 		for (int32 W = 1; W <= NumFloatyChats; ++W)
 		{
+			if (PluginHidden & (1u << W)) continue;
 			TSharedPtr<FACEUIElement> Root = Manager->FindElementByName(
 				FString::Printf(TEXT("RootGameplay_FloatyChat%d_Field"), W));
 			if (!Root.IsValid() || !Root->bVisible)
@@ -6983,9 +7052,10 @@ bool UACEUIGameplayBinder::ScrollChatLog(float PixelDelta, int32 Window)
     if (Window==0)
     {
         bChatStickToBottom=Stick; ChatStickEndOffset=Stick ? MaxOffset : -1.f;
-        SyncChatJumpIndicator();
+        bPendingChatScrollToEnd=false;
     }
     else bFloatyChatStickToBottom[Window-1]=Stick;
+    SyncChatJumpIndicator(Window);
     SyncChatScrollbar(Window);
     return true;
 }
@@ -7026,38 +7096,42 @@ void UACEUIGameplayBinder::SyncChatScrollbar(int32 Window)
     SyncDatScrollbar(Bar,Frac,ViewH/(ViewH+MaxOffset));
 }
 
-void UACEUIGameplayBinder::SyncChatJumpIndicator()
+void UACEUIGameplayBinder::SyncChatJumpIndicator(int32 Window)
 {
-	if (!Manager || !ChatLog)
+	auto* Log=GetChatLogWidget(Window);
+	if (!Manager || !Log)
 	{
 		return;
 	}
-	TSharedPtr<FACEUIElement> Indicator = Manager->FindElementUnder(
-		TEXT("RootGameplay_FloatyMainChat_Field"), TEXT("ChatLogNewNonVisibleTextIndicator"));
-	if (!Indicator.IsValid())
-	{
-		Indicator = Manager->FindElementByName(TEXT("ChatLogNewNonVisibleTextIndicator"));
-	}
+	const FString Root=Window ? FString::Printf(TEXT("RootGameplay_FloatyChat%d_Field"),Window) : TEXT("RootGameplay_FloatyMainChat_Field");
+	TSharedPtr<FACEUIElement> Indicator = Manager->FindElementUnder(Root, TEXT("ChatLogNewNonVisibleTextIndicator"));
 	if (!Indicator.IsValid())
 	{
 		return;
 	}
-	const float MaxOffset = FMath::Max(0.f, ChatLog->GetScrollOffsetOfEnd());
-	const bool bShow = !bChatStickToBottom && MaxOffset > KINDA_SMALL_NUMBER;
+	const float MaxOffset = FMath::Max(0.f, Log->GetScrollOffsetOfEnd());
+	const bool Stick=Window==0 ? bChatStickToBottom : bFloatyChatStickToBottom[Window-1];
+	if (Stick) bChatUnread[Window] = false;
+	const bool bShow = bChatUnread[Window] && !Stick && MaxOffset > KINDA_SMALL_NUMBER;
+	// ChatInterface selects state 1 explicitly; this field has no default
+	// image, so visibility alone leaves a blank but clickable rectangle.
+	Indicator->bUseExplicitState = true;
+	Indicator->DefaultState = bShow ? 1 : 13;
 	Indicator->bVisible = bShow;
 	if (!bShow)
 	{
 		return;
 	}
-	// Left gutter of ChatLog (UMG text is inset by 16px). Negative X is orphan-culled.
-	TSharedPtr<FACEUIElement> ChatLogEl = Manager->FindElementUnder(
-		TEXT("RootGameplay_FloatyMainChat_Field"), TEXT("ChatLog"));
+	// The unread arrow overlays the log; it does not reserve a permanent text gutter.
+	TSharedPtr<FACEUIElement> ChatLogEl = Manager->FindElementUnder(Root, TEXT("ChatLog"));
 	if (ChatLogEl.IsValid())
 	{
 		Indicator->X = 0;
 		Indicator->Y = FMath::Max(0, ChatLogEl->Height - 16);
 		Indicator->Width = 16;
 		Indicator->Height = 16;
+		Indicator->EdgeAnchorX = Indicator->EdgeAnchorY = 0;
+		Indicator->RecomputeLayoutOffset();
 	}
 }
 
@@ -8003,7 +8077,7 @@ void UACEUIGameplayBinder::CastSelectedHotbarSpell()
 	const int32 CasterGuid = (SelectedCombatSpellSlot < 0) ? BuiltInCasterGuid : 0;
 	if (!Client->SendCastSpell(ToCast, CasterGuid))
 	{
-		PostInventorySystemMessage(TEXT("You must select a target for that spell."));
+		PostInventorySystemMessage(Client->IsInPortalSpace() ? TEXT("You're too busy!") : TEXT("You must select a target for that spell."));
 	}
 }
 
@@ -8015,6 +8089,13 @@ void UACEUIGameplayBinder::RefreshChatChromeOverlays()
 		return;
 	}
 	EnsureOverlays();
+	if (const auto Maximize = Manager->FindElementUnder(TEXT("RootGameplay_FloatyMainChat_Field"), TEXT("MaximizeButton")))
+	{
+		// Retail changes this button's explicit maximized/minimized state. Normal
+		// button rollover states have no artwork and otherwise hide the control.
+		Maximize->bUseExplicitState = true;
+		Maximize->DefaultState = bMainChatExpanded ? 0x10000047 : 0x10000048;
+	}
 	if (!ChatTargetLabel)
 	{
 		ChatTargetLabel = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
@@ -8486,20 +8567,15 @@ void UACEUIGameplayBinder::RefreshAttributeOverlays()
 			ValueColor = Current > Base ? FLinearColor::Green : Current < Base ? FLinearColor::Red : TextWhite;
 			if (Val) UACEHoverTooltipWidget::SetWidgetTooltip(Val, FText::FromString(FString::Printf(TEXT("Base: %d\nCurrent: %d"), Base, Current)));
 		}
-		else if (Rows[i + AttributeScrollOffset].VitalId == 1)
-		{
-			Value = FString::Printf(TEXT("%d/%d"), LastVitals.Health, LastVitals.MaxHealth);
-			ValueColor = FLinearColor::Green;
-		}
-		else if (Rows[i + AttributeScrollOffset].VitalId == 3)
-		{
-			Value = FString::Printf(TEXT("%d/%d"), LastVitals.Stamina, LastVitals.MaxStamina);
-			ValueColor = FLinearColor::Green;
-		}
 		else
 		{
-			Value = FString::Printf(TEXT("%d/%d"), LastVitals.Mana, LastVitals.MaxMana);
-			ValueColor = FLinearColor::Green;
+			const int32 Id = Rows[i + AttributeScrollOffset].VitalId;
+			const int32 Current = Id == 1 ? LastVitals.Health : Id == 3 ? LastVitals.Stamina : LastVitals.Mana;
+			const int32 Maximum = Id == 1 ? LastVitals.MaxHealth : Id == 3 ? LastVitals.MaxStamina : LastVitals.MaxMana;
+			const int32 Base = LastVitals.GetVitalBase(Id);
+			Value = FString::Printf(TEXT("%d/%d"), Current, Maximum);
+			ValueColor = Maximum > Base ? FLinearColor::Green : Maximum < Base ? FLinearColor::Red : TextWhite;
+			if (Val) UACEHoverTooltipWidget::SetWidgetTooltip(Val, FText::FromString(FString::Printf(TEXT("Base maximum: %d\nCurrent maximum: %d"), Base, Maximum)));
 		}
 		const float Y = static_cast<float>(Origin.Y + i * RowH);
 		const float ListW = static_cast<float>(ListEl->Width - 18);
@@ -8613,11 +8689,11 @@ void UACEUIGameplayBinder::RefreshAttributeOverlays()
 		const int32 Current = Sel.AttrId ? LastVitals.GetAttributeCurrent(Sel.AttrId)
 			: Sel.VitalId == 1 ? LastVitals.MaxHealth : Sel.VitalId == 3 ? LastVitals.MaxStamina : LastVitals.MaxMana;
 		const int32 Base = Sel.AttrId ? LastVitals.GetAttributeBase(Sel.AttrId)
-			: Sel.VitalId == 1 ? LastVitals.HealthStart + LastVitals.HealthRanks + FMath::RoundToInt(LastVitals.Endurance / 2.f)
-			: Sel.VitalId == 3 ? LastVitals.StaminaStart + LastVitals.StaminaRanks + LastVitals.Endurance
-			: LastVitals.ManaStart + LastVitals.ManaRanks + LastVitals.Self;
+			: LastVitals.GetVitalBase(Sel.VitalId);
 		Bonus = Current - Base;
-		StatTitle = FString::Printf(TEXT("%s: %d"), Sel.Name, Current);
+		StatTitle = Sel.AttrId ? FString::Printf(TEXT("%s: %d"), Sel.Name, Current)
+			: FString::Printf(TEXT("%s: %d/%d"), Sel.Name,
+				Sel.VitalId == 1 ? LastVitals.Health : Sel.VitalId == 3 ? LastVitals.Stamina : LastVitals.Mana, Current);
 	}
 	const int32 ModifierBegin = StatTitle.Len();
 	if (Bonus) StatTitle += FString::Printf(TEXT(" (%+d)"), Bonus);
@@ -11047,7 +11123,8 @@ void UACEUIGameplayBinder::RefreshSelectionOverlay()
 	RefreshStackAmountEntry(bShowStack);
 
 	EnsureSelectionMarkers();
-	if (SelectionMarkerCorners.Num() < 4 || !LastSelection.bValid || LastSelection.Guid == 0 || !PlayerController || !Canvas)
+	if (SelectionMarkerCorners.Num() < 4 || !LastSelection.bValid || LastSelection.Guid == 0 || !PlayerController || !Canvas
+		|| (Client && LastSelection.Guid == Client->GetPlayerGuid()))
 	{
 		HideSelectionMarkers();
 		return;
@@ -11061,10 +11138,6 @@ void UACEUIGameplayBinder::RefreshSelectionOverlay()
 	}
 
 	AActor* Target = FindSelectionActor(World, LastSelection.Guid);
-	if (!Target && Client && LastSelection.Guid == Client->GetPlayerGuid())
-	{
-		Target = PlayerController->GetPawn();
-	}
 
 	// SmartBox::GetObjectBoundingBox uses the setup selection sphere, rotated by
 	// the object's frame. Animated limbs, weapons and collision proxies do not
@@ -13242,8 +13315,8 @@ void UACEUIGameplayBinder::RefreshInventoryOverlays()
 		if (bChatOn && LogEl.IsValid())
 		{
 			ChatLog->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
-			// Left 16px gutter for ChatLogNewNonVisibleTextIndicator (jump-to-bottom).
-			Canvas->PlaceWidgetAtElement(ChatLog, LogEl, 530, FMargin(16.f, 2.f, 2.f, 2.f));
+			// DAT already reserves space for the numbered window controls.
+			Canvas->PlaceWidgetAtElement(ChatLog, LogEl, 530, LogEl->TextMargins);
 			RefreshChatRowLayout(0);
 		}
 		else if (ChatLog)
@@ -13253,7 +13326,7 @@ void UACEUIGameplayBinder::RefreshInventoryOverlays()
 		if (bChatOn && EntryEl.IsValid())
 		{
 			ChatEntry->SetVisibility(ESlateVisibility::Visible);
-			Canvas->PlaceWidgetAtElement(ChatEntry, EntryEl, 531, FMargin(1.f, 0.f));
+			Canvas->PlaceWidgetAtElement(ChatEntry, EntryEl, 531);
 		}
 		else if (ChatEntry)
 		{
@@ -13496,13 +13569,7 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
 		TSharedPtr<FACEUIElement> ItemBar = Manager->FindElementUnder(TEXT("ExternalContainer"), TEXT("Ext_ItemListScroll"));
 		TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(TEXT("ExternalContainer"), TEXT("Ext_Container_ItemList"));
 		const int32 PageSize = ListEl.IsValid() ? FMath::Max(1, ListEl->Width / 32) : 12;
-		int32 ItemCount = 0;
-		if (Client)
-		{
-			ItemCount = Client->GetPackItems(OpenLootSelectedPackGuid != 0
-				? OpenLootSelectedPackGuid : OpenLootContainerGuid).Num();
-		}
-		if (TryBar(ItemBar, EACEUIScrollTarget::ExtItems, FMath::Max(0, ItemCount - PageSize), true))
+		if (TryBar(ItemBar, EACEUIScrollTarget::ExtItems, FMath::Max(0, GetExternalContainerItemCapacity() - PageSize), true))
 		{
 			return true;
 		}
@@ -14328,6 +14395,8 @@ void UACEUIGameplayBinder::CloseVendorFilterDropdown()
 	{
 		if (L) { L->SetVisibility(ESlateVisibility::Collapsed); }
 	}
+	for (UBorder* Row : VendorFilterDropdownRows)
+		if (Row) Row->SetVisibility(ESlateVisibility::Collapsed);
 }
 
 void UACEUIGameplayBinder::RefreshVendorFilterDropdown()
@@ -14366,7 +14435,7 @@ void UACEUIGameplayBinder::RefreshVendorFilterDropdown()
 		VendorFilterDropdownBg->SetPadding(FMargin(0.f));
 		FSlateBrush Brush;
 		Brush.DrawAs = ESlateBrushDrawType::Box;
-		Brush.TintColor = FSlateColor(FLinearColor(0.08f, 0.07f, 0.05f, 0.94f));
+		Brush.TintColor = FSlateColor(FLinearColor::Black);
 		VendorFilterDropdownBg->SetBrush(Brush);
 		Canvas->GetElementLayer()->AddChild(VendorFilterDropdownBg);
 	}
@@ -14388,24 +14457,55 @@ void UACEUIGameplayBinder::RefreshVendorFilterDropdown()
 		Canvas->GetElementLayer()->AddChild(L);
 		VendorFilterDropdownLabels.Add(L);
 	}
+	while (VendorFilterDropdownRows.Num() < Rows)
+	{
+		auto* Row = Canvas->WidgetTree->ConstructWidget<UBorder>();
+		Row->SetPadding(FMargin(0.f));
+		Canvas->GetElementLayer()->AddChild(Row);
+		VendorFilterDropdownRows.Add(Row);
+	}
 	for (int32 i = 0; i < Rows; ++i)
 	{
+		UBorder* Row = VendorFilterDropdownRows[i];
+		Row->SetVisibility(ESlateVisibility::HitTestInvisible);
+		if (auto* Slot = Cast<UCanvasPanelSlot>(Row->Slot))
+		{
+			Slot->SetAnchors(FAnchors(0.f, 0.f));
+			Slot->SetPosition(FVector2D(X, Y + static_cast<float>(i * RowH) * SY));
+			Slot->SetSize(FVector2D(W, static_cast<float>(RowH) * SY));
+			Canvas->SetOverlayOrder(Row, nullptr, DropZ + 1);
+		}
 		UTextBlock* L = VendorFilterDropdownLabels[i];
 		const int32 FilterId = VendorVisibleFilterIndices.IsValidIndex(i)
 			? VendorVisibleFilterIndices[i] : i;
+		// Menu_Vendor_PopupItem (0x21000043): green normal/selected retail art.
+		// Keep the native one-pixel row border when the menu is stretched.
+		if (auto* Resolver = Canvas->GetResourceResolver())
+		{
+			if (auto* Texture = Resolver->ResolveTexture(FilterId == VendorItemTypeFilter ? 0x060012B4 : 0x060012B3))
+			{
+				FSlateBrush Brush;
+				Brush.SetResourceObject(Texture);
+				Brush.ImageSize = FVector2D(Texture->GetSizeX(), Texture->GetSizeY());
+				Brush.DrawAs = ESlateBrushDrawType::Box;
+				Brush.Margin = FMargin(1.f / Texture->GetSizeX(), 1.f / Texture->GetSizeY());
+				Row->SetBrush(Brush);
+				Row->SetBrushColor(FLinearColor::White);
+			}
+		}
 		const int32 Prev = VendorItemTypeFilter;
 		VendorItemTypeFilter = FilterId;
 		const FString Label = VendorFilterLabel();
 		VendorItemTypeFilter = Prev;
 		L->SetText(FText::FromString(Label));
-		L->SetColorAndOpacity(FSlateColor(FilterId == VendorItemTypeFilter ? TextGold : TextWhite));
+		L->SetColorAndOpacity(FSlateColor(FilterId == VendorItemTypeFilter ? TextWhite : FLinearColor::FromSRGBColor(FColor(204,204,204))));
 		L->SetVisibility(ESlateVisibility::HitTestInvisible);
 		if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(L->Slot))
 		{
 			Slot->SetAnchors(FAnchors(0.f, 0.f));
 			Slot->SetPosition(FVector2D(X + 4.f * SX, Y + static_cast<float>(i * RowH) * SY));
 			Slot->SetSize(FVector2D(W - 8.f * SX, static_cast<float>(RowH) * SY));
-			Canvas->SetOverlayOrder(L, nullptr, DropZ + 1);
+			Canvas->SetOverlayOrder(L, nullptr, DropZ + 2);
 		}
 	}
 	for (int32 i = Rows; i < VendorFilterDropdownLabels.Num(); ++i)
@@ -14415,6 +14515,8 @@ void UACEUIGameplayBinder::RefreshVendorFilterDropdown()
 			VendorFilterDropdownLabels[i]->SetVisibility(ESlateVisibility::Collapsed);
 		}
 	}
+	for (int32 i = Rows; i < VendorFilterDropdownRows.Num(); ++i)
+		VendorFilterDropdownRows[i]->SetVisibility(ESlateVisibility::Collapsed);
 }
 
 bool UACEUIGameplayBinder::TryHandleVendorFilterDropdownClick(FVector2D Absolute)
@@ -14570,6 +14672,8 @@ void UACEUIGameplayBinder::HideVendorTextOverlays()
 	};
 	for (UTextBlock* L : VendorTabLabels) { Hide(L); }
 	for (UTextBlock* L : VendorFilterDropdownLabels) { Hide(L); }
+	for (UBorder* Row : VendorFilterDropdownRows)
+		if (Row) Row->SetVisibility(ESlateVisibility::Collapsed);
 	Hide(VendorItemNameLabel);
 	Hide(VendorItemCostLabel);
 	Hide(VendorBuyCostLabel);
@@ -14972,6 +15076,20 @@ void UACEUIGameplayBinder::HandleCharacterTitlesChanged()
 	RefreshTitleOverlays();
 }
 
+int32 UACEUIGameplayBinder::GetExternalContainerItemCapacity() const
+{
+	if (!Client || !OpenLootContainerGuid) return 1;
+	const int32 Container = OpenLootSelectedPackGuid ? OpenLootSelectedPackGuid : OpenLootContainerGuid;
+	FACEWorldObject Object;
+	Client->GetWorldObject(Container, Object);
+	// Drawing and input must include the same empty slots, not just owned items.
+	if (Object.ItemsCapacity > 0) return FMath::Clamp(Object.ItemsCapacity, 1, 120);
+	TArray<FACEWorldObject> Items = Client->GetPackItems(Container);
+	if (Container == OpenLootContainerGuid)
+		Items.RemoveAll([](const FACEWorldObject& Item) { return (Item.ItemType & ACEItemType::Container) != 0; });
+	return FMath::Clamp(Items.Num(), 1, 120);
+}
+
 void UACEUIGameplayBinder::SyncExternalContainerScrollbars()
 {
 	if (!Manager || OpenLootContainerGuid == 0)
@@ -15007,12 +15125,7 @@ void UACEUIGameplayBinder::SyncExternalContainerScrollbars()
 		return;
 	}
 	const int32 PageSize = FMath::Max(1, ListEl->Width / 32);
-	const int32 ContGuid = OpenLootSelectedPackGuid != 0 ? OpenLootSelectedPackGuid : OpenLootContainerGuid;
-	FACEWorldObject ContObj;
-	if (Client) { Client->GetWorldObject(ContGuid, ContObj); }
-	int32 Capacity = ContObj.ItemsCapacity > 0 ? ContObj.ItemsCapacity : 0;
-	const int32 Count = Client ? Client->GetPackItems(ContGuid).Num() : 0;
-	if (Capacity <= 0) { Capacity = FMath::Max(Count, PageSize); }
+	const int32 Capacity = GetExternalContainerItemCapacity();
 	const int32 MaxOff = FMath::Max(0, Capacity - PageSize);
 	ExtItemScrollOffset = FMath::Clamp(ExtItemScrollOffset, 0, MaxOff);
 	const float Frac = MaxOff > 0
@@ -15174,14 +15287,7 @@ void UACEUIGameplayBinder::RefreshExternalContainerOverlays()
 			return (O.ItemType & ACEItemType::Container) != 0;
 		});
 	}
-	FACEWorldObject ContObj;
-	Client->GetWorldObject(ContGuid, ContObj);
-	int32 Capacity = ContObj.ItemsCapacity;
-	if (Capacity <= 0)
-	{
-		Capacity = FMath::Max(Items.Num(), 1);
-	}
-	Capacity = FMath::Clamp(Capacity, 1, 120);
+	const int32 Capacity = GetExternalContainerItemCapacity();
 	const int32 PageSize = FMath::Max(1, ItemList->Width / Cell);
 	const int32 MaxOff = FMath::Max(0, Capacity - PageSize);
 	ExtItemScrollOffset = FMath::Clamp(ExtItemScrollOffset, 0, MaxOff);

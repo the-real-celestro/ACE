@@ -3,6 +3,8 @@
 #include "Widgets/Layout/SDPIScaler.h"
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "Misc/App.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -55,6 +57,7 @@
 #include "UI/ACEUILayoutResolver.h"
 #include "UI/ACEUIResourceResolver.h"
 #include "UI/ACERetailTextBlock.h"
+#include "UI/ACEAppraisalFormatting.h"
 #include "UI/ACERetailTextEntry.h"
 #include "UI/ACERetailKeySelector.h"
 #include "Engine/GameInstance.h"
@@ -145,6 +148,262 @@ static FORCENOINLINE void CheckKeyboardCapture(FAutomationTestBase& Test, UACERe
             }
 }
 
+static FORCENOINLINE void CheckVendorRowArtwork(FAutomationTestBase& Test,const TArray<TObjectPtr<UBorder>>& Rows,
+    const TArray<int32>& Indices,int32 SelectedFilter,UACEUIResourceResolver* Resolver)
+{
+    for(int32 Row=0;Row<Indices.Num()&&Row<Rows.Num();++Row)
+    {
+        const bool Selected=Indices.IsValidIndex(Row)&&Indices[Row]==SelectedFilter;
+        Test.TestTrue(TEXT("Vendor category rows use retail green normal/selected textures"),
+            Rows[Row]->Background.GetResourceObject()==Resolver->ResolveTexture(Selected?0x060012B4:0x060012B3));
+    }
+}
+
+struct FACERetailAugmentationUIFixture
+{
+    static void Check(FAutomationTestBase& Test, UACEUIGameplayBinder* Gameplay,
+        UACEClientSubsystem* Client, UACEDatSubsystem* Dat, FACEPlayerVitals& V);
+};
+
+FORCENOINLINE void FACERetailAugmentationUIFixture::Check(FAutomationTestBase& Test,
+    UACEUIGameplayBinder* Gameplay, UACEClientSubsystem* Client, UACEDatSubsystem* Dat, FACEPlayerVitals& V)
+{
+    const auto SavedVitals = V;
+    const int32 SavedSkill = Gameplay->SelectedSkillId;
+    const int32 SavedAttribute = Gameplay->SelectedAttributeRow;
+    const int32 SavedAttributeScroll = Gameplay->AttributeScrollOffset;
+    const int32 SavedSkillScroll = Gameplay->SkillListScrollOffset;
+    V.Strength = V.Endurance = V.Coordination = V.Quickness = V.Focus = V.Self = 155;
+    V.StatQualityInts.Reset(); V.Skills.Reset();
+    for (int32 Id : {39, 44, 47, 34})
+    {
+        FACESkillInfo Skill; Skill.SkillId = Id;
+        Skill.AdvancementClass = Id == 39 ? 3 : 2;
+        Skill.InitLevel = Id == 39 ? 10 : 5; Skill.Ranks = 50;
+        V.Skills.Add(Skill);
+    }
+    for (int32 Property : {218, 219, 220, 221, 222, 223, 300, 301, 302})
+        V.StatQualityInts.Add(Property, 1);
+    V.StatQualityInts.Add(365, 3);
+    Dat->RecomputePlayerStats(V, {}); Client->OnVitalsUpdated.Broadcast(V);
+    Gameplay->SkillListScrollOffset = 0; Gameplay->SyncSkillPanelTab(TEXT("SkillPage"));
+    for (int32 Id : {39, 44, 47, 34})
+    {
+        Gameplay->SelectedSkillId = Id; Gameplay->RefreshSkillOverlays();
+        const int32 Row = Gameplay->SkillRowIds.IndexOfByKey(Id);
+        if (Test.TestTrue(TEXT("Augmented skill has a visible row"), Row != INDEX_NONE))
+        {
+            const auto Color = Gameplay->SkillRowValues[Row]->GetColorAndOpacity().GetSpecifiedColor();
+            Test.TestTrue(TEXT("Innate skill augmentations paint neutral ivory"), Color.Equals(FLinearColor(.95f, .95f, .9f, 1.f)));
+            Test.TestFalse(TEXT("Innate skill augmentations have no (+N) suffix"), Gameplay->AttrFooterTitle->GetText().ToString().Contains(TEXT(" (+")));
+        }
+    }
+    V.StatQualityInts.Add(326, 1); V.StatQualityInts.Add(344, 3);
+    Dat->RecomputePlayerStats(V, {}); Client->OnVitalsUpdated.Broadcast(V);
+    Gameplay->SelectedSkillId = 39; Gameplay->RefreshSkillOverlays();
+    Test.TestEqual(TEXT("Retail Jack/spec luminance remain visible without active spells"),
+        Gameplay->AttrFooterTitle->GetText().ToString(), FString(TEXT("Cooking: 177 (+11)")));
+    const int32 CookingRow = Gameplay->SkillRowIds.IndexOfByKey(39);
+    if (Test.TestTrue(TEXT("Modified-only augmented skill still has a row"), CookingRow != INDEX_NONE))
+    {
+        const auto Color = Gameplay->SkillRowValues[CookingRow]->GetColorAndOpacity().GetSpecifiedColor();
+        Test.TestTrue(TEXT("Retail modified-only augmentations paint green"), Color.G > Color.R);
+    }
+    Gameplay->AttributeScrollOffset = 0; Gameplay->SyncSkillPanelTab(TEXT("AttributePage"));
+    for (int32 Row = 0; Row < 6; ++Row)
+    {
+        Gameplay->SelectedAttributeRow = Row; Gameplay->RefreshAttributeOverlays();
+        const auto Color = Gameplay->AttributeRowValues[Row]->GetColorAndOpacity().GetSpecifiedColor();
+        Test.TestTrue(TEXT("Innate attributes stay neutral even with Jack/spec augmentations"), Color.Equals(FLinearColor(.95f, .95f, .9f, 1.f)));
+        Test.TestEqual(TEXT("Innate attribute value is counted once in the row"), Gameplay->AttributeRowValues[Row]->GetText().ToString(), FString(TEXT("155")));
+        Test.TestFalse(TEXT("Innate attribute footer has no bonus suffix"), Gameplay->AttrFooterTitle->GetText().ToString().Contains(TEXT(" (+")));
+    }
+    Gameplay->SelectedSkillId = SavedSkill; Gameplay->SelectedAttributeRow = SavedAttribute;
+    Gameplay->AttributeScrollOffset = SavedAttributeScroll; Gameplay->SkillListScrollOffset = SavedSkillScroll;
+    V = SavedVitals; Client->OnVitalsUpdated.Broadcast(V); Gameplay->RefreshAttributeOverlays();
+}
+
+struct FACEChatUIFixture
+{
+    using FCapture = TFunctionRef<TArray<FColor>(const FString&,float,FVector2D)>;
+    static FORCENOINLINE void Check(FAutomationTestBase& Test, UACEUIGameplayBinder* Gameplay,
+        UACEUICanvasWidget* Canvas, UACEUIElementManager* Manager, FIntPoint ScreenSize,
+        const FString& LongChat, FCapture Capture)
+    {
+        auto CaptureScreen=[&](const FString& Name,float Scale=1.f) { return Capture(Name,Scale,FVector2D::ZeroVector); };
+        auto CheckControlHit=[&](const TSharedPtr<FACEUIElement>& Element,const TCHAR* Message,float Scale=1.f)
+        {
+            if(!FApp::CanEverRender())return;
+            FWidgetRenderer Renderer(true,true);FHittestGrid Grid;
+            const auto Window=SNew(SVirtualWindow).Size(FVector2D(ScreenSize));
+            Window->SetContent(SNew(SDPIScaler).DPIScale(Scale)[Canvas->TakeWidget()]);
+            auto* Target=FWidgetRenderer::CreateTargetFor(FVector2D(ScreenSize),TF_Bilinear,true);
+            for(int32 Pass=0;Pass<3;++Pass)
+            {
+                ++GFrameCounter;Canvas->NativeTick(Canvas->GetCachedGeometry(),0.f);
+                Renderer.DrawWindow(Target,Grid,Window,1.f,FVector2D(ScreenSize),0.f);FlushRenderingCommands();
+            }
+            auto* Art=Canvas->ImageWidgets.FindRef(Element->InstanceId).Get();
+            if(!Test.TestNotNull(TEXT("Chat control has a rendered hit surface"),Art))return;
+            const auto& G=Art->GetCachedGeometry();bool HitControl=false;
+            for(const auto& Hit:Grid.GetBubblePath(G.LocalToAbsolute(G.GetLocalSize()*.5),0,false))
+                HitControl |= Hit.Widget==Art->GetCachedWidget();
+            Test.TestTrue(Message,HitControl);
+        };
+    {
+        // Exercise real DAT resize grips, reflow and scroll routing in all five windows.
+        TGuardValue<FString> SettingsPath(GGameUserSettingsIni,FPaths::ProjectSavedDir()/TEXT("Automation/ChatResizeFixture.ini"));
+        FConfigFile Config; Config.NoSave=false; Config.bCanSaveAllSections=true;
+        GConfig->SetFile(GGameUserSettingsIni,&Config);
+        const bool Locked=Manager->IsUiLocked(); Manager->SetUiLocked(false);
+        for (int32 W=0; W<=4; ++W)
+        {
+            const FString Name=W ? FString::Printf(TEXT("RootGameplay_FloatyChat%d_Field"),W) : TEXT("RootGameplay_FloatyMainChat_Field");
+            auto Root=Manager->FindElementByName(Name);
+            const int32 SavedW=Root->UserResizeW,SavedH=Root->UserResizeH;
+            const FIntPoint SavedDrag(Root->UserDragX,Root->UserDragY);
+            Gameplay->SetFloatyVisible(Name,true); Manager->BringFloatyToFront(Root);
+            Root->UserDragX+=600-Root->GetScreenOrigin().X;
+            Root->UserDragY+=100-Root->GetScreenOrigin().Y; Root->RecomputeLayoutOffset();
+            Gameplay->ClearChatLog(W);
+            for (int32 I=0; I<15; ++I) Gameplay->AppendChatLineToLog(W,LongChat,FLinearColor::White,FString());
+            CaptureScreen(FString::Printf(TEXT("Chat%dBeforeResize"),W));
+            auto* Log=Gameplay->GetChatLogWidget(W);
+            const float NarrowRowH=Log->GetChildAt(0)->GetDesiredSize().Y;
+            const int32 Width=Root->Width,Height=Root->Height;
+            auto Drag=[&](const TCHAR* GripName,FVector2D Delta)
+            {
+                const auto Grip=Manager->FindElementUnder(Name,GripName);
+                const FVector2D Start=Canvas->LayoutToViewport(FVector2D(Grip->GetScreenOrigin())+FVector2D(2,2));
+                Manager->NotifyMouseDown(Start,FVector2D(ScreenSize),EKeys::LeftMouseButton);
+                Manager->NotifyMouseMove(Start+Delta,FVector2D(ScreenSize));
+                Manager->NotifyMouseUp(Start+Delta,FVector2D(ScreenSize),EKeys::LeftMouseButton);
+            };
+            Drag(W ? TEXT("RightBorder") : TEXT("MainChatRightBorder"),FVector2D(180,0));
+            Test.TestEqual(TEXT("Side grip widens chat"),Root->Width,Width+180);
+            Test.TestEqual(TEXT("Side grip preserves height"),Root->Height,Height);
+            Drag(W ? TEXT("BottomBorder") : TEXT("MainChatBottomBorder"),FVector2D(0,80));
+            Test.TestEqual(TEXT("Bottom grip resizes height"),Root->Height,Height+80);
+            CaptureScreen(FString::Printf(TEXT("Chat%dWidened"),W));
+            auto LogEl=Manager->FindElementUnder(Name,TEXT("ChatLog"));
+            auto Bar=Manager->FindElementUnder(Name,TEXT("ChatLogScrollbar"));
+            const auto LogSlot=CastChecked<UCanvasPanelSlot>(Log->Slot);
+            Test.TestTrue(TEXT("All chat logs use DAT margins without a second numbered-button gutter"),
+                LogSlot->GetPosition().Equals(Canvas->LayoutToViewport(FVector2D(LogEl->GetScreenOrigin())
+                    +FVector2D(LogEl->TextMargins.Left,LogEl->TextMargins.Top)),.01));
+            Test.TestEqual(TEXT("Chat wrapping uses the complete retail text width"),Gameplay->ChatRowWidths[W],
+                float(LogEl->Width)-LogEl->TextMargins.Left-LogEl->TextMargins.Right);
+            Test.TestTrue(TEXT("Chat rows rewrap to the wider window"),Log->GetChildAt(0)->GetDesiredSize().Y<NarrowRowH);
+            Test.TestTrue(TEXT("Scroll region follows content height"),FMath::Abs(LogEl->Height-Bar->Height)<=1);
+            Test.TestEqual(TEXT("Scrollbar remains inset from right border"),Bar->GetScreenOrigin().X+Bar->Width,Root->GetScreenOrigin().X+Root->Width-5);
+            const auto Up=Manager->FindElementUnder(Name,TEXT("ScrollBar_Up"));
+            const auto Down=Manager->FindElementUnder(Name,TEXT("ScrollBar_Down"));
+            Test.TestTrue(TEXT("Both arrow controls remain visible"),Up->bVisible && Down->bVisible);
+            Test.TestEqual(TEXT("Top arrow has no duplicated reflow offset"),Up->GetScreenOrigin().Y,Bar->GetScreenOrigin().Y);
+            Test.TestEqual(TEXT("Bottom arrow remains within bar"),Down->GetScreenOrigin().Y+Down->Height,Bar->GetScreenOrigin().Y+Bar->Height);
+            const auto Mid=Manager->FindElementUnder(Name,TEXT("widget_mid_field"));
+            Test.TestTrue(TEXT("Blue thumb has drawable area within the scrollbar"),Mid && Mid->Parent.Pin()->bVisible && Mid->Height>0 &&
+                Mid->GetScreenOrigin().Y>=Bar->GetScreenOrigin().Y+16 && Mid->GetScreenOrigin().Y+Mid->Height<=Bar->GetScreenOrigin().Y+Bar->Height-16);
+            const FVector2D LogPoint=Canvas->LayoutToViewport(FVector2D(LogEl->GetScreenOrigin())+FVector2D(12,12));
+            Test.TestEqual(TEXT("Wheel routing finds the correct chat"),Gameplay->ChatWindowAtPointer(LogPoint),W);
+            const float Before=Log->GetScrollOffset(); Gameplay->ScrollChatLog(-28.f,W);
+            Test.TestTrue(TEXT("Chat scrolls independently upward"),Log->GetScrollOffset()<Before);
+            const FVector2D BarPoint=Canvas->LayoutToViewport(FVector2D(Bar->GetScreenOrigin())+FVector2D(8,18));
+            Test.TestTrue(TEXT("Every chat thumb accepts dragging"),Gameplay->TryBeginScrollbarDrag(BarPoint));
+            Gameplay->TryFinishScrollbarDrag();
+            Test.TestTrue(TEXT("Dragging reaches older messages"),Log->GetScrollOffset()<Log->GetScrollOffsetOfEnd()*.2f);
+            Gameplay->SyncChatJumpIndicator(W);
+            Test.TestFalse(TEXT("Scrolling alone does not report unread messages"),Manager->FindElementUnder(Name,TEXT("ChatLogNewNonVisibleTextIndicator"))->bVisible);
+            const float Browsing=Log->GetScrollOffset(); Gameplay->AppendChatLineToLog(W,LongChat,FLinearColor::White,FString());
+            CaptureScreen(FString::Printf(TEXT("Chat%dScrolled"),W));
+            Test.TestTrue(TEXT("New messages preserve the browsed position"),FMath::Abs(Log->GetScrollOffset()-Browsing)<1.f);
+            const auto JumpIndicator=Manager->FindElementUnder(Name,TEXT("ChatLogNewNonVisibleTextIndicator"));
+            if(Test.TestTrue(TEXT("Every chat has the retail jump-to-bottom arrow"),JumpIndicator.IsValid()))
+            {
+                Gameplay->SyncChatJumpIndicator(W);
+                Test.TestTrue(TEXT("Unread messages show the arrow in their own chat window"),JumpIndicator->bVisible);
+                const auto* ArrowMedia=JumpIndicator->ResolvePaintState(false,false,false);
+                Test.TestTrue(TEXT("Visible arrow selects its retail artwork rather than a blank default"),ArrowMedia && ArrowMedia->bHasMedia && ArrowMedia->ImageFileId==0x06005F0E);
+                const auto ArrowOrigin=JumpIndicator->GetScreenOrigin(),LogOrigin=LogEl->GetScreenOrigin();
+                Test.TestTrue(TEXT("Arrow remains within the log after resizing"),ArrowOrigin.X==LogOrigin.X && ArrowOrigin.Y>=LogOrigin.Y && ArrowOrigin.Y+16<=LogOrigin.Y+LogEl->Height);
+                CaptureScreen(FString::Printf(TEXT("Chat%dUnreadControl"),W));
+                CheckControlHit(JumpIndicator,TEXT("Unread arrow takes precedence over selectable chat text"));
+                Gameplay->ScrollChatLog(100000,W);
+                Test.TestFalse(TEXT("Returning to the bottom hides that window's arrow"),JumpIndicator->bVisible);
+            }
+            Manager->SaveFloatyLayout();
+            Root->UserResizeW=0; Root->UserResizeH=0; UACEUIElementManager::ApplyFloatyResizeLayout(Root);
+            Manager->LoadFloatyLayout();
+            Test.TestEqual(TEXT("Chat width survives save/reload"),Root->Width,Width+180);
+            Test.TestEqual(TEXT("Chat height survives save/reload"),Root->Height,Height+80);
+            Drag(W ? TEXT("RightBorder") : TEXT("MainChatRightBorder"),FVector2D(-180,0));
+            CaptureScreen(FString::Printf(TEXT("Chat%dNarrowed"),W));
+            Test.TestEqual(TEXT("Narrowing restores original width"),Root->Width,Width);
+            Test.TestTrue(TEXT("Rows wrap again when narrowed"),Log->GetChildAt(0)->GetDesiredSize().Y>=NarrowRowH);
+            Root->UserResizeW=SavedW; Root->UserResizeH=SavedH;
+            Root->UserDragX=SavedDrag.X; Root->UserDragY=SavedDrag.Y;
+            Root->RecomputeLayoutOffset(); UACEUIElementManager::ApplyFloatyResizeLayout(Root);
+            Gameplay->ClearChatLog(W); Gameplay->AppendChatLineToLog(W,LongChat,FLinearColor::White,FString());
+            if (W) Gameplay->SetFloatyVisible(Name,false);
+        }
+        // The main chat's explicit DAT control expands rather than hiding it.
+        const FString MainName=TEXT("RootGameplay_FloatyMainChat_Field");
+        const auto Main=Manager->FindElementByName(MainName);
+        const int32 SavedHeight=Main->UserResizeH,SavedY=Main->UserDragY;
+        const FText Draft=Gameplay->ChatEntry->GetText();
+        Gameplay->ChatEntry->SetText(FText::FromString(TEXT("unsent chat draft")));
+        Manager->SetUiLocked(true);
+        for(float Scale:{1.f,1.5f})for(bool AtTop:{false,true})
+        {
+            CaptureScreen(TEXT("ChatExpandViewport"),Scale);
+            Main->UserResizeH=200-Main->AuthoredHeight;
+            UACEUIElementManager::ApplyFloatyResizeLayout(Main);
+            Main->UserDragY+=(AtTop?40:Main->Parent.Pin()->Height-Main->Height)-Main->GetDrawY();
+            Main->RecomputeLayoutOffset();Manager->BringFloatyToFront(Main);
+            const int32 OldY=Main->GetDrawY(),OldH=Main->Height,OldW=Main->Width;
+            const auto Button=Manager->FindElementUnder(MainName,TEXT("MaximizeButton"));
+            CaptureScreen(TEXT("ChatBeforeExpand"),Scale);
+            const auto* ExpandState=Button->ResolvePaintState(false,false,false);
+            Test.TestTrue(TEXT("Main chat uses retail expand artwork"),ExpandState && ExpandState->ImageFileId==0x06005E65);
+            CheckControlHit(Button,TEXT("Expand icon wins Slate hit testing over chat text at both scales"),Scale);
+            auto ClickExpand=[&]()
+            {
+                const FVector2D P=Canvas->LayoutToViewport(FVector2D(Button->GetScreenOrigin())+FVector2D(8,8));
+                Test.TestTrue(TEXT("DAT hit testing resolves the expand/restore control"),Manager->HitTestCanvas(Button->GetScreenOrigin().X+8,Button->GetScreenOrigin().Y+8)==Button);
+                Manager->NotifyMouseDown(P,FVector2D(ScreenSize)/Scale,EKeys::LeftMouseButton);
+                Manager->NotifyMouseUp(P,FVector2D(ScreenSize)/Scale,EKeys::LeftMouseButton);
+            };
+            ClickExpand();CaptureScreen(TEXT("ChatExpanded"),Scale);
+            Test.TestTrue(TEXT("Expanding keeps main chat visible while UI is locked"),Main->bVisible);
+            Test.TestEqual(TEXT("Retail expand adds half the logical screen height"),Main->Height,OldH+Main->Parent.Pin()->Height/2);
+            Test.TestEqual(TEXT("Top chat grows down and bottom chat grows up"),Main->GetDrawY(),AtTop?OldY:OldY-Main->Parent.Pin()->Height/2);
+            Test.TestEqual(TEXT("Expand preserves the width"),Main->Width,OldW);
+            const auto* State=Button->ResolvePaintState(true,true,false);
+            Test.TestTrue(TEXT("Restore artwork remains visible when pressed"),State && State->ImageFileId==0x06005E64);
+            ClickExpand();CaptureScreen(TEXT("ChatRestored"),Scale);
+            Test.TestEqual(TEXT("Restore returns to the previous height"),Main->Height,OldH);
+            Test.TestEqual(TEXT("Restore returns to the previous position"),Main->GetDrawY(),OldY);
+            Test.TestEqual(TEXT("Expand/restore preserves the unsent draft"),Gameplay->ChatEntry->GetText().ToString(),FString(TEXT("unsent chat draft")));
+        }
+        Main->UserResizeH=SavedHeight;Main->UserDragY=SavedY;Main->RecomputeLayoutOffset();
+        UACEUIElementManager::ApplyFloatyResizeLayout(Main);
+        Gameplay->ChatEntry->SetText(Draft);CaptureScreen(TEXT("ChatResizeRestored"));
+        Manager->SetUiLocked(Locked);
+    }
+    }
+};
+
+
+namespace
+{
+FString ACERetailUIScreenTestsDatDirectory()
+{
+    FString Directory=TEXT("C:/Turbine/Asheron's Call");
+    FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),Directory);
+    return Directory;
+}
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERetailScreenTest,"ACE.RetailParity.UIScreens",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACERetailScreenTest::RunTest(const FString& Parameters)
@@ -160,7 +419,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     auto* GI=NewObject<UGameInstance>();
     GI->Init();
     auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
-    if (!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if (!Dat->LoadDatDirectory(ACERetailUIScreenTestsDatDirectory())) return false;
     auto* Resources=NewObject<UACEUIResourceResolver>(); Resources->Initialize(Dat);
     FACEDatFont BaseFont; Resources->ResolveFont(0x40000000u,BaseFont);
     bool bGlyphTint=false; Resources->ResolveFontAtlas(BaseFont.ForegroundSurfaceDataID,bGlyphTint);
@@ -439,82 +698,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             FMath::IsNearlyEqual(Row->GetDesiredSize().Y,Row->GetCachedGeometry().GetLocalSize().Y,1.f));
     }
     Gameplay->SetFloatyVisible(TEXT("RootGameplay_FloatyChat1_Field"), false);
-    {
-        // Exercise real DAT resize grips, reflow and scroll routing in all five windows.
-        TGuardValue<FString> SettingsPath(GGameUserSettingsIni,FPaths::ProjectSavedDir()/TEXT("Automation/ChatResizeFixture.ini"));
-        FConfigFile Config; Config.NoSave=false; Config.bCanSaveAllSections=true;
-        GConfig->SetFile(GGameUserSettingsIni,&Config);
-        const bool Locked=Manager->IsUiLocked(); Manager->SetUiLocked(false);
-        for (int32 W=0; W<=4; ++W)
-        {
-            const FString Name=W ? FString::Printf(TEXT("RootGameplay_FloatyChat%d_Field"),W) : TEXT("RootGameplay_FloatyMainChat_Field");
-            auto Root=Manager->FindElementByName(Name);
-            const int32 SavedW=Root->UserResizeW,SavedH=Root->UserResizeH;
-            const FIntPoint SavedDrag(Root->UserDragX,Root->UserDragY);
-            Gameplay->SetFloatyVisible(Name,true); Manager->BringFloatyToFront(Root);
-            Root->UserDragX+=600-Root->GetScreenOrigin().X;
-            Root->UserDragY+=100-Root->GetScreenOrigin().Y; Root->RecomputeLayoutOffset();
-            Gameplay->ClearChatLog(W);
-            for (int32 I=0; I<15; ++I) Gameplay->AppendChatLineToLog(W,LongChat,FLinearColor::White,FString());
-            CaptureScreen(FString::Printf(TEXT("Chat%dBeforeResize"),W));
-            auto* Log=Gameplay->GetChatLogWidget(W);
-            const float NarrowRowH=Log->GetChildAt(0)->GetDesiredSize().Y;
-            const int32 Width=Root->Width,Height=Root->Height;
-            auto Drag=[&](const TCHAR* GripName,FVector2D Delta)
-            {
-                const auto Grip=Manager->FindElementUnder(Name,GripName);
-                const FVector2D Start=Canvas->LayoutToViewport(FVector2D(Grip->GetScreenOrigin())+FVector2D(2,2));
-                Manager->NotifyMouseDown(Start,FVector2D(ScreenSize),EKeys::LeftMouseButton);
-                Manager->NotifyMouseMove(Start+Delta,FVector2D(ScreenSize));
-                Manager->NotifyMouseUp(Start+Delta,FVector2D(ScreenSize),EKeys::LeftMouseButton);
-            };
-            Drag(W ? TEXT("RightBorder") : TEXT("MainChatRightBorder"),FVector2D(180,0));
-            TestEqual(TEXT("Side grip widens chat"),Root->Width,Width+180);
-            TestEqual(TEXT("Side grip preserves height"),Root->Height,Height);
-            Drag(W ? TEXT("BottomBorder") : TEXT("MainChatBottomBorder"),FVector2D(0,80));
-            TestEqual(TEXT("Bottom grip resizes height"),Root->Height,Height+80);
-            CaptureScreen(FString::Printf(TEXT("Chat%dWidened"),W));
-            auto LogEl=Manager->FindElementUnder(Name,TEXT("ChatLog"));
-            auto Bar=Manager->FindElementUnder(Name,TEXT("ChatLogScrollbar"));
-            TestTrue(TEXT("Chat rows rewrap to the wider window"),Log->GetChildAt(0)->GetDesiredSize().Y<NarrowRowH);
-            TestTrue(TEXT("Scroll region follows content height"),FMath::Abs(LogEl->Height-Bar->Height)<=1);
-            TestEqual(TEXT("Scrollbar remains inset from right border"),Bar->GetScreenOrigin().X+Bar->Width,Root->GetScreenOrigin().X+Root->Width-5);
-            const auto Up=Manager->FindElementUnder(Name,TEXT("ScrollBar_Up"));
-            const auto Down=Manager->FindElementUnder(Name,TEXT("ScrollBar_Down"));
-            TestTrue(TEXT("Both arrow controls remain visible"),Up->bVisible && Down->bVisible);
-            TestEqual(TEXT("Top arrow has no duplicated reflow offset"),Up->GetScreenOrigin().Y,Bar->GetScreenOrigin().Y);
-            TestEqual(TEXT("Bottom arrow remains within bar"),Down->GetScreenOrigin().Y+Down->Height,Bar->GetScreenOrigin().Y+Bar->Height);
-            const auto Mid=Manager->FindElementUnder(Name,TEXT("widget_mid_field"));
-            TestTrue(TEXT("Blue thumb has drawable area within the scrollbar"),Mid && Mid->Parent.Pin()->bVisible && Mid->Height>0 &&
-                Mid->GetScreenOrigin().Y>=Bar->GetScreenOrigin().Y+16 && Mid->GetScreenOrigin().Y+Mid->Height<=Bar->GetScreenOrigin().Y+Bar->Height-16);
-            const FVector2D LogPoint=Canvas->LayoutToViewport(FVector2D(LogEl->GetScreenOrigin())+FVector2D(12,12));
-            TestEqual(TEXT("Wheel routing finds the correct chat"),Gameplay->ChatWindowAtPointer(LogPoint),W);
-            const float Before=Log->GetScrollOffset(); Gameplay->ScrollChatLog(-28.f,W);
-            TestTrue(TEXT("Chat scrolls independently upward"),Log->GetScrollOffset()<Before);
-            const FVector2D BarPoint=Canvas->LayoutToViewport(FVector2D(Bar->GetScreenOrigin())+FVector2D(8,18));
-            TestTrue(TEXT("Every chat thumb accepts dragging"),Gameplay->TryBeginScrollbarDrag(BarPoint));
-            Gameplay->TryFinishScrollbarDrag();
-            TestTrue(TEXT("Dragging reaches older messages"),Log->GetScrollOffset()<Log->GetScrollOffsetOfEnd()*.2f);
-            const float Browsing=Log->GetScrollOffset(); Gameplay->AppendChatLineToLog(W,LongChat,FLinearColor::White,FString());
-            CaptureScreen(FString::Printf(TEXT("Chat%dScrolled"),W));
-            TestTrue(TEXT("New messages preserve the browsed position"),FMath::Abs(Log->GetScrollOffset()-Browsing)<1.f);
-            Manager->SaveFloatyLayout();
-            Root->UserResizeW=0; Root->UserResizeH=0; UACEUIElementManager::ApplyFloatyResizeLayout(Root);
-            Manager->LoadFloatyLayout();
-            TestEqual(TEXT("Chat width survives save/reload"),Root->Width,Width+180);
-            TestEqual(TEXT("Chat height survives save/reload"),Root->Height,Height+80);
-            Drag(W ? TEXT("RightBorder") : TEXT("MainChatRightBorder"),FVector2D(-180,0));
-            CaptureScreen(FString::Printf(TEXT("Chat%dNarrowed"),W));
-            TestEqual(TEXT("Narrowing restores original width"),Root->Width,Width);
-            TestTrue(TEXT("Rows wrap again when narrowed"),Log->GetChildAt(0)->GetDesiredSize().Y>=NarrowRowH);
-            Root->UserResizeW=SavedW; Root->UserResizeH=SavedH;
-            Root->UserDragX=SavedDrag.X; Root->UserDragY=SavedDrag.Y;
-            Root->RecomputeLayoutOffset(); UACEUIElementManager::ApplyFloatyResizeLayout(Root);
-            Gameplay->ClearChatLog(W); Gameplay->AppendChatLineToLog(W,LongChat,FLinearColor::White,FString());
-            if (W) Gameplay->SetFloatyVisible(Name,false);
-        }
-        Manager->SetUiLocked(Locked);
-    }
+    FACEChatUIFixture::Check(*this,Gameplay,Canvas,Manager,ScreenSize,LongChat,CaptureScreen);
     TFunction<void()> CheckVitals=[&]()
     {
         TGuardValue<FACEPlayerVitals> SavedVitals(Client->Session->PlayerVitals, Client->Session->PlayerVitals);
@@ -726,6 +910,9 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     NativeClick(TEXT("VendorItemsTab"));
     NativeClick(TEXT("Menu_Vendor_SelectionWidget"));
     TestTrue(TEXT("Actual canvas vendor filter opens"),Gameplay->bVendorFilterDropdownOpen);
+    CaptureScreen(TEXT("GameplayVendorGreenDropdown"));
+    CheckVendorRowArtwork(*this,Gameplay->VendorFilterDropdownRows,Gameplay->VendorVisibleFilterIndices,
+        Gameplay->VendorItemTypeFilter,Canvas->GetResourceResolver());
     Gameplay->HideVendorPanel();
     Gameplay->ShowExternalContainer(123);
     Gameplay->TickRefresh();
@@ -806,7 +993,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("Item appraisal includes effective armor and mana"),ItemDetails.Contains(TEXT("Slashing: Excellent (192)")) && ItemDetails.Contains(TEXT("Mana: 300 / 400.")));
     if(auto* Colored=Cast<UACERetailTextBlock>(Gameplay->ExamBody))
     {
-        TestEqual(TEXT("Buffed armor uses green retail stat text"),Colored->GetGlyphColor(ItemDetails.Find(TEXT("Slashing:")),FLinearColor::White),FLinearColor(.45f,.85f,.05f));
+        TestEqual(TEXT("Buffed armor uses green retail stat text"),Colored->GetGlyphColor(ItemDetails.Find(TEXT("Slashing:")),FLinearColor::White),FLinearColor::Green);
         TestEqual(TEXT("Debuffed armor uses red retail stat text"),Colored->GetGlyphColor(ItemDetails.Find(TEXT("Piercing:")),FLinearColor::White),FLinearColor(1.f,.2f,.15f));
         TestEqual(TEXT("Unenchanted armor stays neutral"),Colored->GetGlyphColor(ItemDetails.Find(TEXT("Bludgeoning:")),FLinearColor::White),FLinearColor::White);
     }
@@ -823,7 +1010,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     Gameplay->RefreshExaminationOverlay();
     const FString MeleeText=Gameplay->ExamBody->GetText().ToString();
     if(auto* Colored=Cast<UACERetailTextBlock>(Gameplay->ExamBody))
-        TestEqual(TEXT("Faster enchanted weapons use the server's beneficial color bit"),Colored->GetGlyphColor(MeleeText.Find(TEXT("Speed:")),FLinearColor::White),FLinearColor(.45f,.85f,.05f));
+        TestEqual(TEXT("Faster enchanted weapons use the server's beneficial color bit"),Colored->GetGlyphColor(MeleeText.Find(TEXT("Speed:")),FLinearColor::White),FLinearColor::Green);
     TestTrue(TEXT("Melee inspection shows skill, type, range and speed"),MeleeText.Contains(TEXT("Heavy Weapons (Sword)")) && MeleeText.Contains(TEXT("Damage: 28 - 40, Slashing/Piercing")) && MeleeText.Contains(TEXT("Speed: Fast (30)")));
     TestTrue(TEXT("Melee inspection shows attack, defense and exact cleave count"),MeleeText.Contains(TEXT("Attack Skill: +15%")) && MeleeText.Contains(TEXT("Melee Defense: +20.0%")) && MeleeText.Contains(TEXT("Cleave: 3 enemies")));
     TestTrue(TEXT("Damage is visible before long spell descriptions"),MeleeText.Find(TEXT("Damage:")) < MeleeText.Find(TEXT("Spells:")));
@@ -848,6 +1035,55 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("Real caster details overflow into scrollable content"),Gameplay->ExamScroll->GetScrollOffsetOfEnd()>0.f);
 
     TestFalse(TEXT("Spell-bearing equipment does not display stone stored-mana fields"),CasterDetails.Contains(TEXT("Stored Mana:")));
+    {
+        // Slayer is an appraisal property, including on casters that have no
+        // weapon profile. Cover the complete retail enum instead of a name list.
+        FACEAppraisalInfo Slayer;Slayer.bSuccess=true;Slayer.ItemType=ACEItemType::Caster;
+        Slayer.IntProperties={{179,8}};
+        const auto CreatureNames=Resources->ResolveEnumStrings(0x10000005);
+        TestTrue(TEXT("Retail creature enum has the complete slayer family"),CreatureNames.Num()>100);
+        for(const auto& Entry:CreatureNames)
+        {
+            Slayer.IntProperties.Add(166,int32(Entry.Key));
+            FString Expected=Entry.Value;Expected.ReplaceInline(TEXT("_"),TEXT(" "));
+            Expected=Entry.Key==31?TEXT("Bael'Zharon's Hate"):Expected+TEXT(" slayer");
+            for(bool Chrome:{false,true})
+                TestTrue(*FString::Printf(TEXT("Slayer type %u renders on desktop/VR without a weapon profile"),Entry.Key),
+                    ACEAppraisalFormatting::ItemExaminationText(Slayer,Dat,Chrome,Chrome).Contains(TEXT("Properties: ")+Expected+TEXT(", Slash Rending")));
+        }
+        for(const auto& Entry:{TPair<int32,const TCHAR*>(3,TEXT("Drudge slayer")),{38,TEXT("Fire Elemental slayer")},{31,TEXT("Bael'Zharon's Hate")}})
+            TestEqual(TEXT("Retail slayer spelling and human-slayer title"),ACEAppraisalFormatting::SlayerProperty(Dat,Entry.Key),FString(Entry.Value));
+        Slayer.IntProperties[166]=3;Slayer.bSuccess=false;
+        TestTrue(TEXT("Partial appraisal retains a server-supplied slayer"),ACEAppraisalFormatting::ItemDetails(Slayer,Dat).Contains(TEXT("Properties: Drudge slayer, Slash Rending")));
+        Slayer.IntProperties[166]=MAX_int32;
+        TestTrue(TEXT("Unknown creature enum never invents a slayer name"),ACEAppraisalFormatting::ItemDetails(Slayer,Dat).Contains(TEXT("Properties: Slash Rending")));
+        Slayer.IntProperties.Remove(166);Slayer.FloatProperties.Add(138,2.);
+        TestTrue(TEXT("A multiplier without a creature type does not invent a slayer"),ACEAppraisalFormatting::ItemDetails(Slayer,Dat).Contains(TEXT("Properties: Slash Rending")));
+
+        CasterInfo.Name=TEXT("Emerald Slashing Sceptre");CasterInfo.ItemType=ACEItemType::Caster;
+        CasterInfo.Value=37474;CasterInfo.IntProperties.Add(105,6);CasterInfo.IntProperties.Add(166,3);CasterInfo.IntProperties.Add(370,3);
+        CasterInfo.FloatProperties.Add(152,12.95);CasterInfo.FloatProperties.Add(136,.1);CasterInfo.FloatProperties.Add(147,.1);
+        CasterInfo.ResistanceEnchantments=0x20002000;
+        Gameplay->RefreshExaminationOverlay();
+        const FString SceptreText=Gameplay->ExamBody->GetText().ToString();
+        TestTrue(TEXT("Real item panel shows Drudge slayer ahead of existing imbues"),SceptreText.Contains(TEXT("Properties: Drudge slayer, Slash Rending, Crushing Blow, Biting Strike")));
+        TestTrue(TEXT("Real item panel retains a blank before Ratings, without subtracting a point"),SceptreText.Contains(TEXT("Workmanship: Nearly flawless (6)\n\nRatings: Dam 3.")));
+        if(auto* Colored=Cast<UACERetailTextBlock>(Gameplay->ExamBody))
+            for(const TCHAR* Prefix:{TEXT("Damage bonus for "),TEXT(" vs. Monsters:"),TEXT(" vs. Players:")})
+                TestEqual(TEXT("Real item panel colors caster bonus heading and both damage values"),
+                    Colored->GetGlyphColor(SceptreText.Find(Prefix),FLinearColor::White),FLinearColor::Green);
+        // Show all reported fields in one capture instead of leaving damage
+        // bonuses below the default-height inspection window's scroll area.
+        const auto Window=Manager->FindElementByName(TEXT("RootGameplay_FloatyExamination_Field"));
+        const FIntPoint Drag(Window->UserDragX,Window->UserDragY),Origin=Window->GetScreenOrigin();
+        const int32 Resize=Window->UserResizeH;
+        Window->UserDragX+=20-Origin.X;Window->UserDragY+=20-Origin.Y;
+        Window->UserResizeH=840-Window->AuthoredHeight;
+        Gameplay->RefreshExaminationOverlay();
+        CaptureScreen(TEXT("GameplaySlayerSceptreInspection"));
+        Window->UserDragX=Drag.X;Window->UserDragY=Drag.Y;Window->UserResizeH=Resize;
+        Gameplay->RefreshExaminationOverlay();
+    }
     Gameplay->LastAppraisal=FACEAppraisalInfo();
     auto& Charge=Gameplay->LastAppraisal;
     Charge.ObjectGuid=9060; Charge.Name=TEXT("Titan Mana Charge"); Charge.bSuccess=true;
@@ -1192,6 +1428,9 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     CaptureScreen(TEXT("GameplayCharacterOptions"));
     {
         const auto OriginalSize=ScreenSize;ScreenSize=FIntPoint(2048,1536);
+        // Desktop offsets change which chat window is under the real cursor.
+        // Freeze its intentional hover opacity while comparing static rendering.
+        TGuardValue<float> ChatOpacity(Gameplay->ChatActiveOpacity,Gameplay->ChatInactiveOpacity);
         const auto AtOrigin=CaptureScreen(TEXT("GameplayOptions2048x1536Scale125"),1.25f);
         for (const FVector2D Offset : {FVector2D(240,160),FVector2D(-1920,320)})
         {
@@ -1213,6 +1452,17 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         auto* Video=Cast<UACEVideoSettingsWidget>(Gameplay->VideoSettings);
         if (TestNotNull(TEXT("Config contains engine and camera controls"),Video))
         {
+            const float OldScroll=Video->GetScrollOffset();
+            auto* Shadow=Video->WidgetTree->FindWidget(TEXT("ShadowQuality"));
+            auto* Lighting=Video->WidgetTree->FindWidget(TEXT("DynamicLightingQuality"));
+            if(TestNotNull(TEXT("Video settings include shadow control"),Shadow) && TestNotNull(TEXT("Video settings include dynamic lighting control"),Lighting))
+            {
+                CastChecked<UScrollBox>(Video->WidgetTree->RootWidget)->ScrollWidgetIntoView(Shadow,false,EDescendantScrollDestination::TopOrLeft,20.f);
+                CaptureScreen(TEXT("GameplayLightingOptions"));
+                const float LightingBottom=Video->GetCachedGeometry().AbsoluteToLocal(Lighting->GetCachedGeometry().LocalToAbsolute(Lighting->GetCachedGeometry().GetLocalSize())).Y;
+                TestTrue(TEXT("Lighting controls fit the scrolled configuration page"),LightingBottom>0 && LightingBottom<=Video->GetCachedGeometry().GetLocalSize().Y);
+                Video->SetScrollOffset(OldScroll);
+            }
             Video->ResetVideo(); Gameplay->RefreshOptionsOverlays();
             const auto PendingApply=Manager->FindElementUnder(TEXT("ConfigPage"),TEXT("ApplyButton"));
             const auto PendingReset=Manager->FindElementUnder(TEXT("ConfigPage"),TEXT("ResetButton"));
@@ -1235,9 +1485,9 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             Video->OnNativeVisibilityChanged.Remove(VisibilityHandle);
             TestEqual(TEXT("Config refresh never hides the active dropdown owner"),Collapses,0);
             TestTrue(TEXT("Full configuration extends past the viewport"),Video->GetScrollEnd()>100.f);
-            Gameplay->ScrollOptionsList(-3.f);
+            Gameplay->ScrollOptionsList(-7.5f);
             TestTrue(TEXT("The shared config scrollbar scrolls actual controls"),Video->GetScrollOffset()>0.f);
-            CaptureScreen(TEXT("GameplayVideoOptionsScrolled"));
+            CaptureScreen(TEXT("GameplayDisplaySliders"));
             Video->SetScrollOffset(0.f);
 
             auto* Speed=Cast<USlider>(Video->WidgetTree->FindWidget(TEXT("MouseTurnSpeed")));
@@ -1921,7 +2171,11 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             FACEWorldObject Source;Source.Guid=9112;Source.ContainerId=Player.Guid;Source.ItemType=ACEItemType::Misc;
             Source.StackSize=5;Source.MaxStackSize=100;Source.WeenieClassId=998871;Source.IconId=0x06004CF7;
             FACEWorldObject Target=Source;Target.Guid=9113;Target.ContainerId=Full.Guid;Target.WeenieClassId=998872;
-            for(const auto& Item:{Free,Full,Source,Target}) Session.WorldObjects.Add(Item.Guid,Item);
+            FACEWorldObject Hook=Free;Hook.Guid=9114;Hook.ContainerId=0;Hook.ItemsCapacity=1;
+            Hook.Name=TEXT("Wall hook");Hook.bIsHouseHook=true;Hook.HookType=1;
+            Hook.HookItemTypes=ACEItemType::Misc;Hook.HouseOwnerId=Player.Guid;
+            Source.HookType=1;
+            for(const auto& Item:{Free,Full,Source,Target,Hook}) Session.WorldObjects.Add(Item.Guid,Item);
             Session.WorldObjects[Player.Guid].ItemsCapacity=Client->GetPackItems(Player.Guid).Num()+10;
             Session.WorldObjects[Player.Guid].ContainersCapacity=10;
             Gameplay->ShowPanelPage(TEXT("InventoryPanel_Field"));
@@ -1965,13 +2219,26 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 Session.WorldObjects[Target.Guid]=Target;
                 Gameplay->CancelInventoryDrag();
                 TestFalse(TEXT("Cancel clears inventory drop feedback"),Gameplay->PaperDollDragTargetIcon->IsVisible());
+                Gameplay->ShowExternalContainer(Hook.Guid);CaptureScreen(TEXT("HookDropLayout"),Scale);
+                if(TestTrue(TEXT("Empty house hook has a target square"),!Gameplay->ExtItemSlotBgs.IsEmpty()))
+                {
+                    auto* Cell=Gameplay->ExtItemSlotBgs[0].Get();
+                    Preview(Cell,0x060011F9);CaptureScreen(TEXT("HookDropAccept"),Scale);
+                    Session.WorldObjects[Source.Guid].HookType=2;
+                    Preview(Cell,0x060011F8);CaptureScreen(TEXT("HookDropReject"),Scale);
+                    Session.WorldObjects[Source.Guid].HookType=1;
+                    Session.WorldObjects[Hook.Guid].HouseOwnerId=0;
+                    Preview(Cell,0x060011F8);
+                    Session.WorldObjects[Hook.Guid].HouseOwnerId=Player.Guid;
+                }
+                Gameplay->CancelInventoryDrag();Gameplay->HideExternalContainer(false);
             }
             TestTrue(TEXT("Reordering within a full pack remains valid"),Gameplay->CanMoveInventoryAmountToContainer(Target.Guid,Full.Guid,5));
             TestFalse(TEXT("Splitting within a full pack needs another slot"),Gameplay->CanMoveInventoryAmountToContainer(Target.Guid,Full.Guid,2));
             TestFalse(TEXT("A backpack cannot contain itself"),Gameplay->CanMoveInventoryAmountToContainer(Full.Guid,Full.Guid,1));
             TestFalse(TEXT("A backpack cannot be nested inside a side pack"),Gameplay->CanMoveInventoryAmountToContainer(Full.Guid,Free.Guid,1));
             Session.WorldObjects[Player.Guid]=SavedSelf;
-            for(const auto& Item:{Free,Full,Source,Target}) Session.WorldObjects.Remove(Item.Guid);
+            for(const auto& Item:{Free,Full,Source,Target,Hook}) Session.WorldObjects.Remove(Item.Guid);
             Gameplay->SelectedPackGuid=SavedPack;Gameplay->ShowPanelPage(SavedPage);
             CaptureScreen(TEXT("InventoryDropRestored"));
         };
@@ -2345,6 +2612,49 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         CheckStatHighlight(Gameplay->AttributeRowHighlights[2],false);
         Session.ActiveEnchantments.Reset(); Session.NotifyVitalsChanged(); Client->OnVitalsUpdated.Broadcast(Stats);
         TestEqual(TEXT("Attribute expiry refreshes the tab"),Gameplay->AttributeRowValues[4]->GetText().ToString(),FString(TEXT("180")));
+
+        // Vital rows must agree with their footer: depletion is not a debuff,
+        // and innate/gear maximums are not spell bonuses.
+        const auto SavedStats=Stats;
+        Stats.Endurance=100;Stats.Self=100;Stats.HealthStart=10;Stats.HealthRanks=0;
+        Stats.StaminaStart=0;Stats.StaminaRanks=0;Stats.ManaStart=0;Stats.ManaRanks=0;
+        Stats.Health=40;Stats.Stamina=50;Stats.Mana=60;
+        Stats.StatQualityInts.Add(379,10);Stats.StatQualityInts.Add(390,2);
+        auto RefreshVital=[&](int32 Row)
+        {
+            Session.NotifyVitalsChanged();Client->OnVitalsUpdated.Broadcast(Stats);
+            Gameplay->SelectedAttributeRow=Row;Gameplay->AttributeScrollOffset=Row==8?1:0;
+            Gameplay->RefreshAttributeOverlays();
+        };
+        RefreshVital(6);
+        const auto Neutral=Gameplay->AttributeRowValues[4]->GetColorAndOpacity().GetSpecifiedColor();
+        for(int32 Row:{6,7,8})
+        {
+            RefreshVital(Row);
+            TestTrue(TEXT("Unbuffed vital row is neutral even while depleted"),
+                Gameplay->AttributeRowValues[Row-Gameplay->AttributeScrollOffset]->GetColorAndOpacity().GetSpecifiedColor().Equals(Neutral));
+            TestFalse(TEXT("Unbuffed vital footer has no bonus suffix"),Gameplay->AttrFooterTitle->GetText().ToString().Contains(TEXT(" (+")));
+        }
+        RefreshVital(6);
+        TestEqual(TEXT("Vital footer includes current/max and treats gear/enlightenment as base"),
+            Gameplay->AttrFooterTitle->GetText().ToString(),FString(TEXT("Health: 40/74")));
+        CaptureScreen(TEXT("GameplayVitalsUnbuffed"));
+        for(int32 Row:{6,7,8})
+        {
+            auto VitalBuff=CookBuff;VitalBuff.StatModType=0x8002;VitalBuff.StatModKey=1+2*(Row-6);
+            for(int32 Amount:{10,-10,0})
+            {
+                VitalBuff.StatModValue=Amount;Session.ActiveEnchantments=Amount?TArray<FACEActiveEnchantment>{VitalBuff}:TArray<FACEActiveEnchantment>{};
+                RefreshVital(Row);
+                const auto Color=Gameplay->AttributeRowValues[Row-Gameplay->AttributeScrollOffset]->GetColorAndOpacity().GetSpecifiedColor();
+                TestTrue(TEXT("Vital color follows actual modifier and returns to neutral on expiry"),
+                    Amount>0?Color.G>Color.R:Amount<0?Color.R>Color.G:Color.Equals(Neutral));
+                const FString Title=Gameplay->AttrFooterTitle->GetText().ToString();
+                TestTrue(TEXT("Vital footer bonus agrees with row color"),Amount?Title.EndsWith(FString::Printf(TEXT(" (%+d)"),Amount)):!Title.Contains(TEXT(" (")));
+            }
+        }
+        Stats=SavedStats;RefreshVital(4);
+        FACERetailAugmentationUIFixture::Check(*this, Gameplay, Client, Dat, Stats);
 
         // The skill footer shows only the XP earned within the current rank.
         int64 SkillStart=0,SkillCost=0;
@@ -2947,6 +3257,29 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         AcknowledgeReorder(61003,1,true);
         TestEqual(TEXT("Forward pack move has retail insertion order"),Gameplay->PackSlotGuids[2],61003);
         {
+            FACEWorldObject GroundPack;GroundPack.Guid=61999;GroundPack.Name=TEXT("Dropped backpack");
+            GroundPack.ItemType=ACEItemType::Container;GroundPack.ObjectDescriptionFlags=ACEObjectDescFlag::Openable;
+            GroundPack.bHasPosition=true;GroundPack.Position=Session.PlayerPosition;Session.UpsertWorldObject(GroundPack);
+            CaptureScreen(TEXT("GameplayGroundPackDropTargets"));
+            int32 Empty=INDEX_NONE;
+            for(int32 I=1;I<Gameplay->PackSlots.Num();++I)
+                if(Gameplay->PackSlots[I]->IsVisible() && Gameplay->PackSlotGuids[I]==0){Empty=I;break;}
+            TestTrue(TEXT("Ground pack fixture has an empty side slot"),Empty!=INDEX_NONE);
+            for(int32 TargetIndex:{1,Empty})if(TargetIndex!=INDEX_NONE)
+            {
+                Session.PendingInventoryTransfers.Reset();Session.CachedC2SPackets.Reset();
+                const auto& Geometry=Gameplay->PackSlots[TargetIndex]->GetCachedGeometry();
+                const auto Absolute=Geometry.LocalToAbsolute(Geometry.GetLocalSize()*.5);
+                Gameplay->InvDragGuid=GroundPack.Guid;Gameplay->InvDragAmount=1;
+                Gameplay->InvDragSourcePack=0;Gameplay->InvDragSourceSlot=INDEX_NONE;Gameplay->InvDragPackSlotIndex=INDEX_NONE;
+                Gameplay->bInvDragPending=true;Gameplay->bInvDragActive=true;Gameplay->bInvDoubleClickPending=false;
+                Gameplay->TryFinishInventoryDrag(Canvas->GetCachedGeometry().AbsoluteToLocal(Absolute));
+                TestTrue(TEXT("Ground backpack can be dropped on an occupied or empty side slot"),HasAction(ACEGameAction::PutItemInContainer));
+                LastWire(ACEGameAction::PutItemInContainer,{uint32(GroundPack.Guid),uint32(Player.Guid),uint32(TargetIndex-1)});
+            }
+            Session.PendingInventoryTransfers.Reset();Session.WorldObjects.Remove(GroundPack.Guid);
+        }
+        {
             FACEWorldObject Chest; Chest.Guid=62000; Chest.ItemType=ACEItemType::Container;
             Chest.ContainersCapacity=2; Chest.ItemsCapacity=24; Chest.IconId=0x06004CF7; Chest.Name=TEXT("Loot background fixture");
             Session.UpsertWorldObject(Chest);
@@ -2968,6 +3301,73 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             TestTrue(TEXT("Nested pack underlay updates even while viewing its contents"),
                 !Gameplay->ExtPackSlotBgs.IsEmpty()
                 && Gameplay->ExtPackSlotBgs[0]->Background.GetResourceObject()==Resources->ResolveItemBackground(ACEItemType::Container,NestedPack.IconUnderlayId));
+            // The chest shows all available slots, even when it contains fewer
+            // items than one page. Exercise the real mouse path, not just offsets.
+            Session.WorldObjects[Chest.Guid].ItemsCapacity=120;
+            const auto ItemBar=Manager->FindElementUnder(TEXT("ExternalContainer"),TEXT("Ext_ItemListScroll"));
+            const auto ItemList=Manager->FindElementUnder(TEXT("ExternalContainer"),TEXT("Ext_Container_ItemList"));
+            const auto Left=Manager->FindElementUnder(TEXT("Ext_ItemListScroll"),TEXT("ScrollBar_Left"));
+            const auto Right=Manager->FindElementUnder(TEXT("Ext_ItemListScroll"),TEXT("ScrollBar_Right"));
+            auto Press=[&](FVector2D Layout)
+            {
+                const auto& Geo=Canvas->GetCachedGeometry();
+                const auto Absolute=Geo.LocalToAbsolute(Canvas->LayoutToViewport(Layout));
+                Canvas->NativeOnMouseButtonDown(Geo,FPointerEvent(0,Absolute,Absolute,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState()));
+            };
+            auto Release=[&](FVector2D Layout)
+            {
+                const auto& Geo=Canvas->GetCachedGeometry();
+                const auto Absolute=Geo.LocalToAbsolute(Canvas->LayoutToViewport(Layout));
+                Canvas->NativeOnMouseButtonUp(Geo,FPointerEvent(0,Absolute,Absolute,{},EKeys::LeftMouseButton,0,FModifierKeysState()));
+            };
+            auto Arrow=[&](const TSharedPtr<FACEUIElement>& Element)
+            {
+                if(!TestTrue(TEXT("Chest scrollbar arrow exists"),Element.IsValid()))return;
+                const FVector2D P=FVector2D(Element->GetScreenOrigin())+FVector2D(Element->Width,Element->Height)*.5;
+                Press(P);Release(P);
+            };
+            for(float Scale:{1.f,1.5f}) for(int32 Count:{0,3,120})
+            {
+                Session.ContainerContents.Add(Chest.Guid,{{NestedPack.Guid,1}});
+                for(int32 I=0;I<120;++I)
+                {
+                    Session.WorldObjects.Remove(62100+I);
+                    if(I<Count)
+                    {
+                        FACEWorldObject ChestItem;ChestItem.Guid=62100+I;ChestItem.ContainerId=Chest.Guid;
+                        ChestItem.ItemType=ACEItemType::Misc;ChestItem.IconId=0x06004CF7;ChestItem.PlacementPosition=I;
+                        Session.WorldObjects.Add(ChestItem.Guid,ChestItem);
+                        Session.ContainerContents[Chest.Guid].Add({ChestItem.Guid,0});
+                    }
+                }
+                for(int32 Container:{Chest.Guid,NestedPack.Guid})
+                {
+                    Gameplay->OpenLootSelectedPackGuid=Container;Gameplay->ExtItemScrollOffset=0;
+                    Gameplay->LastLootOverlayHash=~uint64(0);Gameplay->RefreshExternalContainerOverlays();
+                    CaptureScreen(TEXT("GameplayChestScrollbar"),Scale);
+                    if(!TestTrue(TEXT("Chest scrollbar has a visible track"),ItemBar && ItemList && ItemBar->bVisible))continue;
+                    const int32 Maximum=Session.WorldObjects[Container].ItemsCapacity-FMath::Max(1,ItemList->Width/32);
+                    Arrow(Right);TestEqual(TEXT("Chest right arrow advances one slot"),Gameplay->ExtItemScrollOffset,1);
+                    Arrow(Left);TestEqual(TEXT("Chest left arrow returns one slot"),Gameplay->ExtItemScrollOffset,0);
+                    Arrow(Left);TestEqual(TEXT("Chest left arrow clamps at start"),Gameplay->ExtItemScrollOffset,0);
+                    const FVector2D Start=FVector2D(ItemBar->GetScreenOrigin())+FVector2D(20,ItemBar->Height*.5);
+                    const FVector2D End=Start+FVector2D(ItemBar->Width,0);
+                    Press(Start);TestTrue(TEXT("Chest thumb begins dragging regardless of item count"),Gameplay->IsScrollbarDragActive());
+                    const auto& Geo=Canvas->GetCachedGeometry();
+                    const auto From=Geo.LocalToAbsolute(Canvas->LayoutToViewport(Start));
+                    const auto To=Geo.LocalToAbsolute(Canvas->LayoutToViewport(End));
+                    Canvas->NativeOnMouseMove(Geo,FPointerEvent(0,To,From,{EKeys::LeftMouseButton},EKeys::Invalid,0,FModifierKeysState()));
+                    Release(End);
+                    TestFalse(TEXT("Chest mouse release ends scrollbar drag"),Gameplay->IsScrollbarDragActive());
+                    TestEqual(TEXT("Chest drag reaches the last capacity slot"),Gameplay->ExtItemScrollOffset,Maximum);
+                    Arrow(Right);TestEqual(TEXT("Chest right arrow clamps at end"),Gameplay->ExtItemScrollOffset,Maximum);
+                    if(Container==Chest.Guid && Count==120)
+                        TestEqual(TEXT("Chest scrolling displays its final item"),Gameplay->ExtItemGuids.Last(),62219);
+                    Arrow(Left);TestEqual(TEXT("Chest left arrow works after thumb drag"),Gameplay->ExtItemScrollOffset,Maximum-1);
+                    Gameplay->ScrollExternalContainer(1.f);
+                    TestEqual(TEXT("Chest wheel shares the scrollbar range"),Gameplay->ExtItemScrollOffset,FMath::Max(0,Maximum-4));
+                }
+            }
             Gameplay->HideExternalContainer(false);
             TestTrue(TEXT("Closing loot hides its pack background"),
                 Gameplay->ExtPackSlotBgs.IsEmpty() || Gameplay->ExtPackSlotBgs[0]->GetVisibility()==ESlateVisibility::Collapsed);
@@ -2988,7 +3388,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
         auto* PreviewGI=NewObject<UGameInstance>(GEngine); World->SetGameInstance(PreviewGI); PreviewGI->Init();
         auto* PreviewDat=PreviewGI->GetSubsystem<UACEDatSubsystem>();
-        TestTrue(TEXT("Preview world uses the real DAT subsystem"),PreviewDat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")));
+        TestTrue(TEXT("Preview world uses the real DAT subsystem"),PreviewDat->LoadDatDirectory(ACERetailUIScreenTestsDatDirectory()));
         auto* Controller=World->SpawnActor<AACEPlayerController>();
         Controller->Client=Client; Gameplay->PlayerController=Controller;
         TFunction<void()> CheckKeyboardTargets=[&]
@@ -3093,6 +3493,43 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 Session.LastAttackerGuid=80011;Session.LastAttackerTimeSeconds=FPlatformTime::Seconds();
                 Gameplay->TryAutoTargetOnCombatEnter();
                 TestEqual(TEXT("Retail recent-attacker preference precedes nearest-target fallback"),Client->GetSelectedObject().Guid,80011);
+                const auto AutoTargetObjects=Session.WorldObjects;
+                for(int32 Combat:{2,4}) for(uint32 Cell:{0xDA55001Du,0x0143014Fu})
+                {
+                    Gameplay->CombatMode=Combat;
+                    Session.PlayerPosition=Position;Session.PlayerPosition.CellId=Cell;
+                    Session.WorldObjects=AutoTargetObjects;
+                    for(auto& Pair:Session.WorldObjects)Pair.Value.Position.CellId=Cell;
+                    const float RadarRange=Cell==0xDA55001Du ? 75.f : 25.f;
+                    const FString Context=FString::Printf(TEXT(" (mode %d, cell %08X)"),Combat,Cell);
+                    auto RecentAttacker=Session.WorldObjects[80011];RecentAttacker.Guid=80013;
+                    RecentAttacker.Position.Location.X=Position.Location.X+RadarRange;
+                    Session.WorldObjects.Add(RecentAttacker.Guid,RecentAttacker);
+                    Session.LastAttackerGuid=RecentAttacker.Guid;Session.LastAttackerTimeSeconds=FPlatformTime::Seconds();
+                    auto RetargetAfterDeath=[&]()
+                    {
+                        Client->SelectObject(80010);
+                        Session.WorldObjects[80010].bDying=true;
+                        Client->SelectObject(0);Gameplay->TickCombatAutoAttack(.016f);
+                        Session.WorldObjects[80010].bDying=false;
+                    };
+                    RetargetAfterDeath();
+                    TestEqual(TEXT("Post-kill retarget chooses nearest instead of farther recent attacker")+Context,Client->GetSelectedObject().Guid,80011);
+                    Client->SelectObject(0);Gameplay->TryAutoTargetOnCombatEnter();
+                    TestEqual(TEXT("Combat entry may retaliate against an attacker exactly at radar range")+Context,Client->GetSelectedObject().Guid,80013);
+                    Session.WorldObjects[80013].Position.Location.X+=.1f;
+                    Client->SelectObject(0);Gameplay->TryAutoTargetOnCombatEnter();
+                    TestEqual(TEXT("Combat entry rejects recent attackers outside radar range")+Context,Client->GetSelectedObject().Guid,80010);
+                    RetargetAfterDeath();
+                    TestEqual(TEXT("Post-kill retarget rejects recent attackers outside radar range")+Context,Client->GetSelectedObject().Guid,80011);
+                    Session.WorldObjects[80011].Position.Location.X=Position.Location.X-15.f;
+                    RetargetAfterDeath();
+                    TestEqual(TEXT("Post-kill retarget includes the nearest creature behind the player")+Context,Client->GetSelectedObject().Guid,80011);
+                    Session.WorldObjects[80011].bDying=true;
+                    RetargetAfterDeath();
+                    TestFalse(TEXT("Post-kill retarget stays empty when only off-radar or ineligible creatures remain")+Context,Client->GetSelectedObject().bValid);
+                }
+                Session.WorldObjects=AutoTargetObjects;Session.PlayerPosition=Position;
             };
             CheckAutoTarget();
             // Keep the input sequence out of the already-large screen test's optimizer unit.

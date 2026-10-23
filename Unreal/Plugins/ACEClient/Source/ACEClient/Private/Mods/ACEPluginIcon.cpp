@@ -43,6 +43,16 @@ void SACEPluginIcon::Construct(const FArguments& Args)
             const double X=I==1?10:22;Fill({{X-3,Y-3},{X+3,Y-3},{X+3,Y+3},{X-3,Y+3}},I==1?Paper:Teal);
         }
     }
+    else if(Id==TEXT("actiondeck")) // Gold hotbar tiles with a teal action spark.
+    {
+        for(int32 Y=0;Y<3;++Y)for(int32 X=0;X<3;++X)
+        {
+            const double L=3+X*9,T=4+Y*9;
+            Line({{L,T},{L+7,T},{L+7,T+7},{L,T+7},{L,T}},Gold);
+        }
+        Fill({{19,1},{12,15},{17,15},{13,30},{25,12},{19,12}},Teal);
+        Line({{19,3},{15,13},{20,13}},Paper);
+    }
     else if(Id==TEXT("supplyledger")) // Three tapers tied with a counting band.
     {
         Fill({{5,11},{10,11},{10,28},{5,28}},Paper);Fill({{13,6},{18,6},{18,28},{13,28}},Gold);
@@ -71,6 +81,21 @@ void SACEPluginIcon::Construct(const FArguments& Args)
         Line({{29,22},{29,27},{7,27},{11,30}},Teal);Line({{7,27},{11,24}},Teal);
         Line({{8,12},{16,8},{24,12},{24,21},{16,25},{8,21},{8,12},{16,16},{24,12}},Paper);
         Line({{16,16},{16,25}},Gold);
+    }
+    else if(Id==TEXT("autocraft")) // Mortar, pestle and a small crafting spark.
+    {
+        Fill({{5,14},{27,14},{24,24},{20,28},{11,28},{7,24}},Teal);
+        Line({{4,14},{28,14},{25,23},{20,28},{11,28},{7,23},{4,14}},Gold);
+        Fill({{18,16},{15,13},{23,3},{27,6}},Paper);
+        Line({{9,29},{23,29}},Gold);
+        Line({{7,2},{7,10}},Gold);Line({{3,6},{11,6}},Gold);
+    }
+    else if(Id==TEXT("thirdeye")) // An open eye beneath a third sight ray.
+    {
+        Line({{2,18},{7,12},{12,9},{20,9},{25,12},{30,18},{25,23},{20,26},{12,26},{7,23},{2,18}},Gold);
+        Line({{16,10},{22,14},{22,21},{16,25},{10,21},{10,14},{16,10}},Teal);
+        Fill({{16,13},{19,17},{16,22},{13,17}},Paper);
+        Line({{16,1},{16,6}},Gold);Line({{6,3},{9,7}},Paper);Line({{26,3},{23,7}},Paper);
     }
     else if(Id==TEXT("waypoint")) // Trail terminating in a north needle.
     {

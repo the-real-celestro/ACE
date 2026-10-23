@@ -3,6 +3,7 @@
 #include "Mods/ACEPluginPresentation.h"
 #include "Mods/ACEPluginCastMotion.h"
 #include "ACEPluginVM.h"
+#include "ACEProfiling.h"
 #include "ACEVTProfile.h"
 #include "Mods/ACEUCMProfiles.h"
 #include "ACEClientSubsystem.h"
@@ -279,7 +280,7 @@ void UACEPluginSubsystem::Deinitialize()
     GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnAppraisalObserved.RemoveDynamic(this,&UACEPluginSubsystem::ObserveAppraisal);
     GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnChatMessage.RemoveDynamic(this,&UACEPluginSubsystem::ObservePluginChat);
     GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnVitalsUpdated.RemoveDynamic(this,&UACEPluginSubsystem::ObserveLedgerVitals);
-    if(auto S=ObservedSession.Pin()){S->OnUseDone.Remove(UseDoneHandle);S->OnPlayerTell.Remove(TellHandle);S->OnChatMessage.Remove(MetaChatHandle);S->OnCombatFeedback.Remove(CombatFeedbackHandle);}
+    if(auto S=ObservedSession.Pin()){S->OnUseDone.Remove(UseDoneHandle);S->OnSpellCastRequested.Remove(SpellCastHandle);S->OnPlayerTell.Remove(TellHandle);S->OnChatMessage.Remove(MetaChatHandle);S->OnCombatFeedback.Remove(CombatFeedbackHandle);}
     StopAll(TEXT("Client closing")); ReleaseLocalCosmetics(); FTSTicker::GetCoreTicker().RemoveTicker(Ticker);
     FlushUCMLog();
     FTSTicker::GetCoreTicker().RemoveTicker(DecisionWakeTicker);DecisionWakeTicker.Reset();
@@ -364,6 +365,7 @@ void UACEPluginSubsystem::Discover()
     ++PluginOrderRevision;
     RemoveDesktopDock();
     StopAll(TEXT("Reloading plugins")); ReleaseLocalCosmetics(); Plugins.Reset(); Notice.Empty();
+    AutoCraft.Reset();
     CompanionSession.Reset();CompanionPlayer=0;CompanionServer.Empty();
     const auto Plugin = IPluginManager::Get().FindPlugin(TEXT("ACEClient"));
     TArray<FString> Roots; if (Plugin) Roots.Add(Plugin->GetBaseDir() / TEXT("ClientMods"));
@@ -391,11 +393,11 @@ void UACEPluginSubsystem::Discover()
             if (Permissions) for (const auto& V : *Permissions)
             {
                 const FString Permission = V->AsString();
-                if (Permission != TEXT("profiles") && Permission != TEXT("data") && Permission != TEXT("chat") && Permission != TEXT("state") && Permission != TEXT("ui") && Permission != TEXT("markers") && Permission != TEXT("waypoint") && Permission != TEXT("messaging") && Permission != TEXT("commands") && Permission != TEXT("local_tools") && Permission != TEXT("local_cosmetics") && Permission != TEXT("cast") && Permission != TEXT("combat") && Permission != TEXT("navigation") && Permission != TEXT("inventory") && Permission != TEXT("loot") && Permission != TEXT("say") && Permission != TEXT("fellowship") && Permission != TEXT("confirm")) Valid = false;
+                if (Permission != TEXT("profiles") && Permission != TEXT("data") && Permission != TEXT("chat") && Permission != TEXT("chat_filter") && Permission != TEXT("state") && Permission != TEXT("ui") && Permission != TEXT("markers") && Permission != TEXT("waypoint") && Permission != TEXT("messaging") && Permission != TEXT("commands") && Permission != TEXT("local_tools") && Permission != TEXT("local_cosmetics") && Permission != TEXT("cast") && Permission != TEXT("combat") && Permission != TEXT("navigation") && Permission != TEXT("inventory") && Permission != TEXT("loot") && Permission != TEXT("say") && Permission != TEXT("fellowship") && Permission != TEXT("confirm")) Valid = false;
                 else P->Permissions.AddUnique(Permission);
             }
             if(P->Companion)for(const auto& Permission:P->Permissions)
-                if(!TArray<FString>{TEXT("chat"),TEXT("state"),TEXT("ui"),TEXT("markers"),TEXT("waypoint"),TEXT("messaging"),TEXT("commands"),TEXT("profiles"),TEXT("data"),TEXT("say")}.Contains(Permission))Valid=false;
+                if(!TArray<FString>{TEXT("chat"),TEXT("chat_filter"),TEXT("state"),TEXT("ui"),TEXT("markers"),TEXT("waypoint"),TEXT("messaging"),TEXT("commands"),TEXT("profiles"),TEXT("data"),TEXT("say")}.Contains(Permission))Valid=false;
             if(P->LocalService)
             {
                 if(Number(M,TEXT("service_api"))!=1 || !P->Permissions.Contains(TEXT("local_cosmetics"))) Valid=false;
@@ -438,13 +440,14 @@ void UACEPluginSubsystem::ToggleUCM()
 }
 bool UACEPluginSubsystem::Start(const FString& Id)
 {
+    if(Id==TEXT("autocraft"))return StartAutoCraft();
     auto P = Find(Id); auto* C = GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     if(P && P->LocalService) return StartLocalService(*P);
     if(P && P->Companion) return StartCompanion(*P);
     if(P && P->Running)return true;
     if (!P || !P->Enabled || C->GetSessionState() != EACESessionState::InWorld || !C->GetPlayerVitalsView().bValid || (C->GetPlayerVitalsView().Health <= 0 && !P->Profile->HasField(TEXT("vt_meta"))))
     { Notice = TEXT("Enable the plugin and log into a living character before starting."); return false; }
-    if(Id==TEXT("looteditor")||Id==TEXT("waypoint")||Id==TEXT("ucmmicro")||IsLedger(Id)){Notice=TEXT("This plugin has no automation to start. Open its window from the plugin bar.");return false;}
+    if(Id==TEXT("looteditor")||Id==TEXT("waypoint")||Id==TEXT("ucmmicro")||Id==TEXT("actiondeck")||IsLedger(Id)){Notice=TEXT("This plugin has no automation to start. Open its window from the plugin bar.");return false;}
     if(P->Api>=2&&!ValidatePublicProfile(P->Profile)){Notice=TEXT("Invalid automation profile structures");return false;}
     if (Id == TEXT("ucm") && !P->Running && P->ProfileLinks && !P->ProfileLinks->Values.IsEmpty())
     {
@@ -563,8 +566,10 @@ void UACEPluginSubsystem::Stop(const FString& Id, const FString& Reason, bool Pr
 {
     if (auto P = Find(Id))
     {
+        P->ChatFilters.Reset();
         const bool OwnsPolicy=P->IsPolicy()&&(P->Running||PolicyPlugin()==P);
-        if(OwnsPolicy){RestoreWorldRendering();bTrackRouteMovement=false;RouteMovementSamples.Reset();bRouteMovementOverflow=false;}
+        if(OwnsPolicy){RestoreWorldRendering();bTrackRouteMovement=false;RouteMovementSamples.Reset();bRouteMovementOverflow=false;
+            FollowMovementSamples.Reset();FollowMovementTarget=0;bFollowMovementOverflow=false;}
         if(P->Companion){StopCompanion(*P,Reason);return;}
         if(P->HasPresentation()){FlushPluginState(*P);P->Markers.Reset();P->PanelRows.Reset();P->PluginEvents.Reset();++P->PanelRevision;}
         P->TargetingStatus.Empty();
@@ -583,8 +588,8 @@ void UACEPluginSubsystem::Stop(const FString& Id, const FString& Reason, bool Pr
             auto* C = GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
             if (C && C->GetSession()) C->GetSession()->SendCancelAttack();
         }
-        if(Id==TEXT("itemtools")&&P->Running)if(auto UCM=Find(TEXT("ucm"));UCM&&UCM->Running)
-        {UCM->ResumeMetaPending=true;UCM->NextDecision=0;UCM->NextAction=0;UCM->Status=TEXT("Resuming after Item Tools");}
+        if((Id==TEXT("itemtools")||Id==TEXT("autocraft"))&&P->Running)if(auto UCM=Find(TEXT("ucm"));UCM&&UCM->Running)
+        {UCM->ResumeMetaPending=true;UCM->NextDecision=0;UCM->NextAction=0;UCM->Status=TEXT("Resuming after inventory job");}
         P->CanResumeMeta=PreserveMeta&&P->IsPolicy()&&P->VM.IsValid()&&P->Profile->HasField(TEXT("vt_meta"));
         P->CombatTransitionIntent.Reset();P->Running = false;P->WaitAction.Empty();P->ResumeMetaPending=false;if(!P->CanResumeMeta)P->VM.Reset();P->Status=Reason;
         if(OwnsPolicy)if(auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>())C->SetPluginFellowshipUpdates(false);
@@ -1116,6 +1121,7 @@ void UACEPluginSubsystem::AddBuff(const FString& Id, int32 SpellId)
 }
 TSharedPtr<FJsonObject> UACEPluginSubsystem::Snapshot()
 {
+    ACE_PROFILE_SCOPE(PluginSnapshot);
     TRACE_CPUPROFILER_EVENT_SCOPE(ACEPluginSnapshotCommon);
     if(CompanionReadBatch && CompanionReadBatch->Data)
         return MakeShared<FJsonObject>(*CompanionReadBatch->Data);
@@ -1145,6 +1151,14 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::Snapshot()
         O->SetBoolField(TEXT("route_motion_overflow"),bRouteMovementOverflow);
     }
     O->SetObjectField(TEXT("server_position"),Position(C->GetPlayerPosition()));
+    if(FollowMovementTeleport==C->GetTeleportSeq())
+    {
+        TArray<TSharedPtr<FJsonValue>> Samples;
+        for(const auto& Sample:FollowMovementSamples)Samples.Add(MakeShared<FJsonValueObject>(Position(Sample)));
+        O->SetArrayField(TEXT("follow_motion"),Samples);
+        O->SetNumberField(TEXT("follow_motion_target"),uint32(FollowMovementTarget));
+        O->SetBoolField(TEXT("follow_motion_overflow"),bFollowMovementOverflow);
+    }
     O->SetBoolField(TEXT("moving"), !MovementOwner.IsEmpty() || (!FastCastOwner.IsEmpty() && FastCastStarted));
     O->SetNumberField(TEXT("heading"),PC&&PC->GetPawn()?PC->GetPawn()->GetActorRotation().Yaw:0);
     const auto Known = C->GetKnownSpells(); TSet<int32> KnownIds(Known);
@@ -1238,7 +1252,10 @@ void UACEPluginSubsystem::CheckPendingSpellTimeout()
     auto Owner=Find(PendingSpellOwner);
     auto Intent=MakeShared<FJsonObject>();Intent->SetStringField(TEXT("action"),TEXT("cast"));
     Intent->SetStringField(TEXT("activity"),PendingSpellActivity);
-    PendingSpell=0;PendingSpellOwner.Empty();PendingSpellActivity.Empty();FastCastOwner.Empty();BuffRetryAt=0;PendingBuffResultDriven=false;
+    // Release the same bookkeeping as a failed cast, including its serial and
+    // fast-cast movement state. Policy must observe that this attempt ended.
+    CompletePendingAction(0x001D);
+    PendingSpellActivity.Empty();
     if(Owner&&Owner->Running)ReportActivityFailure(*Owner,Intent,TEXT("Cast confirmation timed out; check connection and spell requirements"));
 }
 void UACEPluginSubsystem::ScheduleDecisionWake(double ReadyAt)
@@ -1296,11 +1313,15 @@ void UACEPluginSubsystem::UpdateBuffDispatch()
     if(ConfirmedBuffAckAt&&Now-ConfirmedBuffAckAt>30)
     {
         auto Owner=Find(ConfirmedBuffOwner);ConfirmedBuffAckAt=0;ConfirmedBuffOwner.Empty();
-        DeferredBuffIntent.Reset();DeferredBuffOwner.Empty();
+        // Lua already advanced when it emitted the deferred intent. Dropping
+        // it strands completion/profile-load/weapon-switch state in the policy.
+        // The buff result was confirmed; only its trailing UseDone is missing.
+        // Keep the intent and let Execute revalidate it once the gate releases.
         if(Owner&&Owner->Running)
         {
-            auto I=MakeShared<FJsonObject>();I->SetStringField(TEXT("activity"),TEXT("buffs"));
-            ReportActivityFailure(*Owner,I,TEXT("Buff acknowledgment timed out; check connection"));
+            Owner->Status=TEXT("Buff acknowledgment timed out; resuming queued action");
+            LogUCMEvent(*Owner,Owner->Status,EACEUCMLogLevel::Warning);
+            Owner->NextDecision=0;ScheduleDecisionWake(Now);
         }
     }
     if(BuffRetryAt&&Now>=BuffRetryAt)
@@ -1351,6 +1372,7 @@ bool UACEPluginSubsystem::InventoryInteractionPending() const
 }
 bool UACEPluginSubsystem::Tick(float)
 {
+    ACE_PROFILE_SCOPE(Plugins);
     TickLocalServices();
     if(FPlatformTime::Seconds()>=NextUCMLogSave){NextUCMLogSave=FPlatformTime::Seconds()+10;FlushUCMLog();}
     UpdateWorldRendering();
@@ -1364,6 +1386,7 @@ bool UACEPluginSubsystem::Tick(float)
     }
     auto* C = GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     UpdateItemToolsCharacter();
+    TickAutoCraft();
     TickCompanions();
     UpdateBuffDispatch();
     CheckPendingSpellTimeout();
@@ -1412,12 +1435,14 @@ bool UACEPluginSubsystem::Tick(float)
         else if(!Enabled){P->CombatTransitionIntent.Reset();IdleManaVM.Reset();IdleManaFailed=false;}
     }
     else if(!IdlePolicy){if(auto Previous=Find(IdleManaOwner))Previous->CombatTransitionIntent.Reset();IdleManaOwner.Empty();IdleManaVM.Reset();IdleManaFailed=false;}
-    for (const auto& P : Plugins) if (P->Running && !P->LocalService && !P->Companion)
+    for (const auto& P : Plugins) if (P->Running && !P->LocalService && !P->Companion && P->Id!=TEXT("autocraft"))
     {
         if (C->GetSessionState() != EACESessionState::InWorld || C->GetPlayerGuid() != P->Player || C->GetServerName() != P->Server || (C->GetPlayerVitalsView().Health <= 0 && !P->Profile->HasField(TEXT("vt_meta"))))
         { Stop(P->Id, TEXT("Stopped: character died, changed, or left world")); continue; }
         if(P->IsPolicy())if(auto Items=Find(TEXT("itemtools"));Items&&Items->Running)
         {P->Status=TEXT("Paused while Item Tools runs");continue;}
+        if(P->IsPolicy())if(auto Craft=Find(TEXT("autocraft"));Craft&&Craft->Running)
+        {P->Status=TEXT("Paused while Auto Craft runs");continue;}
         if(InventoryInteractionPending())
         {
             if(MovementOwner==P->Id){MovementOwner.Empty();MoveExpires=0;}
@@ -1462,7 +1487,7 @@ bool UACEPluginSubsystem::Tick(float)
             if(Mode==TEXT("chest"))TickProfile->RemoveField(TEXT("profile_rules"));
         }
         if (!P->VM->Step(P->Api>=2?PublicSnapshot(*P):(P->Id==TEXT("itemtools")?ItemToolsSnapshot():Snapshot()), TickProfile, Intent, Error)) { Stop(P->Id, TEXT("Script error: ") + Error); continue; }
-        if(P->IsPolicy()){RouteMovementSamples.Reset();bRouteMovementOverflow=false;}
+        if(P->IsPolicy()){RouteMovementSamples.Reset();bRouteMovementOverflow=false;FollowMovementSamples.Reset();bFollowMovementOverflow=false;}
         if (Intent)
         {
             if(P->Api>=2 && !ApplyPublicOutput(*P,Intent,Error)){Stop(P->Id,TEXT("API error: ")+Error);continue;}
@@ -1552,6 +1577,17 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         RuntimeRoute->SetBoolField(TEXT("loop_route"),Loop);RuntimeRoute->SetBoolField(TEXT("reverse_route"),Reverse);
     }
     const FString MetaState=String(I,TEXT("meta_state"));
+    if(P.Id==TEXT("ucm") && P.Permissions.Contains(TEXT("loot")))
+    {
+        const double Completed=Number(I,TEXT("completed_corpse"));
+        if(Completed>0 && Completed<=MAX_uint32 && FMath::FloorToDouble(Completed)==Completed)
+            if(auto* Client=GetGameInstance()->GetSubsystem<UACEClientSubsystem>())
+            {
+                FACEWorldObject Corpse;
+                if(Client->GetWorldObject(int32(uint32(Completed)),Corpse)&&Corpse.IsCorpse())
+                    LootedCorpses.Add(Corpse.Guid,{Corpse.Position,FPlatformTime::Seconds()});
+            }
+    }
     LogUCMIntent(P,I);
     if(!MetaState.IsEmpty())P.MetaState=MetaState;
     if(I->HasTypedField<EJson::String>(TEXT("meta_status")))P.MetaStatus=String(I,TEXT("meta_status")).Left(1600);
@@ -1802,16 +1838,6 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         }
         if(FastCast&&P.Permissions.Contains(TEXT("navigation"))&&Dat->TryGetPluginSpellInfo(Spell,School,Power,Category,Flags,Duration)
             &&ACEPluginCastMotion::FastBuff(School,Power,Flags,Duration))FastCastOwner=P.Id;
-        if(Target&&Dat->TryGetPluginSpellInfo(Spell,School,Power,Category,Flags,Duration)
-            &&!(Flags&4)&&Duration>0&&Dat->TryGetSpellInfo(Spell,SpellName,Icon)&&C->GetWorldObject(Target,CastTargetObject))
-        {
-            auto Record=MakeShared<FJsonObject>();Record->SetNumberField(TEXT("target"),uint32(Target));Record->SetNumberField(TEXT("spell"),Spell);
-            Record->SetStringField(TEXT("confirmation"),TEXT("You cast ")+SpellName+TEXT(" on ")+CastTargetObject.Name);
-            Record->SetStringField(TEXT("resist"),CastTargetObject.Name+TEXT(" resists your spell"));
-            Record->SetNumberField(TEXT("category"),Category);Record->SetNumberField(TEXT("power"),Power);
-            Record->SetNumberField(TEXT("duration"),Duration);Record->SetNumberField(TEXT("sent"),Now);
-            PendingDebuffCasts.Add(MakeShared<FJsonValueObject>(Record));if(PendingDebuffCasts.Num()>8)PendingDebuffCasts.RemoveAt(0);
-        }
         C->GetSession()->SendCastSpell(Spell, Target); P.NextAction = Now + 3.5;
     }
     else if (Action == TEXT("attack"))

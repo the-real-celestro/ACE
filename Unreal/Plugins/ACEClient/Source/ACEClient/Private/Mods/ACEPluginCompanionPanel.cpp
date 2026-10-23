@@ -17,6 +17,7 @@
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SExpandableArea.h"
 #include "Widgets/Layout/SWidgetSwitcher.h"
+#include "Widgets/SOverlay.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SSlider.h"
@@ -45,7 +46,7 @@ namespace ACEPluginCompanionPanelPrivate
         if(Name==TEXT("red"))return FLinearColor(1,.3f,.2f);
         if(Name==TEXT("yellow"))return FLinearColor(1,.85f,.25f);
         if(Name==TEXT("blue"))return FLinearColor(.25f,.7f,1);
-        return FLinearColor(.9f,.94f,1);
+        return FLinearColor(1.f,.98f,.92f);
     }
     // Stable Lua control IDs are also stable Slate identities. Only structural
     // changes touch slots; ordinary snapshots update the retained row data.
@@ -55,7 +56,16 @@ namespace ACEPluginCompanionPanelPrivate
         SLATE_BEGIN_ARGS(SACECompanionRows){} SLATE_ARGUMENT(UACEPluginSubsystem*,Host) SLATE_ARGUMENT(FString,Id) SLATE_END_ARGS()
         void Construct(const FArguments& Args)
         {Host=Args._Host;Id=Args._Id;FACEPluginStyle::Use(Args._Host,Id);ChildSlot[SAssignNew(Rows,SVerticalBox)];Refresh();}
-        void Tick(const FGeometry& G,double Time,float Delta) override {SCompoundWidget::Tick(G,Time,Delta);Refresh();}
+        void Tick(const FGeometry& G,double Time,float Delta) override
+        {
+            SCompoundWidget::Tick(G,Time,Delta);Refresh();
+            if(auto P=Last.Pin();P&&!P->ScrollPanel())
+            {
+                const FVector2D Size=G.GetLocalSize();
+                if(Size.X>0&&Size.Y>0&&!P->PanelSize.Equals(Size,1))
+                {P->PanelSize=Size;P->NextDecision=0;}
+            }
+        }
     private:
         struct FRow
         {
@@ -66,6 +76,7 @@ namespace ACEPluginCompanionPanelPrivate
             TSharedPtr<SHorizontalBox> Horizontal,TabButtons;
             TSharedPtr<SWidgetSwitcher> Switch;
             TArray<TSharedPtr<SWidget>> Children;
+            TArray<bool> AutoWidths;
             // False means this control is being edited. Retry just this control,
             // never block other rows because the game viewport has mouse capture.
             TFunction<bool()> Sync;
@@ -81,8 +92,9 @@ namespace ACEPluginCompanionPanelPrivate
         TSharedRef<STextBlock> Label(const TSharedPtr<FJsonObject>& R)
         {
             return SNew(SACEPluginText).Text_Lambda([R](){return FText::FromString(S(R,TEXT("text")));})
-                .Font_Lambda([R](){return FCoreStyle::GetDefaultFontStyle(B(R,TEXT("bold"),false)?"Bold":"Regular",FMath::Clamp(int32(N(R,TEXT("size"),16)),10,36));})
-                .ColorAndOpacity_Lambda([R](){return FSlateColor(Color(S(R,TEXT("color"))));}).AutoWrapText(true);
+                .Font_Lambda([R](){return FCoreStyle::GetDefaultFontStyle(B(R,TEXT("bold"),false)?"Bold":"Regular",FMath::Clamp(int32(N(R,TEXT("size"),15)),10,36));})
+                .ColorAndOpacity_Lambda([R](){return FSlateColor(Color(S(R,TEXT("color"))));})
+                .AutoWrapText_Lambda([R](){return B(R,TEXT("wrap"));});
         }
         UTexture2D* Image(const FString& Asset)
         {
@@ -95,24 +107,39 @@ namespace ACEPluginCompanionPanelPrivate
             const auto R=Node.Data;const FString Key=S(R,TEXT("id"));
             const TArray<TSharedPtr<FJsonValue>>* Values=nullptr;R->TryGetArrayField(TEXT("children"),Values);
             TArray<TSharedPtr<SWidget>> Next;TArray<FString> Keys;
-            if(Values)for(const auto& V:*Values){Next.Add(Build(V->AsObject()));Keys.Add(S(V->AsObject(),TEXT("id")));}
-            if(Node.Children!=Next)
+            TArray<bool> AutoWidths;
+            if(Values)for(const auto& V:*Values){Next.Add(Build(V->AsObject()));Keys.Add(S(V->AsObject(),TEXT("id")));AutoWidths.Add(B(R,TEXT("compact"),false)||B(V->AsObject(),TEXT("auto_width"),false));}
+            if(Node.Children!=Next||Node.AutoWidths!=AutoWidths)
             {
                 // Reattach existing child widgets in their new order. In particular,
                 // a dropdown's anchor, text editor and section survive sibling edits.
                 if(Node.Vertical){Node.Vertical->ClearChildren();for(const auto& W:Next)Node.Vertical->AddSlot().AutoHeight().Padding(2)[W.ToSharedRef()];}
-                if(Node.Horizontal){Node.Horizontal->ClearChildren();for(const auto& W:Next)Node.Horizontal->AddSlot().FillWidth(1).Padding(3)[W.ToSharedRef()];}
+                if(Node.Horizontal)
+                {
+                    Node.Horizontal->ClearChildren();
+                    for(int32 I=0;I<Next.Num();++I)
+                    {
+                        auto Slot=Node.Horizontal->AddSlot();Slot.Padding(3).VAlign(VAlign_Center);
+                        if(AutoWidths[I])Slot.AutoWidth();else Slot.FillWidth(1);
+                        Slot[Next[I].ToSharedRef()];
+                    }
+                }
                 if(Node.Switch)
                 {
                     for(const auto& Old:Node.Children)Node.Switch->RemoveSlot(Old.ToSharedRef());Node.TabButtons->ClearChildren();
                     for(int32 I=0;I<Next.Num();++I)
                     {
                         Node.Switch->AddSlot()[Next[I].ToSharedRef()];const FString Page=Keys[I];
-                        Node.TabButtons->AddSlot().FillWidth(1).Padding(2)[SNew(SButton).ButtonStyle(&FACEPluginStyle::Current()->Button).IsFocusable(false)
-                            .OnClicked_Lambda([this,Key,Page,Switch=Node.Switch,I](){Tabs.Add(Key,Page);Switch->SetActiveWidgetIndex(I);return FReply::Handled();})[Label(Controls[Page]->Data)]];
+                        const auto Data=Controls[Page]->Data;
+                        Node.TabButtons->AddSlot().FillWidth(1).Padding(2)[SNew(SACEPluginTab).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).Tag(FName(*(TEXT("PluginTab.")+Key+TEXT(".")+Page)))
+                            .Text_Lambda([Data](){return FText::FromString(S(Data,TEXT("text")));})
+                            .FontSize_Lambda([Data](){return int32(N(Data,TEXT("size"),15));})
+                            .Selected_Lambda([this,Key,Page](){return Tabs.FindRef(Key)==Page;})
+                            .OnClicked_Lambda([this,Key,Page,Switch=Node.Switch,I](){Tabs.Add(Key,Page);Switch->SetActiveWidgetIndex(I);return FReply::Handled();})];
                     }
                 }
                 Node.Children=MoveTemp(Next);
+                Node.AutoWidths=MoveTemp(AutoWidths);
             }
             if(Node.Switch)
             {
@@ -128,6 +155,7 @@ namespace ACEPluginCompanionPanelPrivate
             if(Node&&Node->Type==Type)
             {
                 Node->Data->Values=Source->Values;
+                Node->Widget->SetClipping(B(Source,TEXT("wrap"))?EWidgetClipping::Inherit:EWidgetClipping::ClipToBounds);
                 if(Node->Vertical||Node->Horizontal||Node->Switch)Children(*Node);
                 if(Node->Sync&&!Node->Sync())Pending.Add(Node);
                 return Node->Widget.ToSharedRef();
@@ -159,7 +187,7 @@ namespace ACEPluginCompanionPanelPrivate
                 Children(*Node);
             }
             else if(Type==TEXT("button"))
-                Content=SNew(SButton).ButtonStyle(&FACEPluginStyle::Current()->Button).Tag(FName(*(TEXT("PluginRow.")+Key))).IsFocusable(false).ContentPadding(FMargin(10,7))
+                Content=SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(&FACEPluginStyle::Current()->Button).Tag(FName(*(TEXT("PluginRow.")+Key))).IsFocusable(false)
                     .OnClicked_Lambda([H=Host,Plugin=Id,Key](){if(H.IsValid())H->ClickPluginRow(Plugin,Key);return FReply::Handled();})[Label(R)];
             else if(Type==TEXT("checkbox"))
                 Content=SNew(SCheckBox).Style(&FACEPluginStyle::Current()->Check).IsChecked_Lambda([R](){return B(R,TEXT("value"),false)?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
@@ -167,7 +195,7 @@ namespace ACEPluginCompanionPanelPrivate
             else if(Type==TEXT("input"))
             {
                 auto Applying=MakeShared<bool>(false);
-                auto Input=SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).Text(FText::FromString(S(R,TEXT("value"))))
+                auto Input=SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",15)).Text(FText::FromString(S(R,TEXT("value"))))
                     .HintText_Lambda([R](){return FText::FromString(S(R,TEXT("placeholder")));}).SelectAllTextWhenFocused(false)
                     .OnTextChanged_Lambda([Changed,R,Applying](const FText& Text){if(!*Applying&&B(R,TEXT("live"),false))Changed(MakeShared<FJsonValueString>(Text.ToString().Left(1024)));})
                     .OnTextCommitted_Lambda([Changed,Applying](const FText& Text,ETextCommit::Type){if(!*Applying)Changed(MakeShared<FJsonValueString>(Text.ToString().Left(1024)));});
@@ -177,7 +205,7 @@ namespace ACEPluginCompanionPanelPrivate
             }
             else if(Type==TEXT("number"))
             {
-                auto Input=SNew(SSpinBox<double>).Style(&FACEPluginStyle::Current()->Spin).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).MinValue(N(R,TEXT("min"))).MaxValue(N(R,TEXT("max"),100)).Delta(N(R,TEXT("step"),1)).Value(N(R,TEXT("value")))
+                auto Input=SNew(SSpinBox<double>).Style(&FACEPluginStyle::Current()->Spin).Font(FACEPluginStyle::NativeFont("Regular",15)).MinValue(N(R,TEXT("min"))).MaxValue(N(R,TEXT("max"),100)).Delta(N(R,TEXT("step"),1)).Value(N(R,TEXT("value")))
                     .OnValueCommitted_Lambda([Changed](double V,ETextCommit::Type){Changed(MakeShared<FJsonValueNumber>(V));})
                     .OnEndSliderMovement_Lambda([Changed](double V){Changed(MakeShared<FJsonValueNumber>(V));});
                 Node->Sync=[R,Input](){if(Input->HasAnyUserFocusOrFocusedDescendants()||Input->HasMouseCapture())return false;
@@ -190,16 +218,17 @@ namespace ACEPluginCompanionPanelPrivate
                     .OnValueChanged_Lambda([Changed](float V){Changed(MakeShared<FJsonValueNumber>(V));});
                 Node->Sync=[R,Input](){if(Input->HasMouseCapture()||Input->HasAnyUserFocusOrFocusedDescendants())return false;
                     Input->SetMinAndMaxValues(N(R,TEXT("min")),N(R,TEXT("max"),100));Input->SetValue(float(N(R,TEXT("value"))));return true;};
-                Content=SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight()[SNew(SHorizontalBox)+SHorizontalBox::Slot().FillWidth(1)[Label(R)]+SHorizontalBox::Slot().AutoWidth()[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).Text_Lambda([R](){return FText::AsNumber(N(R,TEXT("value")));})]]
+                Content=SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight()[SNew(SHorizontalBox)+SHorizontalBox::Slot().FillWidth(1)[Label(R)]+SHorizontalBox::Slot().AutoWidth()[SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",15)).Text_Lambda([R](){return FText::AsNumber(N(R,TEXT("value")));})]]
                     +SVerticalBox::Slot().AutoHeight()[Input];
             }
             else if(Type==TEXT("select"))
             {
                 auto Options=MakeShared<TArray<TSharedPtr<FString>>>();auto Applying=MakeShared<bool>(false);
-                auto Combo=SNew(SComboBox<TSharedPtr<FString>>).OptionsSource(&Options.Get())
-                    .OnGenerateWidget_Lambda([Options](TSharedPtr<FString> V){return SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).Text(FText::FromString(V?*V:FString()));})
+                auto Combo=SNew(SComboBox<TSharedPtr<FString>>).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).OptionsSource(&Options.Get())
+                    .ComboBoxStyle(&FACEPluginStyle::Current()->ComboBox).ItemStyle(&FACEPluginStyle::Current()->ComboRow)
+                    .OnGenerateWidget_Lambda([Options](TSharedPtr<FString> V){return SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",15)).Text(FText::FromString(V?*V:FString()));})
                     .OnSelectionChanged_Lambda([Options,Changed,Applying](TSharedPtr<FString> V,ESelectInfo::Type){if(V&&!*Applying)Changed(MakeShared<FJsonValueString>(*V));})
-                    [SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).Text_Lambda([R](){return FText::FromString(S(R,TEXT("value")));})];
+                    [SNew(SACEPluginText).Justification(ETextJustify::Center).Font(FACEPluginStyle::NativeFont("Regular",15)).Text_Lambda([R](){return FText::FromString(S(R,TEXT("value")));})];
                 Node->Sync=[R,Options,Combo,Applying]()
                 {
                     // Keep the open menu's rows/highlight stable until it closes.
@@ -216,6 +245,33 @@ namespace ACEPluginCompanionPanelPrivate
             }
             else if(Type==TEXT("progress"))
                 Content=SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight()[Label(R)]+SVerticalBox::Slot().AutoHeight().Padding(0,4)[SNew(SProgressBar).Percent_Lambda([R](){return TOptional<float>(FMath::Clamp(N(R,TEXT("value")),0.,1.));}).FillColorAndOpacity_Lambda([R](){return Color(S(R,TEXT("color")));})];
+            else if(Type==TEXT("item_icon"))
+            {
+                if(!Resolver.IsValid()&&Host.IsValid()){Resolver.Reset(NewObject<UACEUIResourceResolver>(Host.Get()));Resolver->Initialize(Host->GetGameInstance()->GetSubsystem<UACEDatSubsystem>());}
+                auto Background=MakeShared<FSlateBrush>(),Foreground=MakeShared<FSlateBrush>();
+                auto Back=SNew(SImage).Image_Lambda([Background]()->const FSlateBrush*{return &Background.Get();});
+                auto Front=SNew(SImage).Image_Lambda([Foreground]()->const FSlateBrush*{return &Foreground.Get();});
+                Node->Sync=[this,R,Background,Foreground,Back,Front]()
+                {
+                    if(!Resolver.IsValid()||!Resolver->GetDatSubsystem()||!Resolver->GetDatSubsystem()->IsDatReady())return false;
+                    const double Size=FMath::Clamp(N(R,TEXT("size"),32),16.,128.);
+                    auto Update=[Size](const auto& Brush,const auto& Widget,UTexture2D* Texture)
+                    {
+                        if(Brush->GetResourceObject()!=Texture||Brush->ImageSize!=FVector2D(Size,Size))
+                        {Brush->SetResourceObject(Texture);Brush->DrawAs=ESlateBrushDrawType::Image;Brush->ImageSize=FVector2D(Size,Size);Widget->Invalidate(EInvalidateWidgetReason::Layout|EInvalidateWidgetReason::Paint);}
+                    };
+                    // Same compositors as the inventory and Supply Ledger, including
+                    // the square type background, underlay, overlay and enchantments.
+                    Update(Background,Back,Resolver->ResolveItemBackground(uint32(N(R,TEXT("item_type"))),uint32(N(R,TEXT("underlay")))));
+                    Update(Foreground,Front,Resolver->ResolveItemForeground(uint32(N(R,TEXT("icon"))),uint32(N(R,TEXT("overlay"))),uint32(N(R,TEXT("effects")))));
+                    return true;
+                };
+                Content=SNew(SHorizontalBox)+SHorizontalBox::Slot().AutoWidth()[SNew(SBox)
+                    .WidthOverride_Lambda([R](){return FOptionalSize(FMath::Clamp(N(R,TEXT("size"),32),16.,128.));})
+                    .HeightOverride_Lambda([R](){return FOptionalSize(FMath::Clamp(N(R,TEXT("size"),32),16.,128.));})
+                    [SNew(SOverlay)+SOverlay::Slot()[Back]+SOverlay::Slot()[Front]]]
+                    +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(6,0)[Label(R)];
+            }
             else if(Type==TEXT("icon")||Type==TEXT("image"))
             {
                 if(!Resolver.IsValid()&&Host.IsValid()){Resolver.Reset(NewObject<UACEUIResourceResolver>(Host.Get()));Resolver->Initialize(Host->GetGameInstance()->GetSubsystem<UACEDatSubsystem>());}
@@ -233,8 +289,10 @@ namespace ACEPluginCompanionPanelPrivate
             }
             else Content=Label(R);
             Content->SetEnabled(TAttribute<bool>::CreateLambda([R](){return B(R,TEXT("enabled"));}));
-            Content->SetToolTipText(TAttribute<FText>::CreateLambda([R](){return FText::FromString(S(R,TEXT("tooltip")));}));
-            Node->Widget=SNew(SBox).Tag(FName(*(TEXT("PluginControl.")+Key))).Padding_Lambda([R](){return FMargin(FMath::Clamp(float(N(R,TEXT("padding"),2)),0.f,24.f));})[Content];
+            Content->SetToolTip(FACEPluginStyle::Tooltip(TAttribute<FText>::CreateLambda([R](){return FText::FromString(S(R,TEXT("tooltip")));})));
+            Node->Widget=SNew(SBox).Tag(FName(*(TEXT("PluginControl.")+Key)))
+                .Clipping(B(R,TEXT("wrap"))?EWidgetClipping::Inherit:EWidgetClipping::ClipToBounds)
+                .Padding_Lambda([R](){return FMargin(FMath::Clamp(float(N(R,TEXT("padding"),2)),0.f,24.f));})[Content];
             if(Node->Sync&&!Node->Sync())Pending.Add(Node);
             return Node->Widget.ToSharedRef();
         }

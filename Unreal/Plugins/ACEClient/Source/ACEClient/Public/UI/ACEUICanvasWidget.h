@@ -13,6 +13,8 @@ class UACEUICharGenBinder;
 class UBorder;
 class UCanvasPanel;
 class UTexture2D;
+class UGameViewportClient;
+class SACEUIDragPreview;
 
 /**
  * Last values pushed to one element's UBorder. Slate setters invalidate layout/paint, so the
@@ -48,6 +50,7 @@ class ACECLIENT_API UACEUICanvasWidget : public UUserWidget
 {
 	GENERATED_BODY()
 	friend class FACERetailScreenTest;
+	friend struct FACEChatUIFixture;
 	friend class FACEUIInteractionParityTest;
 	friend class FACEHousingTest;
 
@@ -57,7 +60,7 @@ public:
 	void SetGameplayBinder(UACEUIGameplayBinder* InBinder);
 	bool IsGameplayCanvas() const { return GameplayBinder != nullptr; }
 	/** Refresh once per engine frame, from either Slate or VR with the canvas hidden. */
-	void TickGameplayState();
+	void TickGameplayState(bool bRefreshDesktopHUD = true);
 	void SetCharSelectBinder(UACEUICharSelectBinder* InBinder);
 	void SetCharGenBinder(UACEUICharGenBinder* InBinder) { CharGenBinder=InBinder; SetIsFocusable(InBinder != nullptr); }
 	UACEUICharGenBinder* GetCharGenBinder() const { return CharGenBinder; }
@@ -93,8 +96,12 @@ public:
 	void SetOverlayOrder(UWidget* Widget, const TSharedPtr<FACEUIElement>& OwnerElement, int32 LocalOrder);
 	bool IsWidgetExposedAt(const UWidget* Widget, FVector2D Absolute) const;
 	bool IsElementExposedAt(const TSharedPtr<FACEUIElement>& Element, FVector2D CanvasLocal) const;
+    /** Desktop previews float above native and plugin windows; VR stays on its canvas. */
+    void ShowDragIcon(UBorder* Icon, FVector2D CanvasLocal);
+    void HideDragIcon(const UBorder* Icon = nullptr);
 
 	virtual void NativeConstruct() override;
+    virtual void NativeDestruct() override;
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 	virtual FReply NativeOnMouseMove(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
 	virtual FReply NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
@@ -108,7 +115,10 @@ protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
 
 private:
+    TSharedPtr<SACEUIDragPreview> DesktopDragPreview;
+    TWeakObjectPtr<UGameViewportClient> DragViewport;
 	uint64 LastGameplayTickFrame = MAX_uint64;
+	uint64 LastDesktopHUDTickFrame = MAX_uint64;
 	int32 PressedPointer = INDEX_NONE;
 	bool bVRPointerVisible = false, bVRPointerDown = false;
 	FBox2D VRPointerBounds;

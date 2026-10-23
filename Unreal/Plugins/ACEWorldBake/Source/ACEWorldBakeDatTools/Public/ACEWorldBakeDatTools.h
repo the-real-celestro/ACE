@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Commandlets/Commandlet.h"
 #include "Engine/Texture.h"
+#include "Engine/Texture2D.h"
 #include "Modules/ModuleInterface.h"
 #include "ACEWorldBakeDatTools.generated.h"
 

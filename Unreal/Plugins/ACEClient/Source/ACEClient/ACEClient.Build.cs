@@ -30,7 +30,7 @@ public class ACEClient : ModuleRules
 			"ImageWrapper",
 			"Landscape"
 		});
-		PrivateDependencyModuleNames.AddRange(new string[] { "RenderCore", "RHI", "HTTP", "XmlParser", "AssetRegistry", "ACERetailRender" });
+		PrivateDependencyModuleNames.AddRange(new string[] { "RenderCore", "RHI", "HTTP", "XmlParser", "AssetRegistry", "ACERetailRender", "PhysicsCore", "Chaos" });
 		AddEngineThirdPartyPrivateStaticDependencies(Target, "OpenSSL", "ICU");
 		if (Target.Platform == UnrealTargetPlatform.Linux)
 		{
@@ -41,6 +41,11 @@ public class ACEClient : ModuleRules
 			PublicSystemLibraries.Add("Crypt32.lib");
 			PublicSystemLibraries.Add("Ole32.lib");
 			PublicSystemLibraries.Add("Shell32.lib");
+		}
+		if (Target.Platform == UnrealTargetPlatform.Mac)
+		{
+			// Launcher passwords are stored in the macOS Keychain.
+			PublicFrameworks.Add("Security");
 		}
 		if (Target.Platform == UnrealTargetPlatform.Android)
 		{

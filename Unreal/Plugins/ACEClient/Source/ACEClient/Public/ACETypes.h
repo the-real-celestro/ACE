@@ -886,6 +886,7 @@ namespace ACEPhysicsState
 	constexpr int32 ParticleEmitter = 0x00001000;
 	/** Retail CPhysicsObj hidden bit — set during portal/teleport until destination is ready. */
 	constexpr int32 Hidden = 0x00004000;
+	constexpr int32 Inelastic = 0x00020000;
 	constexpr int32 HasDefaultAnim = 0x00040000;
 	constexpr int32 HasDefaultScript = 0x00080000;
 	constexpr int32 Cloaked = 0x00100000;
@@ -953,6 +954,13 @@ struct ACECLIENT_API FACEPlayerVitals
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 MaxStamina = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 Mana = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 MaxMana = 0;
+
+	/** Raw DAT-derived maximums, including innate/gear bonuses but not enchantments or vitae. */
+	int32 BaseMaxHealth = 0, BaseMaxStamina = 0, BaseMaxMana = 0;
+	int32 GetVitalBase(int32 Id) const
+	{
+		return Id == 1 ? BaseMaxHealth : Id == 3 ? BaseMaxStamina : Id == 5 ? BaseMaxMana : 0;
+	}
 
 	/** Base attribute currents (StartingValue + Ranks), indexed Strength..Self order. */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 Strength = 0;
@@ -1074,9 +1082,11 @@ struct ACECLIENT_API FACEPlayerVitals
 	/** PropertyInt64.TotalExperience / AvailableExperience. */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int64 TotalExperience = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int64 AvailableExperience = 0;
-	/** PropertyInt64.AvailableLuminance / MaximumLuminance (0 when not enlightened). */
+	/** PropertyInt64.AvailableLuminance / MaximumLuminance (0 before luminance is unlocked). */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int64 AvailableLuminance = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int64 MaximumLuminance = 0;
+	/** A complete login description also establishes a zero balance when the optional quality is absent. */
+	bool bHasLuminanceBalance = false;
 
 	/** Run skill current (init + ranks + Quickness formula) — feeds prediction speed. */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 RunSkillCurrent = 0;
@@ -1106,9 +1116,10 @@ struct ACECLIENT_API FACEPlayerVitals
 	{
 		// Unbuffed retail formulas. Keep the high-water mark so Current (often full / buffed
 		// at login) never displays larger than Max — and Max stays correct after damage.
-		const int32 FormulaH = HealthStart + HealthRanks + FMath::RoundToInt(Endurance / 2.f);
-		const int32 FormulaS = StaminaStart + StaminaRanks + Endurance;
-		const int32 FormulaM = ManaStart + ManaRanks + Self;
+		const int32 FormulaH = BaseMaxHealth = HealthStart + HealthRanks + FMath::RoundToInt(Endurance / 2.f)
+			+ StatQualityInts.FindRef(379) + 2 * StatQualityInts.FindRef(390);
+		const int32 FormulaS = BaseMaxStamina = StaminaStart + StaminaRanks + Endurance;
+		const int32 FormulaM = BaseMaxMana = ManaStart + ManaRanks + Self;
 		MaxHealth = FMath::Max3(FormulaH, MaxHealth, Health);
 		MaxStamina = FMath::Max3(FormulaS, MaxStamina, Stamina);
 		MaxMana = FMath::Max3(FormulaM, MaxMana, Mana);
@@ -1298,7 +1309,14 @@ struct ACECLIENT_API FACEWorldObject
 	/** PublicWeenieDesc has HookItemTypes: this container displays a house-hook item. */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE")
 	bool bIsHouseHook = false;
+	/** Public hook compatibility and ownership, used by ItemHolder::CheckHookStatus. */
+	uint32 HookItemTypes = 0;
+	uint16 HookType = 0;
+	int32 HouseOwnerId = 0;
 	float Friction = .95f;
+	float Elasticity = .05f;
+	/** CPhysicsObj::set_elasticity limits restitution to [0, 0.1]. */
+	float GetValidElasticity() const { return FMath::IsFinite(Elasticity) ? FMath::Clamp(Elasticity, 0.f, .1f) : .05f; }
 
 	/** Retail physics/model scale is server-authored, including custom weenies. */
 	float GetValidObjectScale() const { return FMath::IsFinite(Scale) && Scale > 0.f ? Scale : 1.f; }
@@ -1326,6 +1344,8 @@ struct ACECLIENT_API FACEWorldObject
 	/** ACE Placement (RightHandCombat=1, …) — drives weapon Setup part frames when held. */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE")
 	int32 PlacementId = 0;
+	/** Full server PhysicsDesc owns animation-table selection, including zero. Local previews use setup defaults. */
+	bool bHasServerPhysicsDescription = false;
 
 	/** PropertyInt.PlacementPosition — slot order inside a pack (0..ItemsCapacity-1). */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE")
@@ -1444,6 +1464,9 @@ struct ACECLIENT_API FACEWorldObject
 	{
 		// Corpses are containers with a creature MTable, not animated chests.
 		if (IsCorpse()) return false;
+		// Authored remains can be ordinary containers, with Dead/Sleeping in
+		// Movement rather than the Corpse descriptor. Preserve that explicit pose.
+		if (ACEMotion::IsHeldRestCommand(InitialMotionCommand)) return false;
 		// Hook containers are Openable too, but display the item's own animation.
 		// Only an explicit On/Off motion may put a hooked decoration in that state.
 		if (IsDoor() || (!bIsHouseHook && IsOpenable()))
@@ -1473,10 +1496,16 @@ struct ACECLIENT_API FACEWorldObject
 			&& (ObjectDescriptionFlags & ACEObjectDescFlag::Attackable) == 0;
 	}
 	bool IsGameBoard() const { return (static_cast<uint32>(ItemType) & 0x80000000u) != 0; }
+	bool IsUnnamedDecoration() const
+	{
+		return Name.IsEmpty() && (ObjectDescriptionFlags & ACEObjectDescFlag::Stuck) != 0
+			&& !bIsPlayer && !IsAttackable() && !IsVendor() && !IsDoor() && !IsLifeStone()
+			&& (ItemType & (ACEItemType::Creature | ACEItemType::Portal)) == 0;
+	}
 	bool IsSelectableWorldObject() const
 	{
 		return Guid != 0 && bHasPosition && ContainerId == 0 && WielderId == 0 && ParentGuid == 0
-			&& !IsUiHidden()
+			&& !IsUiHidden() && !IsUnnamedDecoration()
 			&& (!bDying || IsCorpse())
 			&& (PhysicsState & (ACEPhysicsState::Missile | ACEPhysicsState::ParticleEmitter | ACEPhysicsState::NoDraw)) == 0;
 	}
@@ -1498,7 +1527,7 @@ struct ACECLIENT_API FACEWorldObject
 		{
 			return false;
 		}
-		if (IsDoor() || IsLifeStone() || IsCorpse() || IsOpenable() || IsGameBoard())
+		if (IsDoor() || IsLifeStone() || IsCorpse() || IsGameBoard())
 		{
 			return false;
 		}
@@ -1564,7 +1593,7 @@ struct ACECLIENT_API FACEWorldObject
 	}
 	/**
 	 * Client should run into Use range for these (doors, chests, loot, NPCs).
-	 * Stuck scenery (signs) and Attackable monsters are select/identify only.
+	 * Non-usable stuck scenery and non-usable attackable monsters are select/identify only.
 	 */
 	bool ShouldClientApproachForUse() const
 	{
@@ -1596,8 +1625,10 @@ struct ACECLIENT_API FACEWorldObject
 		}
 		if ((ItemType & ACEItemType::Creature) != 0)
 		{
-			// Town NPCs / quest givers are typically non-Attackable; monsters are Attackable.
-			return !IsAttackable();
+			// Attackability does not exclude Use (e.g. cow tipping). NeverWalk
+			// still sends Use, but leaves any movement decision to the server.
+			return (!IsAttackable() || ACEItemUseable::IsSourceUsable(ItemUseable))
+				&& !ACEItemUseable::HasNeverWalk(ItemUseable);
 		}
 		// Stuck signs: select-only. Stuck world objects with Usable (fountains, etc.): approach
 		// unless NeverWalk (Use in place).

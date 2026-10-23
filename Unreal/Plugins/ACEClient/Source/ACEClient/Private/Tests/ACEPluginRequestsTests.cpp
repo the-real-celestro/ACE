@@ -51,6 +51,22 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
     ON_SCOPE_EXIT { IFileManager::Get().DeleteDirectory(*ProfileRoot,false,true); };
     C->Session=MakeShared<FACESession>();auto& Session=*C->Session;
     Session.State=EACESessionState::InWorld;Session.PlayerGuid=0x50000001;
+    {
+        FACEWorldObject Door;Door.Guid=77;Door.Name=TEXT("Route door");Door.ItemUseable=32;
+        Door.ObjectDescriptionFlags=ACEObjectDescFlag::Door;Door.bHasPosition=true;
+        Session.WorldObjects.Add(Door.Guid,Door);
+        for(int32 Motion:{int32(ACEMotion::OnCommandU16),int32(ACEMotion::OffCommandU16)})
+        for(bool Passable:{false,true,false})
+        {
+            auto& Live=Session.WorldObjects[Door.Guid];Live.InitialMotionCommand=Motion;
+            Live.PhysicsState=Passable?ACEPhysicsState::Ethereal:0;
+            auto Snapshot=MakeShared<FJsonObject>();H->ExtendSnapshot(Snapshot);
+            const auto& Objects=Snapshot->GetArrayField(TEXT("route_objects"));
+            TestEqual(TEXT("Usable door is in route snapshot"),Objects.Num(),1);
+            if(Objects.Num()==1)TestEqual(TEXT("Door passage follows collision state even with stale animation"),Objects[0]->AsObject()->GetBoolField(TEXT("door_open")),Passable);
+        }
+        Session.WorldObjects.Remove(Door.Guid);
+    }
     auto ConfirmPut=[&](int32 Item,int32 Container)
     {
         FACEBinaryWriter W;W.WriteUInt32(Item);W.WriteUInt32(Container);W.WriteInt32(0);W.WriteInt32(0);
@@ -1162,6 +1178,26 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
         Ack(0x001D);TestTrue(TEXT("Unrelated rejected manual use cannot drain a successful buff acknowledgment"),H->ConfirmedBuffAckAt&&H->DeferredBuffIntent.IsValid());
         Ack(0);H->NextMaintenanceAt=FPlatformTime::Seconds()+60;H->Tick(.016f);
         TestTrue(TEXT("Deferred intent runs exactly after acknowledgment"),!H->DeferredBuffIntent&&H->Notice==TEXT("Buff pipeline complete"));
+        // Missing trailing UseDone must not silently discard the policy's next
+        // action after it has already advanced its own state machine.
+        for(bool ForceDone:{false,true})
+        {
+            P->NextAction=0;H->Execute(*P,Intent(Focus));Result(Focus);
+            auto Queued=MakeShared<FJsonObject>(*FinishNotice);
+            if(ForceDone)
+            {
+                H->ForceBuffRequest=1234;H->bForceBuffOnly=false;
+                Queued->SetStringField(TEXT("action"),TEXT("force_buff_done"));Queued->SetNumberField(TEXT("request"),1234);
+            }
+            H->Execute(*P,Queued);H->Notice.Empty();
+            TestTrue(TEXT("Status identifies missing final buff acknowledgment"),H->UCMCurrentStatus().Contains(TEXT("final buff acknowledgment")));
+            H->ConfirmedBuffAckAt=FPlatformTime::Seconds()-31;H->UpdateBuffDispatch();
+            TestTrue(TEXT("Ack timeout preserves queued action for revalidation"),H->DeferredBuffIntent.IsValid());
+            H->Tick(.016f);
+            TestFalse(TEXT("Queued action is consumed after timeout without restarting"),H->DeferredBuffIntent.IsValid());
+            if(ForceDone)TestEqual(TEXT("Timed-out final ack cannot restart a completed Force Buff cycle"),H->ForceBuffRequest,uint32(0));
+            else TestEqual(TEXT("Queued action survives missing ack"),H->Notice,FString(TEXT("Buff pipeline complete")));
+        }
         // When queue support accepts a second buff, even an early second result
         // cannot create two acknowledgment debts or complete an unrelated action.
         P->NextAction=0;H->Execute(*P,Intent(Focus));Result(Focus);H->Execute(*P,Intent(Self));
@@ -1184,13 +1220,13 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
         FACEWorldObject Enemy;Enemy.Guid=970;Enemy.Name=TEXT("Target one");Enemy.ItemType=ACEItemType::Creature;
         Enemy.ObjectDescriptionFlags=ACEObjectDescFlag::Attackable;Enemy.bHasPosition=true;Enemy.Position=Session.PlayerPosition;Enemy.Position.Location.X+=2;
         FACEWorldObject NextEnemy=Enemy;NextEnemy.Guid=971;NextEnemy.Name=TEXT("Target two");NextEnemy.Position.Location.Y+=2;
-        ON_SCOPE_EXIT{Session.WorldObjects.Remove(970);Session.WorldObjects.Remove(971);H->CombatTarget=0;H->DefeatedTargets.Empty();H->PhysicalAttackTarget=0;H->PhysicalAttackOwner.Empty();Session.SelectedObject.Guid=0;};
+        ON_SCOPE_EXIT{Session.WorldObjects.Remove(970);Session.WorldObjects.Remove(971);H->CombatTarget=0;H->DefeatedTargets.Empty();H->LastCombatDeath.Reset();H->PhysicalAttackTarget=0;H->PhysicalAttackOwner.Empty();Session.SelectedObject.Guid=0;};
         auto AttackIntent=[&](int32 Target,int32 Mode)
         {auto I=MakeShared<FJsonObject>();I->SetStringField(TEXT("action"),TEXT("attack"));I->SetStringField(TEXT("activity"),TEXT("combat"));I->SetNumberField(TEXT("target"),Target);I->SetNumberField(TEXT("mode"),Mode);return I;};
         auto AttackCount=[&](){int32 Count=0;for(const auto& Packet:Session.CachedC2SPackets){FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);if(R.CanRead(4)){const uint32 Op=R.ReadUInt32();if(Op==ACEGameAction::TargetedMeleeAttack||Op==ACEGameAction::TargetedMissileAttack)++Count;}}return Count;};
         for(int32 Mode:{2,4})
         {
-            Session.WorldObjects.Add(970,Enemy);Session.WorldObjects.Add(971,NextEnemy);H->DefeatedTargets.Empty();H->PhysicalAttackOwner.Empty();
+            Session.WorldObjects.Add(970,Enemy);Session.WorldObjects.Add(971,NextEnemy);H->DefeatedTargets.Empty();H->LastCombatDeath.Reset();H->PhysicalAttackOwner.Empty();
             Session.PendingCombatMode=0;Session.ApplyServerCombatMode(Mode);Session.bServerAttackInProgress=false;Session.LastAttackError=0x20;P->NextAction=0;H->Execute(*P,AttackIntent(970,Mode));
             const int32 Before=AttackCount();TestTrue(TEXT("Physical attack establishes a tracked target"),H->CombatTarget==970&&H->PhysicalAttackTarget==970);
             auto Changed=Session.PlayerVitals;Changed.Health=40;H->LastCombatVitals=FIntVector(-1,-1,-1);
@@ -1201,18 +1237,29 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
             TestEqual(TEXT("Identical vital updates do not continually wake policy"),P->NextAction,Throttle);
             FACEBinaryWriter Health;Health.WriteUInt32(970);Health.WriteFloat(0);FACEBinaryReader HR(Health.GetData());Session.HandleUpdateHealth(HR);
             TestTrue(TEXT("Zero-health network event bypasses remaining physical attack wait"),P->NextAction==0&&H->CombatTarget==0&&H->DefeatedTargets.Contains(970));
+            if(TestTrue(TEXT("Confirmed death retains a corpse-spawn handoff"),H->LastCombatDeath.IsValid()))
+            {
+                TestEqual(TEXT("Handoff identifies the defeated enemy"),H->LastCombatDeath->GetNumberField(TEXT("id")),970.);
+                const double DeathAt=H->LastCombatDeath->GetNumberField(TEXT("time"));
+                Session.OnObjectHealth.Broadcast(970,0);
+                TestEqual(TEXT("Repeated zero-health packets do not extend the wait"),H->LastCombatDeath->GetNumberField(TEXT("time")),DeathAt);
+            }
             H->Execute(*P,AttackIntent(971,Mode));TestEqual(TEXT("Next opponent attack is sent immediately after death"),AttackCount(),Before+1);
             auto State=H->Snapshot();bool DeadInSnapshot=false;for(const auto& V:State->GetArrayField(TEXT("targets")))DeadInSnapshot|=V->AsObject()->GetNumberField(TEXT("id"))==970;
+            TestTrue(TEXT("Policy snapshot includes confirmed death for post-combat loot"),State->HasTypedField<EJson::Object>(TEXT("combat_death")));
             TestFalse(TEXT("Dead opponent stays excluded after selection moves to next opponent"),DeadInSnapshot);
             Session.WorldObjects.Remove(971);Session.OnObjectDeleted.Broadcast(971);
             TestTrue(TEXT("Removal without health update also releases target throttle"),H->CombatTarget==0&&P->NextAction==0);
+            TestEqual(TEXT("Visibility deletion is not another confirmed kill"),H->LastCombatDeath->GetNumberField(TEXT("id")),970.);
         }
         Session.WorldObjects.Add(970,Enemy);Session.OnObjectCreated.Broadcast(Enemy);
         TestFalse(TEXT("Newly created object with reused GUID does not inherit dead filter"),H->DefeatedTargets.Contains(970));
+        TestFalse(TEXT("Reused GUID clears the old corpse-spawn handoff"),H->LastCombatDeath.IsValid());
         H->CombatTarget=970;H->PendingSpell=Focus;H->PendingSpellOwner=P->Id;H->PendingSpellAt=FPlatformTime::Seconds();P->NextAction=H->PendingSpellAt+3.5;
         const double CastingGate=P->NextAction;Session.WorldObjects[970].bDying=true;FACEObjectMotionState Death;Death.ForwardCommand=ACEMotion::Dead;
         Session.OnMotionUpdate.Broadcast(970,Death);
         TestTrue(TEXT("Death motion wakes targeting but preserves outstanding spell acknowledgment"),H->CombatTarget==0&&H->PendingSpell==Focus&&P->NextAction==CastingGate);
+        TestTrue(TEXT("Death motion also records a corpse-spawn handoff"),H->LastCombatDeath.IsValid());
         Ack(0);P->WaitAction=TEXT("equip");P->NextAction=FPlatformTime::Seconds()+2;H->PhysicalAttackOwner=P->Id;H->CombatTarget=970;
         const double EquipmentGate=P->NextAction;H->LastCombatVitals=FIntVector(-1,-1,-1);Session.OnVitalsUpdated.Broadcast(Session.PlayerVitals);
         TestEqual(TEXT("Recovery wake cannot bypass pending equipment"),P->NextAction,EquipmentGate);
@@ -1516,11 +1563,57 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
     {
         P->Running=true;const auto OriginalVM=P->VM;
         H->PendingSpell=123;H->PendingSpellOwner=P->Id;H->PendingSpellActivity=Activity;H->PendingSpellAt=FPlatformTime::Seconds()-31;
+        const uint32 BeforeSerial=H->ActionSerial;
+        H->FastCastOwner=P->Id;H->FastCastStarted=true;
         H->CheckPendingSpellTimeout();
         TestTrue(TEXT("Cast timeout retains running UCM and its policy"),P->Running&&P->VM==OriginalVM);
         TestEqual(TEXT("Timed-out cast no longer blocks decisions"),H->PendingSpell,0);
+        TestEqual(TEXT("Policy observes a completed failed attempt after timeout"),H->ActionSerial,BeforeSerial+1);
+        TestFalse(TEXT("Cast timeout releases fast-cast locomotion"),H->FastCastStarted);
+        TestEqual(TEXT("Cast timeout identifies the spell that ended"),H->LastCompletedSpell,123);
         TestTrue(TEXT("Cast timeout reports its specific activity"),P->ActivityFailure&&P->ActivityFailure->GetStringField(TEXT("activity"))==Activity);
         P->ActivityFailure.Reset();
+    }
+    {
+        const auto OriginalProfile=P->Profile,OriginalLinks=P->ProfileLinks,OriginalBaseline=P->ProfileBaseline;
+        P->Profile=MakeShared<FJsonObject>();P->ProfileLinks.Reset();P->ProfileBaseline.Reset();
+        FACEWorldObject Friend;Friend.Guid=989;Friend.Name=TEXT("Follow friend");Friend.bIsPlayer=true;Friend.bHasPosition=true;
+        Friend.ItemType=ACEItemType::Creature;Friend.Position=Session.PlayerPosition;Session.WorldObjects.Add(Friend.Guid,Friend);
+        C->SelectObject(Friend.Guid);
+        const bool FollowSaved=H->SetUCMFollowSelected(true);
+        TestTrue(*(FString(TEXT("Follow selects another player: "))+H->Notice),FollowSaved);
+        TestTrue(TEXT("Follow enables navigation"),H->IsUCMFollowEnabled());
+        P->Profile->SetBoolField(TEXT("follow_corners"),true);P->Running=true;
+        H->PendingSpell=123;H->PendingSpellOwner=P->Id;H->PendingSpellAt=FPlatformTime::Seconds();
+        for(int32 SampleIndex=0;SampleIndex<3;++SampleIndex)
+        {
+            auto Position=Friend.Position;Position.Location.X+=SampleIndex<2?SampleIndex*5:5;Position.Location.Y+=SampleIndex==2?5:0;
+            H->ObserveFollowPosition(Friend.Guid,Position);
+        }
+        TestEqual(TEXT("Follow records network footsteps during a pending cast"),H->FollowMovementSamples.Num(),3);
+        TestEqual(TEXT("Pending footsteps reach the policy snapshot"),H->Snapshot()->GetArrayField(TEXT("follow_motion")).Num(),3);
+        TestTrue(TEXT("Current status names the pending cast"),H->UCMCurrentStatus().Contains(TEXT("awaiting result")));
+        H->PendingSpell=0;H->PendingSpellOwner.Empty();
+        H->MovementOwner=P->Id;H->MoveExpires=FPlatformTime::Seconds()+10;
+        H->SetUCMFollowSelected(false);
+        TestFalse(TEXT("Stopping follow does not start an old route"),P->Profile->GetBoolField(TEXT("navigation")));
+        TestTrue(TEXT("Stopping follow releases its movement and history"),H->MovementOwner.IsEmpty()&&H->FollowMovementSamples.IsEmpty());
+        Friend.bIsPlayer=false;Session.WorldObjects[Friend.Guid]=Friend;
+        TestFalse(TEXT("Follow rejects selected non-players"),H->SetUCMFollowSelected(true));
+        P->Running=false;P->Status=TEXT("Ready");
+        auto Micro=H->MakeUCMMicroPanel();Micro->SlatePrepass();const FVector2D Before=Micro->GetDesiredSize();
+        P->Status=FString::ChrN(500,TEXT('W'));Micro->Invalidate(EInvalidateWidgetReason::Layout);Micro->SlatePrepass();
+        TestTrue(TEXT("Long live status cannot resize Micro or its drag bar"),Before.Equals(Micro->GetDesiredSize(),.01));
+        P->Status=TEXT("Following: Follow friend");
+        if(FApp::CanEverRender())
+        {
+            FWidgetRenderer Renderer(false,true);auto* Target=FWidgetRenderer::CreateTargetFor(FVector2D(260,650),TF_Bilinear,true);
+            Renderer.DrawWidget(Target,Micro,FVector2D(260,650),.016f);FlushRenderingCommands();
+            TArray<FColor> Pixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);
+            TArray64<uint8> PNG;FImageUtils::PNGCompressImageArray(260,650,Pixels,PNG);
+            FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/TEXT("UCMMicroControls.png")));Target->ReleaseResource();
+        }
+        P->Profile=OriginalProfile;P->ProfileLinks=OriginalLinks;P->ProfileBaseline=OriginalBaseline;Session.WorldObjects.Remove(Friend.Guid);
     }
     H->MovementOwner.Empty();Session.PlayerPosition=OutdoorPosition;PC->UnPossess();Pawn->Destroy();PC->Destroy();
     if(FParse::Param(FCommandLine::Get(),TEXT("WaypointRender")))

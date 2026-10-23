@@ -16,6 +16,7 @@
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Components/EditableTextBox.h"
+#include "Components/NativeWidgetHost.h"
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
 #include "Components/ScrollBox.h"
@@ -47,6 +48,8 @@
 #include "Misc/Paths.h"
 #include "Styling/CoreStyle.h"
 #include "Widgets/SWidget.h"
+#include "Widgets/SLeafWidget.h"
+#include "Rendering/DrawElements.h"
 #if PLATFORM_WINDOWS
 #include "Windows/WindowsHWrapper.h"
 #include <shobjidl.h>
@@ -60,6 +63,33 @@ namespace
 	const FLinearColor Gold(.36f, .27f, .14f, 1);
 	const FLinearColor Muted(.58f, .54f, .46f, 1);
 	const FLinearColor LobbyTextColor(.88f, .85f, .77f, 1);
+	// Draw with Slate primitives so the eye works before DAT loads and in packages.
+	class SPasswordVisibilityIcon : public SLeafWidget
+	{
+	public:
+		SLATE_BEGIN_ARGS(SPasswordVisibilityIcon) {} SLATE_ATTRIBUTE(bool, Revealed) SLATE_END_ARGS()
+		void Construct(const FArguments& Args)
+		{
+			Revealed=Args._Revealed;
+			for(int32 I=0;I<=32;++I){const float T=I/32.f;Outline.Add(FVector2D(2+20*T,10-6*FMath::Sin(PI*T)));}
+			for(int32 I=32;I>=0;--I){const float T=I/32.f;Outline.Add(FVector2D(2+20*T,10+6*FMath::Sin(PI*T)));}
+			for(int32 I=0;I<=24;++I){const float A=2*PI*I/24.f;Pupil.Add(FVector2D(12+3*FMath::Cos(A),10+3*FMath::Sin(A)));}
+		}
+		FVector2D ComputeDesiredSize(float) const override {return FVector2D(24,20);}
+		int32 OnPaint(const FPaintArgs&,const FGeometry& G,const FSlateRect&,FSlateWindowElementList& Out,int32 Layer,const FWidgetStyle& Style,bool Enabled) const override
+		{
+			const double Scale=FMath::Min(G.GetLocalSize().X/24.,G.GetLocalSize().Y/20.);
+			const auto Art=G.MakeChild(FVector2D(24,20),FSlateLayoutTransform(Scale,(G.GetLocalSize()-FVector2D(24,20)*Scale)*.5));
+			const auto Effect=ShouldBeEnabled(Enabled)?ESlateDrawEffect::None:ESlateDrawEffect::DisabledEffect;
+			const auto Color=LobbyTextColor*Style.GetColorAndOpacityTint();
+			for(const auto* Path:{&Outline,&Pupil})FSlateDrawElement::MakeLines(Out,Layer,Art.ToPaintGeometry(),*Path,Effect,Color,true,1.6f);
+			if(Revealed.Get())FSlateDrawElement::MakeLines(Out,Layer,Art.ToPaintGeometry(),{FVector2D(3,2),FVector2D(21,18)},Effect,Color,true,1.8f);
+			return Layer;
+		}
+	private:
+		TAttribute<bool> Revealed;
+		TArray<FVector2D> Outline,Pupil;
+	};
 	void ButtonStyle(UButton* Button, bool Accent)
 	{
 		const auto* Action=Cast<UACELoginActionButton>(Button);
@@ -227,12 +257,12 @@ void UACELoginWidget::EnsureDefaultLayout()
 	WebsiteButton=ActionButton(TEXT("Website"),TEXT("website")); Links->AddChildToWrapBox(WebsiteButton);
 	DiscordButton=ActionButton(TEXT("Discord"),TEXT("discord")); Links->AddChildToWrapBox(DiscordButton);
 	Links->AddChildToWrapBox(ActionButton(TEXT("Edit server"),TEXT("editserver")));
-	Links->AddChildToWrapBox(ActionButton(TEXT("Remove"),TEXT("removeserver")));
+	Links->AddChildToWrapBox(ActionButton(TEXT("Remove server"),TEXT("removeserver")));
 	AddLine(Details,Label(TEXT("Accounts"),16,true),8);
 	AccountList=WidgetTree->ConstructWidget<UScrollBox>(); AccountList->SetScrollbarThickness(FVector2D(8,8));
 	auto* AccountSlot=Details->AddChildToVerticalBox(AccountList); AccountSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); AccountSlot->SetPadding(FMargin(0,0,0,12));
 	LoginButton=ActionButton(TEXT("Launch"),TEXT("launch"),FString(),true); AddLine(Details,LoginButton,8);
-	AddLine(Details,Label(PLATFORM_LINUX ? TEXT("Account names are saved. Enter your password on the Accounts tab after restarting.") : TEXT("Accounts are saved securely on this device."),14,true),0);
+	AddLine(Details,Label(PLATFORM_LINUX ? TEXT("Account names are saved. Enter your password on the Accounts tab after restarting.") : PLATFORM_MAC ? TEXT("Accounts are saved on this Mac. Passwords are stored in your macOS Keychain.") : TEXT("Accounts are saved securely on this device."),14,true),0);
 	// Server editor: explicit save/cancel avoids sending credentials to an edited endpoint by accident.
 	UVerticalBox* Edit; Pages->AddChild(Card(Edit));
 	AddLine(Edit,Label(TEXT("Server details"),30),18);
@@ -272,7 +302,7 @@ void UACELoginWidget::EnsureDefaultLayout()
 	Row(Files,{{TEXT("Save location"),TEXT("savedat")},{TEXT("Use default"),TEXT("defaultdat")}});
 #else
 	Row(Files,{{TEXT("Save location"),TEXT("savedat")},{TEXT("Use app DAT folder"),TEXT("defaultdat")}});
-	AddLine(Files,Label(PLATFORM_LINUX ? TEXT("Enter an absolute Linux folder path. DAT filenames are case sensitive.") : TEXT("On Quest, the folder must be accessible to this app. The installer uses the app's DAT folder."),18,true),20);
+	AddLine(Files,Label(PLATFORM_LINUX ? TEXT("Enter an absolute Linux folder path. DAT filenames are case sensitive.") : PLATFORM_MAC ? TEXT("Enter an absolute folder path, for example /Users/you/Games/Asheron's Call.") : TEXT("On Quest, the folder must be accessible to this app. The installer uses the app's DAT folder."),18,true),20);
 #endif
 	FileStatus=Label(TEXT(""),20); AddLine(Files,FileStatus,24);
 	AddLine(Files,Label(TEXT("Changing an already-loaded installation takes effect after restarting. No game files are moved or copied."),18,true));
@@ -305,39 +335,44 @@ void UACELoginWidget::EnsureDefaultLayout()
 	AutoUpdateCheckBox->SetIsChecked(false);
 	AutoUpdateCheckBox->OnCheckStateChanged.AddDynamic(this,&UACELoginWidget::OnAutoUpdateChanged);
 	AddLine(Updates,AutoUpdateCheckBox,8);
-#if PLATFORM_LINUX
-	AutoUpdateCheckBox->SetVisibility(ESlateVisibility::Collapsed);
-	AddLine(Updates,Label(TEXT("Linux updates are downloaded in your browser. Close the game and extract the new archive before launching it."),16,true));
-#else
 	AddLine(Updates,Label(TEXT("Off by default. When enabled, checks every 15 minutes in the launcher and updates before you log in. Never interrupts gameplay. Cancel pauses automatic updates until the next app launch or Check now."),16,true));
-#endif
 	UpdateText=Label(TEXT("Checking for updates..."),20); AddLine(Updates,UpdateText,20);
 	UpdateProgress=WidgetTree->ConstructWidget<UProgressBar>(); UpdateProgress->SetFillColorAndOpacity(Gold);
 	auto* ProgressSize=WidgetTree->ConstructWidget<USizeBox>(); ProgressSize->SetHeightOverride(16); ProgressSize->SetContent(UpdateProgress); AddLine(Updates,ProgressSize,20);
 	auto* UpdateActions=WidgetTree->ConstructWidget<UWrapBox>(); UpdateActions->SetInnerSlotPadding(FVector2D(10,10)); AddLine(Updates,UpdateActions,20);
 	CheckUpdateButton=ActionButton(TEXT("Check now"),TEXT("checkupdate")); UpdateActions->AddChildToWrapBox(CheckUpdateButton);
-	DownloadUpdateButton=ActionButton(PLATFORM_LINUX?TEXT("Open Linux download"):TEXT("Download update"),TEXT("downloadupdate"),FString(),true); UpdateActions->AddChildToWrapBox(DownloadUpdateButton);
+	DownloadUpdateButton=ActionButton(TEXT("Download update"),TEXT("downloadupdate"),FString(),true); UpdateActions->AddChildToWrapBox(DownloadUpdateButton);
 	InstallUpdateButton=ActionButton(PLATFORM_ANDROID?TEXT("Install"):TEXT("Install and restart"),TEXT("installupdate"),FString(),true); UpdateActions->AddChildToWrapBox(InstallUpdateButton);
 	CancelUpdateButton=ActionButton(TEXT("Cancel update"),TEXT("cancelupdate")); UpdateActions->AddChildToWrapBox(CancelUpdateButton);
-	UpdateInstallHelp=Label(PLATFORM_LINUX?TEXT("Extract each release into a new folder. Saved settings and DAT files are kept separately."):ACEUpdates::InstallationNotice(PLATFORM_ANDROID),18,true); AddLine(Updates,UpdateInstallHelp);
+	UpdateInstallHelp=Label(ACEUpdates::InstallationNotice(PLATFORM_ANDROID),18,true); AddLine(Updates,UpdateInstallHelp);
 	Row(Updates,{{TEXT("Release notes"),TEXT("updatenotes")},{TEXT("Back to play"),TEXT("play")}});
 	auto* PluginPanel=WidgetTree->ConstructWidget<UACEPluginPanel>();
 	Pages->AddChild(PluginPanel);
 	UVerticalBox* Accounts; Pages->AddChild(Card(Accounts));
 	AddLine(Accounts,Label(TEXT("Manage accounts"),30));
-	AddLine(Accounts,Label(TEXT("Use New account to save another login, even with the same username. Choose an account on Play."),18,true));
+	AddLine(Accounts,Label(TEXT("Drag the grip beside an account to reorder. Use New account to add another login, even with the same username."),18,true));
 	ManagedAccountList=WidgetTree->ConstructWidget<UScrollBox>(); ManagedAccountList->SetScrollbarThickness(FVector2D(8,8));
 	auto* ManagedSlot=Accounts->AddChildToVerticalBox(ManagedAccountList); ManagedSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); ManagedSlot->SetPadding(FMargin(0,0,0,12));
 	AccountAliasBox=Field(Accounts,TEXT("Alias (optional)"),TEXT("AccountAliasBox"));
-	AccountAliasBox->SetHintText(FText::FromString(TEXT("For example: Conquest main or Coldeve crafter")));
 	auto* Credentials=WidgetTree->ConstructWidget<UHorizontalBox>(); AddLine(Accounts,Credentials,0);
 	auto* UserColumn=WidgetTree->ConstructWidget<UVerticalBox>(); auto* UserSlot=Credentials->AddChildToHorizontalBox(UserColumn);
 	UserSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); UserSlot->SetPadding(FMargin(0,0,16,0));
 	auto* PasswordColumn=WidgetTree->ConstructWidget<UVerticalBox>(); Credentials->AddChildToHorizontalBox(PasswordColumn)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 	AccountBox=Field(UserColumn,TEXT("Username"),TEXT("AccountBox"));
 	PasswordBox=Field(PasswordColumn,TEXT("Password"),TEXT("PasswordBox"),true);
+	PasswordBox->RemoveFromParent();
+	auto* PasswordRow=WidgetTree->ConstructWidget<UHorizontalBox>(); AddLine(PasswordColumn,PasswordRow);
+	PasswordRow->AddChildToHorizontalBox(PasswordBox)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+	PasswordVisibilityButton=ActionButton(TEXT(""),TEXT("togglepassword"));
+	auto EyeStyle=PasswordVisibilityButton->GetStyle(); EyeStyle.SetNormalPadding(FMargin(8)); EyeStyle.SetPressedPadding(FMargin(8)); PasswordVisibilityButton->SetStyle(EyeStyle);
+	auto* Eye=WidgetTree->ConstructWidget<UNativeWidgetHost>(); Eye->SetVisibility(ESlateVisibility::HitTestInvisible);
+	Eye->SetContent(SNew(SPasswordVisibilityIcon).Revealed_Lambda([Box=TWeakObjectPtr<UEditableTextBox>(PasswordBox)](){return Box.IsValid()&&!Box->GetIsPassword();}));
+	PasswordVisibilityButton->SetContent(Eye);
+	auto* EyeWidth=WidgetTree->ConstructWidget<USizeBox>(); EyeWidth->SetWidthOverride(44); EyeWidth->SetContent(PasswordVisibilityButton);
+	PasswordRow->AddChildToHorizontalBox(EyeWidth)->SetPadding(FMargin(8,0,0,0));
+	SetPasswordVisible(false);
 	Row(Accounts,{{TEXT("Save account"),TEXT("saveaccount")},{TEXT("New account"),TEXT("newaccount")},{TEXT("Remove account"),TEXT("removeaccount")}});
-	AddLine(Accounts,Label(PLATFORM_LINUX ? TEXT("Passwords are kept for this session only. Enter them here after restarting.") : TEXT("Accounts are saved securely on this device."),14,true));
+	AddLine(Accounts,Label(PLATFORM_LINUX ? TEXT("Passwords are kept for this session only. Enter them here after restarting.") : PLATFORM_MAC ? TEXT("Passwords are saved securely in your macOS Keychain.") : TEXT("Accounts are saved securely on this device."),14,true));
 	Row(Accounts,{{TEXT("Back to play"),TEXT("play")}});
 	// Inline destructive-action confirmation is also fully usable with VR pointers.
 	FooterSize=WidgetTree->ConstructWidget<USizeBox>(); FooterSize->SetWidthOverride(1028);
@@ -384,7 +419,7 @@ void UACELoginWidget::NativeConstruct()
 		SetStatus(FString());
 		ValidateGameFiles();
 	}
-#if PLATFORM_LINUX
+#if PLATFORM_MAC
 	Profile.bAutoUpdate=false;
 #endif
 	AutoUpdateCheckBox->SetIsChecked(Profile.bAutoUpdate);
@@ -409,6 +444,8 @@ void UACELoginWidget::NativeDestruct()
 void UACELoginWidget::NativeTick(const FGeometry& Geometry, float Dt)
 {
 	Super::NativeTick(Geometry,Dt);
+	if (bAccountOrderDirty) RefreshAccounts();
+	TickAccountDrag(Dt);
 	UpdatePollTime-=Dt;
 	if (UpdatePollTime<=0)
 	{
@@ -494,7 +531,7 @@ void UACELoginWidget::RefreshUpdateControls()
 	UpdateProgress->SetPercent(State==EACEUpdateState::Ready || State==EACEUpdateState::InstallNotice || State==EACEUpdateState::Installing?1.f:Updater->Progress());
 	CheckUpdateButton->SetIsEnabled(!Busy && State!=EACEUpdateState::Checking);
 	DownloadUpdateButton->SetVisibility(Available && !Busy && State!=EACEUpdateState::Ready?ESlateVisibility::Visible:ESlateVisibility::Collapsed);
-	InstallUpdateButton->SetVisibility(!PLATFORM_LINUX && State==EACEUpdateState::Ready?ESlateVisibility::Visible:ESlateVisibility::Collapsed);
+	InstallUpdateButton->SetVisibility(!PLATFORM_MAC && State==EACEUpdateState::Ready?ESlateVisibility::Visible:ESlateVisibility::Collapsed);
 	CancelUpdateButton->SetVisibility(State==EACEUpdateState::Downloading || State==EACEUpdateState::Verifying || State==EACEUpdateState::InstallNotice?ESlateVisibility::Visible:ESlateVisibility::Collapsed);
 	AutoUpdateCheckBox->SetIsEnabled(State!=EACEUpdateState::Installing);
 	LoginButton->SetIsEnabled(!Busy && Profile.SelectedServer()!=nullptr);
@@ -508,7 +545,7 @@ void UACELoginWidget::SaveLoginEntries()
 {
 	if (!bLoginSettingsLoaded || !bLoginEntriesDirty) return;
 	if (ACELoginSettings::Save(Profile, ProfilePath.IsEmpty()?ACELoginSettings::GetPath():ProfilePath)) bLoginEntriesDirty=false;
-	else SetStatus(TEXT("Could not save settings on this device. Check available storage."));
+	else SetStatus(PLATFORM_MAC ? TEXT("Could not save settings. Check available storage and allow Keychain access.") : TEXT("Could not save settings on this device. Check available storage."));
 }
 void UACELoginWidget::OnLoginClicked() { DoLogin(); }
 void UACELoginWidget::OnEnterWorldClicked() { DoEnterSelectedCharacter(); }
@@ -526,6 +563,7 @@ void UACELoginWidget::RefreshServers()
 
 void UACELoginWidget::SelectServer(const FString& Id)
 {
+	SetPasswordVisible(false);
 	const FString AccountId = Profile.SelectedAccountId;
 	Profile.SelectedServerId=Id; Profile.SelectedAccountId=AccountId;
 	const auto* S=Profile.SelectedServer();
@@ -548,17 +586,47 @@ void UACELoginWidget::SelectServer(const FString& Id)
 
 void UACELoginWidget::RefreshAccounts()
 {
+	bAccountOrderDirty=false;
 	for(auto* List:{AccountList.Get(),ManagedAccountList.Get()})
 	{
+		const float ScrollOffset=List->GetScrollOffset();
 		List->ClearChildren();
 		for (const auto& A:Profile.Accounts)
 		{
 			auto* Button=ActionButton(A.DisplayName(),TEXT("selectaccount"),A.Id,A.Id==Profile.SelectedAccountId);
+			Button->bAccountDragHandle=List==ManagedAccountList;
 			Button->SetToolTipText(FText::FromString(A.DisplayName()));
 			Cast<UScrollBoxSlot>(List->AddChild(Button))->SetPadding(FMargin(0,0,0,6));
 		}
 		if (!List->GetChildrenCount()) List->AddChild(Label(TEXT("Add a login on the Accounts tab."),18,true));
+		List->SetScrollOffset(ScrollOffset);
 	}
+}
+
+bool UACELoginWidget::CanReorderAccounts() const
+{
+	return Pages && Pages->GetActiveWidgetIndex()==6 && PendingRemoval.IsEmpty();
+}
+
+bool UACELoginWidget::MoveAccountInOrder(const FString& Id, const FString& TargetId, bool bAfter)
+{
+	if (!CanReorderAccounts() || Id==TargetId) return false;
+	const int32 From=Profile.Accounts.IndexOfByPredicate([&](const auto& A){return A.Id==Id;});
+	const int32 Target=Profile.Accounts.IndexOfByPredicate([&](const auto& A){return A.Id==TargetId;});
+	if (From==INDEX_NONE || Target==INDEX_NONE) return false;
+	int32 To=Target+(bAfter?1:0);
+	if (From<To) --To;
+	if (From==To) return false;
+	// Move the entire identity; usernames need not be unique. Leave selection
+	// and any unsaved form edits alone, and use the existing profile format.
+	FACELoginAccount Account=MoveTemp(Profile.Accounts[From]);
+	Profile.Accounts.RemoveAt(From);
+	Profile.Accounts.Insert(MoveTemp(Account),To);
+	bLoginEntriesDirty=true;
+	SaveLoginEntries();
+	// Rebuild both lists after the drop callback has finished using the row.
+	bAccountOrderDirty=true;
+	return true;
 }
 
 bool UACELoginWidget::StoreAccount()
@@ -596,6 +664,7 @@ void UACELoginWidget::EditServer(bool bNew)
 
 void UACELoginWidget::DoLogin()
 {
+	SetPasswordVisible(false);
 	if (Updater && Updater->IsBusy()) { SetStatus(TEXT("Finish or cancel the update before logging in.")); return; }
 	// Check both files before authenticating: the cell index is deliberately
 	// deferred, so portal readiness alone can still lead to an empty world.
@@ -697,8 +766,22 @@ bool UACELoginWidget::ValidateGameFiles()
 	return false;
 }
 
+void UACELoginWidget::SetPasswordVisible(bool bVisible)
+{
+	if(PasswordBox)PasswordBox->SetIsPassword(!bVisible);
+	if(PasswordVisibilityButton)
+	{
+		PasswordVisibilityButton->SetToolTipText(FText::FromString(bVisible?TEXT("Hide password"):TEXT("Show password")));
+		if(auto* Eye=Cast<UNativeWidgetHost>(PasswordVisibilityButton->GetContent()))
+			if(auto Icon=Eye->GetContent())Icon->Invalidate(EInvalidateWidgetReason::Paint);
+	}
+}
+
 void UACELoginWidget::RunAction(const FString& Action, const FString& Value)
 {
+	if(Action==TEXT("togglepassword")){SetPasswordVisible(PasswordBox&&PasswordBox->GetIsPassword());return;}
+	// Reveal is temporary UI state, never a saved account preference.
+	if(Action==TEXT("play")||Action==TEXT("plugins")||Action==TEXT("updates")||Action==TEXT("files")||Action==TEXT("browser")||Action==TEXT("launch")||Action==TEXT("newaccount"))SetPasswordVisible(false);
 	if (Action==TEXT("quit"))
 	{
 		SaveLoginEntries();
@@ -786,7 +869,7 @@ void UACELoginWidget::RunAction(const FString& Action, const FString& Value)
 	else if (Action==TEXT("files")) { Pages->SetActiveWidgetIndex(3); UpdateDatStatus(); }
 	else if (Action==TEXT("defaultdat"))
 	{
-#if PLATFORM_ANDROID || PLATFORM_LINUX
+#if PLATFORM_ANDROID || PLATFORM_LINUX || PLATFORM_MAC
 		DatBox->SetText(FText::FromString(FPaths::ProjectSavedDir()/TEXT("DAT")));
 #else
 		DatBox->SetText(FText::FromString(TEXT("C:/Turbine/Asheron's Call")));

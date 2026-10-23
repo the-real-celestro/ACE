@@ -111,6 +111,7 @@ public:
 
 	/** Outdoor StabList peeks (Yaraq shop facades) cast into CSM. Indoor/dungeon cells stay off. */
 	void SetSunCastShadow(bool bCast);
+	void RefreshLightingOptions();
 	/** Outdoor look-in: EnvCell PDO stays 0 (UE clamps negative). Land PDO recedes LScape. */
 	void SetLookInDepthBias(float DepthBiasCm);
 
@@ -125,6 +126,8 @@ public:
 
 	/** True after PhysicsBSP / walkable draw has been cooked for pawn collision. */
 	bool IsCollisionCooked() const { return bCollisionCooked; }
+	/** Distinguishes an unloaded room from a loaded room with no floor below a prop. */
+	static bool HasActiveCollision(UWorld* World, int32 CellId);
 
 protected:
 	/** Last applied collision state — RecreatePhysicsState is far too costly to repeat per tick. */
@@ -153,6 +156,7 @@ protected:
 	UPROPERTY()
 	TArray<TObjectPtr<AACERegionSceneryActor>> AnimatedStabs;
 	UPROPERTY() TArray<TObjectPtr<class UPointLightComponent>> DoorwayLights;
+	bool bRequestedSunCastShadow = false;
 	/** Cell-owned lifetime, independent of the room's view-dependent draw visibility. */
 	UPROPERTY(Transient) TObjectPtr<AActor> DoorwayLightActor;
 

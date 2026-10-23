@@ -12,6 +12,8 @@
 
 namespace
 {
+    FString OpacityWindow(const FString& Id)
+    {return Id==TEXT("waypoint.dungeon")?TEXT("waypoint.map"):Id;}
     FString WindowOwner(const FString& Id)
     {return Id==TEXT("ucm.log")?TEXT("ucm"):Id.StartsWith(TEXT("waypoint."))?TEXT("waypoint"):Id;}
     TSharedPtr<FJsonValue> WindowDefault(const UACEPluginSubsystem* Host,const FString& Id,const TCHAR* Key)
@@ -38,27 +40,34 @@ void UACEPluginSubsystem::SetPluginOpacityGlobal(bool Global)
 }
 float UACEPluginSubsystem::GetPluginWindowOpacity(const FString& Id) const
 {
+    const FString Window=OpacityWindow(Id);
     double Value=1.;if(Settings)Settings->TryGetNumberField(TEXT("_plugin_opacity"),Value);
     if(!Id.IsEmpty()&&!IsPluginOpacityGlobal())
     {
-        if(!(Settings&&(Settings->TryGetNumberField(TEXT("_window_opacity.")+Id,Value)
-            ||Settings->TryGetNumberField(TEXT("_window_opacity.")+WindowOwner(Id),Value))))
-            if(auto Default=WindowDefault(this,Id,TEXT("opacity")))Default->TryGetNumber(Value);
+        if(!(Settings&&(Settings->TryGetNumberField(TEXT("_window_opacity.")+Window,Value)
+            ||Settings->TryGetNumberField(TEXT("_window_opacity.")+WindowOwner(Window),Value))))
+        {
+            if(auto Default=WindowDefault(this,Window,TEXT("opacity")))Default->TryGetNumber(Value);
+            // Preserve older Waypoint profiles until a shared window preference
+            // is set. The normal and pinned maps now use the same opacity.
+            if(Window==TEXT("waypoint.map"))if(auto P=Find(TEXT("waypoint")))
+                P->Profile->TryGetNumberField(TEXT("map_opacity"),Value);
+        }
     }
     return FMath::IsFinite(Value)?float(FMath::Clamp(Value,0.,1.)):1.f;
 }
 bool UACEPluginSubsystem::HasPluginWindowOpacity(const FString& Id) const
-{return Settings&&Settings->HasTypedField<EJson::Number>(TEXT("_window_opacity.")+Id);}
+{return Settings&&Settings->HasTypedField<EJson::Number>(TEXT("_window_opacity.")+OpacityWindow(Id));}
 void UACEPluginSubsystem::SetPluginWindowOpacity(const FString& Id,float Opacity,bool Persist)
 {
     if(!FMath::IsFinite(Opacity))return;
     if(!Settings)Settings=MakeShared<FJsonObject>();
-    const FString Key=Id.IsEmpty()?TEXT("_plugin_opacity"):TEXT("_window_opacity.")+Id;
+    const FString Key=Id.IsEmpty()?TEXT("_plugin_opacity"):TEXT("_window_opacity.")+OpacityWindow(Id);
     Settings->SetNumberField(Key,FMath::Clamp(Opacity,0.f,1.f));
     if(Persist)SaveSettings();
 }
 void UACEPluginSubsystem::ResetPluginWindowOpacity(const FString& Id)
-{if(Settings&&HasPluginWindowOpacity(Id)){Settings->RemoveField(TEXT("_window_opacity.")+Id);SaveSettings();}}
+{if(Settings&&HasPluginWindowOpacity(Id)){Settings->RemoveField(TEXT("_window_opacity.")+OpacityWindow(Id));SaveSettings();}}
 bool UACEPluginSubsystem::IsPluginWindowPinned(const FString& Id) const
 {
     bool Pinned=false;if(Settings&&Settings->TryGetBoolField(TEXT("_window_pin.")+Id,Pinned))return Pinned;
@@ -92,7 +101,7 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakePluginWindowControls(const FString&
         .OnValueChanged_Lambda([H,Id](float Value){if(H.IsValid())H->SetPluginWindowOpacity(Id,FMath::RoundToInt(Value)/100.f,false);})
         .OnMouseCaptureEnd_Lambda([H]{if(H.IsValid())H->SaveSettings();})
         .OnControllerCaptureEnd_Lambda([H]{if(H.IsValid())H->SaveSettings();})
-        .ToolTipText(FText::FromString(TEXT("Fade backgrounds and borders only. Text, icons and controls remain readable.")))];
+        .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Fade backgrounds and borders only. Text, icons and controls remain readable."))))];
     Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(8,0,0,0)[SNew(SBox).WidthOverride(42).HAlign(HAlign_Right)
         [SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",14))
             .Text_Lambda([H,Id]{return FText::FromString(FString::Printf(TEXT("%d%%"),H.IsValid()?FMath::RoundToInt(H->GetPluginWindowOpacity(Id)*100):100));})]];
@@ -107,9 +116,9 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakePluginWindowControls(const FString&
         Options->AddSlot().FillWidth(1).VAlign(VAlign_Center)[SNew(SCheckBox).Tag(FName(*(TEXT("PluginPin.")+Id))).Style(&Theme->Check)
             .IsChecked_Lambda([H,Id]{return H.IsValid()&&H->IsPluginWindowPinned(Id)?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
             .OnCheckStateChanged_Lambda([H,Id](ECheckBoxState V){if(H.IsValid())H->SetPluginWindowPinned(Id,V==ECheckBoxState::Checked);})
-            .ToolTipText(FText::FromString(TEXT("Hide the window frame and lock its position. Hold Quick-show pinned windows to move or unpin.")))
+            .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Hide the window frame and lock its position. Hold Quick-show pinned windows to move or unpin."))))
             [Text(TEXT("Pin / hide frame"))]];
-        Options->AddSlot().AutoWidth()[SNew(SButton).ButtonStyle(&Theme->Button).IsFocusable(false).ContentPadding(6)
+        Options->AddSlot().AutoWidth()[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(&Theme->Button).IsFocusable(false)
             .IsEnabled_Lambda([H,Id]{return H.IsValid()&&H->HasPluginWindowOpacity(Id)&&!H->IsPluginOpacityGlobal();})
             .OnClicked_Lambda([H,Id]{if(H.IsValid())H->ResetPluginWindowOpacity(Id);return FReply::Handled();})
             [Text(TEXT("Use plugin/default"))]];

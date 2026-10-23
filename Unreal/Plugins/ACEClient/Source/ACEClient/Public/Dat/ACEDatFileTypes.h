@@ -68,6 +68,13 @@ struct FACEDatPolygon
 	TArray<uint8> NegUVIndices;
 };
 
+struct FACEDatGfxLevel
+{
+	uint32 GfxObjId = 0;
+	uint32 DrawMode = 1;
+	float MinDistance = 0, IdealDistance = 0, MaxDistance = 0;
+};
+
 struct FACEDatGfxObj
 {
 	uint32 Id = 0;
@@ -89,6 +96,7 @@ struct FACEDatGfxObj
 	/** Root DrawingBSP sphere used by retail mouse selection (not Setup collision). */
 	FSphere DrawingSphere = FSphere(FVector::ZeroVector, 0.0);
 	uint32 DIDDegrade = 0;
+	TArray<FACEDatGfxLevel> DistanceLevels;
 	uint32 DrawMode = 1; // First GfxObjInfo.DegradeMode; populated with the degrade table.
 	float MaxDegradeDistance = 100.f; // AC meters; CPhysicsPart's fallback without a degrade table.
 };
@@ -453,6 +461,7 @@ struct FACEDatMotionTable
 	uint32 DefaultStyle = 0;
 	TMap<uint32, uint32> StyleDefaults;
 	TMap<uint32, FACEDatMotionData> Cycles;
+	TMap<uint32, FACEDatMotionData> Modifiers;
 	/** Outer key = stance hash; inner key = motion command → transition anim data. */
 	TMap<uint32, TMap<uint32, FACEDatMotionData>> Links;
 };

@@ -12,6 +12,7 @@
 #include "ACEPluginSubsystem.generated.h"
 
 class FACEPluginVM;
+namespace ACEWaypoint { struct FRoutePoint; }
 namespace ACEUCMPanelPrivate { class FACEUCMImportUITest; }
 class SWidget;
 class AACEPlayerController;
@@ -31,6 +32,15 @@ struct FACEPluginChatEvent
     TSharedPtr<FJsonValue> Value;
 };
 
+struct FACEPluginChatFilter
+{
+    FString Id, Contains, Prefix, Exact, Sender;
+    int32 ChatType=INDEX_NONE;
+    uint8 Windows=0x1f;
+    bool HasSender=false, CaseSensitive=false;
+    double Expires=0;
+};
+
 struct FACEClientPlugin
 {
     TSharedPtr<FJsonObject> ProfileLinks, ProfileBaseline;
@@ -40,6 +50,12 @@ struct FACEClientPlugin
     TSharedPtr<class FACEPluginImageCache> Images;
     FString DisplayTitle() const;
     FString DisplayIcon() const;
+    FString DisplayControls() const;
+    FString DisplayStartLabel() const;
+    FString DisplayStopLabel() const;
+    bool ShowSettings() const;
+    bool ScrollPanel() const;
+    bool ShowStatus() const;
     TSharedPtr<FACEPluginVM> VM;
     TSharedPtr<FJsonObject> ActivityFailure;
     TSharedPtr<FJsonObject> CombatTransitionIntent;
@@ -61,7 +77,9 @@ struct FACEClientPlugin
     TArray<TSharedPtr<FJsonValue>> PanelRows, PluginEvents;
     TArray<FACEPluginMarker> Markers;
     uint64 ChatCursor=0;
+    TArray<FACEPluginChatFilter> ChatFilters;
     uint32 PanelRevision=0;
+    FVector2D PanelSize=FVector2D::ZeroVector;
     double NextStateSave=0, NextCommand=0;
     bool CanResumeMeta = false, ResumeMetaPending = false;
     uint32 VMSourceHash = 0, VMProfileHash = 0;
@@ -85,8 +103,10 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
     GENERATED_BODY()
     friend class FACEPluginHostTest;
     friend class FACEUIWorkloadTest;
+    friend class FACEUCMIdleWorkloadTest;
     friend class FACELedgerTest;
     friend class FACEPluginCompanionTest;
+    friend class FACEThirdEyeTest;
     friend class FACEPluginPublicAPITest;
     friend class FACEPluginEquipmentTest;
     friend class FACEPluginRequestsTest;
@@ -95,6 +115,7 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
     friend class FACEUCMRouteRejoinTest;
     friend class FACEUCMLogTest;
     friend class FACEItemToolsTest;
+    friend class FACEAutoCraftTest;
     friend class FACEUCMProfileStorageTest;
     friend class FACEUCMLootLatencyTest;
     friend class FACEPluginLootIconsTest;
@@ -104,6 +125,7 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
     friend class FACEPluginLocalServiceTest;
     friend class FACEPluginCosmeticsIntegrationTest;
     friend class FACEPluginCosmeticsTest;
+    friend class FACEActionDeckTest;
 public:
     virtual void Initialize(FSubsystemCollectionBase& Collection) override;
     virtual void Deinitialize() override;
@@ -133,6 +155,9 @@ public:
     bool ClickPluginRow(const FString& Id, const FString& RowId);
     bool ChangePluginControl(const FString& Id, const FString& ControlId, const TSharedPtr<FJsonValue>& Value);
     UFUNCTION() void ObservePluginChat(const FString& Text, const FString& Sender, int32 Type);
+    // Display-only mask: raw chat still reaches every reader and the chat log file.
+    uint8 FilterPluginChatWindows(const FString& Text, const FString& Sender, int32 Type) const;
+    bool ValidatePluginChatFilters(const TArray<TSharedPtr<FJsonValue>>& Values, TArray<FACEPluginChatFilter>& Filters, FString& Error) const;
     TSharedRef<SWidget> MakeCompanionPanel(const FString& Id);
     TArray<FACEPluginMarker> GetPluginMarkers() const;
     void ToggleUCM();
@@ -176,6 +201,7 @@ public:
     TSharedRef<SWidget> MakePanel(const FString& PluginId = FString());
     void TogglePluginWindow(const FString& Id);
     bool IsPluginWindowOpen(const FString& Id) const;
+    bool IsPointInsidePluginWindow(const FString& Id, FVector2D Absolute) const;
     bool WasPluginWindowOpen(const FString& Id) const;
     void SavePluginWindowVisibility(const FString& Id, bool Open);
     FVector2D GetPluginWindowPosition(const FString& Id, const FVector2D& Default) const;
@@ -211,6 +237,13 @@ public:
     bool SelectItemToolsObject(const FString& Key, const FString& Kind);
     bool LoadItemToolsRules(const FString& Key, const FString& Filename);
     TSharedPtr<FJsonObject> ItemToolsProgress;
+    // Built-in crafting keeps the large recipe catalog out of per-tick Lua snapshots.
+    TSharedPtr<struct FACEAutoCraftState> AutoCraft;
+    TSharedRef<SWidget> MakeAutoCraftPanel(bool bShowTitle=true);
+    void RefreshAutoCraft(bool Force=false);
+    bool StartAutoCraft();
+    void TickAutoCraft();
+    void PauseAutoCraft();
     TSharedRef<SWidget> MakeUCMLogPanel();
     const FACEUCMLog& GetUCMLog() const { return UCMLog; }
     void ClearUCMLog();
@@ -222,6 +255,7 @@ public:
     bool IsWaypointEnabled() const;
     bool IsWaypointUnlocked() const;
     FACEPosition WaypointPlayerPosition() const;
+    TArray<ACEWaypoint::FRoutePoint> GetWaypointMapRoute(bool Dungeon) const;
     bool SetWaypoint(const FString& Coordinates);
     void SetWaypoint(FVector2D Coordinates, uint32 DungeonLandblock=0);
     bool GetWaypoint(FVector2D& Coordinates, uint32& DungeonLandblock) const;
@@ -237,6 +271,8 @@ public:
     uint64 WaypointLocationsRevision=0;
     void RecordRouteAction(const FString& Type, float Charge = .5f);
     void RefreshAutomationData();
+    /** Estimated remaining duration of our confirmed harmful cast on this target. */
+    bool GetTargetEffectTimer(int32 Target,int32 Spell,double& Remaining,double& Duration) const;
     bool InventoryInteractionPending() const;
     const TMap<int32, FACEAppraisalInfo>& GetPluginAppraisals() const { return Appraisals; }
     uint64 DataRevision = 0;
@@ -265,6 +301,9 @@ public:
     bool RequestForceBuff();
     void CancelForceBuff();
     bool IsForceBuffRequested() const { return ForceBuffRequest!=0; }
+    bool SetUCMFollowSelected(bool Enabled);
+    bool IsUCMFollowEnabled() const;
+    FString UCMCurrentStatus() const;
 
     void RecordWaypoint(const FString& Id, const TSharedPtr<FJsonObject>& Details = nullptr);
     void AddBuff(const FString& Id, int32 SpellId);
@@ -339,6 +378,11 @@ private:
     bool bTrackRouteMovement=false, bRouteMovementOverflow=false;
     TArray<FACEPosition> RouteMovementSamples;
     uint32 RouteMovementTeleport=0;
+    void ObserveFollowPosition(int32 Guid,const FACEPosition& Position);
+    TArray<FACEPosition> FollowMovementSamples;
+    int32 FollowMovementTarget=0;
+    uint32 FollowMovementTeleport=0;
+    bool bFollowMovementOverflow=false;
     FACEUCMLog UCMLog;
     double NextUCMLogSave = 0;
     void FlushUCMLog();
@@ -405,18 +449,28 @@ private:
     TMap<int32, FACEAppraisalInfo> Appraisals;
     TSharedPtr<FJsonObject> CachedSpeciesNames;
     TMap<int32, double> CorpseFirstSeen;
+    struct FLootedCorpse { FACEPosition Position; double LastSeen=0; };
+    TMap<int32, FLootedCorpse> LootedCorpses;
     TMap<int32, double> AppraisalRequests;
     TArray<TSharedPtr<FJsonValue>> CachedInventory;
+    TMap<int32,int32> CachedInventoryIndices;
+    TSet<int32> DirtyInventoryAppraisals;
     uint64 InventoryRevision = MAX_uint64, InventoryAppraisalRevision = MAX_uint64;
     uint32 InventoryEligibility = 0;
     int32 DataPlayer = 0;
     FString DataServer;
     TWeakPtr<class FACESession> ObservedSession;
     FDelegateHandle UseDoneHandle;
+    FDelegateHandle SpellCastHandle;
+    int32 LastTargetEffectSpell=0,LastTargetEffectTarget=0;
+    void ObserveTargetSpellCast(int32 Spell,int32 Target);
+    void ForgetTargetEffects(int32 Target);
     FDelegateHandle TellHandle, MetaChatHandle, CombatFeedbackHandle;
-    FDelegateHandle TargetHealthHandle, TargetMotionHandle, TargetDeletedHandle, TargetCreatedHandle, CombatVitalsHandle;
+    FDelegateHandle TargetHealthHandle, TargetMotionHandle, TargetDeletedHandle, TargetCreatedHandle, CombatVitalsHandle, FollowPositionHandle;
     int32 CombatTarget=0;
     TSet<int32> DefeatedTargets;
+    TSharedPtr<FJsonObject> LastCombatDeath;
+    void RecordCombatDeath(int32 Guid);
     FIntVector LastCombatVitals=FIntVector(-1,-1,-1);
     void ObserveTargetHealth(int32 Guid,float Fraction);
     void ObserveTargetMotion(int32 Guid,const FACEObjectMotionState& Motion);

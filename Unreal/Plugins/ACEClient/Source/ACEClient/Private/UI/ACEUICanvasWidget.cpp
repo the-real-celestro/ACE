@@ -14,9 +14,51 @@
 #include "Components/CanvasPanelSlot.h"
 #include "Blueprint/WidgetTree.h"
 #include "Engine/Texture2D.h"
+#include "Engine/GameInstance.h"
+#include "Engine/GameViewportClient.h"
+#include "Widgets/SLeafWidget.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Rendering/DrawElements.h"
 #include "Styling/CoreStyle.h"
+
+/** A noninteractive viewport decorator, independent of either window stack. */
+class SACEUIDragPreview final : public SLeafWidget
+{
+public:
+    SLATE_BEGIN_ARGS(SACEUIDragPreview){} SLATE_ARGUMENT(UACEUICanvasWidget*, Source) SLATE_END_ARGS()
+    void Construct(const FArguments& Args)
+    {
+        Source=Args._Source;
+        SetVisibility(EVisibility::HitTestInvisible);
+        SetCanTick(false);
+    }
+    void SetIcon(UBorder* InIcon,FVector2D InPosition)
+    {Icon=InIcon;Position=InPosition;Invalidate(EInvalidateWidgetReason::Paint);}
+    bool Shows(const UBorder* InIcon) const {return Icon.Get()==InIcon;}
+    virtual FVector2D ComputeDesiredSize(float) const override {return FVector2D::ZeroVector;}
+    virtual int32 OnPaint(const FPaintArgs&,const FGeometry& Geometry,const FSlateRect&,
+        FSlateWindowElementList& Out,int32 Layer,const FWidgetStyle& Style,bool) const override
+    {
+        if(!Source.IsValid()||!Source->IsVisible()||!Icon.IsValid())return Layer;
+        // The brush owner need not have a Slate widget when it is drawn here.
+        // UWidget::IsVisible() returns false for such unparented brush owners.
+        const auto Visibility=Icon->GetVisibility();
+        if(Visibility==ESlateVisibility::Hidden||Visibility==ESlateVisibility::Collapsed)return Layer;
+        // Convert through desktop coordinates so UI/viewport DPI and window
+        // offsets cannot separate the ghost from the actual drop position.
+        const auto& From=Source->GetCachedGeometry();
+        const FVector2D TopLeft=Geometry.AbsoluteToLocal(From.LocalToAbsolute(Position-FVector2D(16,16)));
+        const FVector2D BottomRight=Geometry.AbsoluteToLocal(From.LocalToAbsolute(Position+FVector2D(16,16)));
+        const auto Paint=Geometry.MakeChild(BottomRight-TopLeft,FSlateLayoutTransform(TopLeft)).ToPaintGeometry();
+        FSlateDrawElement::MakeBox(Out,Layer,Paint,&Icon->Background,ESlateDrawEffect::None,
+            Icon->GetBrushColor()*Icon->Background.GetTint(Style)*Style.GetColorAndOpacityTint());
+        return Layer;
+    }
+private:
+    TWeakObjectPtr<UACEUICanvasWidget> Source;
+    TWeakObjectPtr<UBorder> Icon;
+    FVector2D Position=FVector2D::ZeroVector;
+};
 
 namespace
 {
@@ -84,16 +126,18 @@ namespace
 void UACEUICanvasWidget::InitializeCanvas(UACEUIElementManager* InManager)
 {
 	Manager = InManager;
+	if (Manager) Manager->SetResourceResolver(ResourceResolver);
 }
 
 void UACEUICanvasWidget::SetResourceResolver(UACEUIResourceResolver* InResolver)
 {
 	ResourceResolver = InResolver;
+	if (Manager) Manager->SetResourceResolver(ResourceResolver);
 }
 
 void UACEUICanvasWidget::SetGameplayBinder(UACEUIGameplayBinder* InBinder)
 {
-	if (GameplayBinder != InBinder) LastGameplayTickFrame = MAX_uint64;
+	if (GameplayBinder != InBinder) LastGameplayTickFrame = LastDesktopHUDTickFrame = MAX_uint64;
 	GameplayBinder = InBinder;
 }
 
@@ -101,6 +145,51 @@ void UACEUICanvasWidget::SetCharSelectBinder(UACEUICharSelectBinder* InBinder)
 {
 	CharSelectBinder = InBinder;
 	SetIsFocusable(CharGenBinder != nullptr || CharSelectBinder != nullptr);
+}
+
+void UACEUICanvasWidget::ShowDragIcon(UBorder* Icon,FVector2D CanvasLocal)
+{
+    if(!Icon)return;
+    const auto* PC=Cast<AACEPlayerController>(GetOwningPlayer());
+    auto* Viewport=PC&&!PC->IsVRActive()&&PC->GetGameInstance()
+        ?PC->GetGameInstance()->GetGameViewportClient():nullptr;
+    if(Viewport)
+    {
+        if(DragViewport.Get()!=Viewport)HideDragIcon();
+        if(!DesktopDragPreview)
+        {
+            DesktopDragPreview=SNew(SACEUIDragPreview).Source(this);
+            DragViewport=Viewport;
+            // Plugin windows use viewport order 1500. A canvas-local order,
+            // however large, cannot paint above that separate viewport layer.
+            Viewport->AddViewportWidgetContent(DesktopDragPreview.ToSharedRef(),1600);
+        }
+        Icon->RemoveFromParent(); // Only one copy; translucent previews must not double up.
+        DesktopDragPreview->SetIcon(Icon,CanvasLocal);
+        return;
+    }
+    HideDragIcon();
+    if(!ElementLayer)return;
+    if(Icon->GetParent()!=ElementLayer)ElementLayer->AddChild(Icon);
+    if(auto* DragSlot=Cast<UCanvasPanelSlot>(Icon->Slot))
+    {
+        DragSlot->SetAnchors(FAnchors(0,0));DragSlot->SetAutoSize(false);
+        DragSlot->SetPosition(CanvasLocal-FVector2D(16,16));DragSlot->SetSize(FVector2D(32,32));
+        SetOverlayOrder(Icon,nullptr,250000);
+    }
+}
+
+void UACEUICanvasWidget::HideDragIcon(const UBorder* Icon)
+{
+    if(!DesktopDragPreview||(Icon&&!DesktopDragPreview->Shows(Icon)))return;
+    if(DragViewport.IsValid())DragViewport->RemoveViewportWidgetContent(DesktopDragPreview.ToSharedRef());
+    DesktopDragPreview.Reset();DragViewport.Reset();
+}
+
+void UACEUICanvasWidget::NativeDestruct()
+{
+    HideDragIcon();
+    Super::NativeDestruct();
 }
 
 TSharedRef<SWidget> UACEUICanvasWidget::RebuildWidget()
@@ -154,12 +243,24 @@ void UACEUICanvasWidget::NativeConstruct()
 	SyncElementWidgets();
 }
 
-void UACEUICanvasWidget::TickGameplayState()
+void UACEUICanvasWidget::TickGameplayState(bool bRefreshDesktopHUD)
 {
-	if (!GameplayBinder || LastGameplayTickFrame == GFrameCounter) return;
+	if (!GameplayBinder) return;
+	if (LastGameplayTickFrame == GFrameCounter)
+	{
+		// A menu can become visible after VR already serviced gameplay this frame.
+		// Catch its presentation up before drawing without replaying gameplay work.
+		if (bRefreshDesktopHUD && LastDesktopHUDTickFrame != GFrameCounter)
+		{
+			LastDesktopHUDTickFrame = GFrameCounter;
+			GameplayBinder->RefreshDesktopHUD();
+		}
+		return;
+	}
 	// Either callback may run first. Mark before refreshing to cover reentry as well.
 	LastGameplayTickFrame = GFrameCounter;
-	GameplayBinder->TickRefresh();
+	if (bRefreshDesktopHUD) LastDesktopHUDTickFrame = GFrameCounter;
+	GameplayBinder->TickRefresh(bRefreshDesktopHUD);
 }
 
 void UACEUICanvasWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
@@ -679,6 +780,10 @@ void UACEUICanvasWidget::SyncElementRecursive(
 		DrawH = VisY1 - VisY0;
 
 		UsedIds.Add(Element->InstanceId);
+		// Chat controls overlap selectable text in retail. Keep their DAT art
+		// and hit surface above the generated log, within the owning window.
+		const bool bChatControl = Element->ElementName == TEXT("MaximizeButton")
+			|| Element->ElementName == TEXT("ChatLogNewNonVisibleTextIndicator");
 
 		UBorder* Border = ImageWidgets.FindRef(Element->InstanceId);
 		if (!Border)
@@ -686,7 +791,7 @@ void UACEUICanvasWidget::SyncElementRecursive(
 			Border = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
 			Border->SetPadding(FMargin(0.f));
 			UCanvasPanel* ClipPanel = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass());
-			ClipPanel->SetVisibility(ESlateVisibility::HitTestInvisible);
+			ClipPanel->SetVisibility(bChatControl ? ESlateVisibility::SelfHitTestInvisible : ESlateVisibility::HitTestInvisible);
 			ClipPanel->SetClipping(EWidgetClipping::ClipToBoundsAlways);
 			ElementLayer->AddChild(ClipPanel);
 			ClipPanel->AddChild(Border);
@@ -704,7 +809,7 @@ void UACEUICanvasWidget::SyncElementRecursive(
 			for (auto Parent=Element->Parent.Pin(); Parent; Parent=Parent->Parent.Pin())
 				Tint.A *= Parent->ImageOpacity;
 		// Sibling ZLevel is already sorted; adding it again breaks parent/child paint order.
-		const int32 PaintZ = InOutZOrder;
+		const int32 PaintZ = bChatControl ? WindowPaintBase(RetailWindow(Element)) + WindowContentOffset + 100540 : InOutZOrder;
 
 		// UIRegion::SetImageByDID maps drawMode 1/2/3 to normal/3-alpha/4-alpha
 		// blending, not stretch modes. Graphic::Draw repeats native-size pixels
@@ -735,7 +840,7 @@ void UACEUICanvasWidget::SyncElementRecursive(
 			TileSize = FVector2D(TexW, TexH);
 		}
 		ApplyPaintState(Border, Element->InstanceId, Tex, Tint, DrawX, DrawY, DrawW, DrawH, PaintZ,
-			ESlateVisibility::HitTestInvisible,
+			bChatControl ? ESlateVisibility::Visible : ESlateVisibility::HitTestInvisible,
 			TileType, TileSize, FIntRect(ElX0, ElY0, ElX1, ElY1));
 
 		++InOutZOrder;
@@ -995,7 +1100,7 @@ FReply UACEUICanvasWidget::NativeOnMouseButtonUp(const FGeometry& InGeometry, co
 	const FVector2D ViewportSize = InGeometry.GetLocalSize();
 	if (Manager)
 	{
-		Manager->NotifyMouseUp(Local, ViewportSize, InMouseEvent.GetEffectingButton(), CharGenBinder != nullptr);
+		Manager->NotifyMouseUp(Local, ViewportSize, InMouseEvent.GetEffectingButton(), CharGenBinder != nullptr || CharSelectBinder != nullptr);
 		if (TakeWidget()->HasMouseCaptureByUser(InMouseEvent.GetUserIndex(), InMouseEvent.GetPointerIndex()))
 		{
 			return FReply::Handled().ReleaseMouseCapture();

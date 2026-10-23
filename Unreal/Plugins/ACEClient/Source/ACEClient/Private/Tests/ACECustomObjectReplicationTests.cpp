@@ -2,7 +2,9 @@
 #include "Misc/AutomationTest.h"
 #include "ACESession.h"
 #include "ACEOpcodes.h"
+#include "Protocol/ACEObjectCreateParser.h"
 #include "UI/ACEAppraisalUsage.h"
+#include "ACEInventoryRules.h"
 
 namespace
 {
@@ -18,10 +20,16 @@ struct FObjectPacket
 	int32 Container = 0;
 	int32 Placement = 0;
 	float Scale = 1.f;
+	TOptional<float> Elasticity;
 	float X = 10.f;
 	bool bPosition = true;
 	float Workmanship = -1.f;
 	bool HouseHook = false;
+	uint16 HookType = 0;
+	uint32 HookItems = 0;
+	uint32 HouseOwner = 0;
+	TArray<uint8> Movement;
+	int32 MotionTable = 0;
 };
 
 void WriteAppearance(FACEBinaryWriter& W, uint16 Part)
@@ -35,45 +43,128 @@ TArray<uint8> ObjectPacket(const FObjectPacket& P, uint32 Opcode = ACEOpcode::Ob
 	FACEBinaryWriter W;
 	W.WriteUInt32(Opcode); W.WriteUInt32(P.Guid);
 	WriteAppearance(W, P.Part);
-	W.WriteUInt32(0x020081u | (P.bPosition ? 0x8000u : 0u)); // Setup, Scale, Placement, optional Position
-	W.WriteUInt32(P.PhysicsState); W.WriteUInt32(P.Placement);
+	W.WriteUInt32(0x81u | (P.Movement.IsEmpty() ? 0x20000u : 0x10000u)
+		| (P.bPosition ? 0x8000u : 0u) | (P.MotionTable ? 2u : 0u) | (P.Elasticity.IsSet() ? 0x200u : 0u));
+	W.WriteUInt32(P.PhysicsState);
+	if (P.Movement.IsEmpty()) W.WriteUInt32(P.Placement);
+	else
+	{
+		W.WriteUInt32(P.Movement.Num());
+		for (uint8 Byte : P.Movement) W.WriteUInt8(Byte);
+		W.WriteUInt32(0); // IsAutonomous
+	}
 	if (P.bPosition)
 	{
 		W.WriteUInt32(0x7D640014u);
 		W.WriteFloat(P.X); W.WriteFloat(20.f); W.WriteFloat(30.f);
 		W.WriteFloat(1.f); W.WriteFloat(0.f); W.WriteFloat(0.f); W.WriteFloat(0.f);
 	}
+	if (P.MotionTable) W.WriteUInt32(P.MotionTable);
 	W.WriteUInt32(P.Setup); W.WriteFloat(P.Scale);
+	if (P.Elasticity.IsSet()) W.WriteFloat(P.Elasticity.GetValue());
 	for (int32 I = 0; I < ACEPhysicsTimeStamp::Count; ++I)
 		W.WriteUInt16(I == ACEPhysicsTimeStamp::Instance ? P.Instance : P.Sequence);
 	W.Align();
 	W.WriteUInt32((P.Container ? 0x4000u : 0u) | (P.Workmanship>=0 ? 0x01000000u : 0u)
-		| (P.HouseHook ? 0x20000000u : 0u));
+		| (P.HouseHook ? 0x20000000u : 0u) | (P.HookType ? 0x10000000u : 0u)
+		| (P.HouseOwner ? 0x02000000u : 0u));
 	W.WriteString16L(TEXT("Server-authored object"));
 	W.WriteUInt16(1); W.WriteUInt16(1); // WCID and icon have packed known type prefixes.
 	W.WriteUInt32(ACEItemType::Misc); W.WriteUInt32(P.DescriptionFlags); W.Align();
 	if (P.Container) W.WriteUInt32(P.Container);
 	if (P.Workmanship>=0) W.WriteFloat(P.Workmanship);
-	if (P.HouseHook) W.WriteUInt32(0xFFFFFFFFu);
+	if (P.HouseOwner) W.WriteUInt32(P.HouseOwner);
+	if (P.HouseHook) W.WriteUInt32(P.HookItems);
+	if (P.HookType) W.WriteUInt16(P.HookType);
 	W.Align();
 	return W.GetData();
 }
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEInitialRestingMotionTest, "ACE.RetailParity.InitialRestingMotion",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FACEInitialRestingMotionTest::RunTest(const FString&)
+{
+	for (uint16 Command : {ACEMotion::DeadCommandU16, ACEMotion::SleepingCommandU16, ACEMotion::SittingCommandU16})
+	{
+		FObjectPacket P; P.MotionTable=0x09000001;
+		P.DescriptionFlags=ACEObjectDescFlag::Stuck|ACEObjectDescFlag::UiHidden;
+		FACEBinaryWriter M;
+		M.WriteUInt8(0); M.WriteUInt8(0); M.WriteUInt16(0x3D);
+		M.WriteUInt32(0x7F | (1u<<7)); // all optional fields, one queued action
+		M.WriteUInt16(0x3D); M.WriteUInt16(3); M.WriteUInt16(0); M.WriteUInt16(0);
+		M.WriteFloat(1); M.WriteFloat(1); M.WriteFloat(1);
+		M.WriteUInt16(Command); M.WriteUInt16(1); M.WriteFloat(1); M.Align();
+		P.Movement=M.GetData();
+		FACESession Session; Session.State=EACESessionState::InWorld;
+		Session.HandleGameMessage(ObjectPacket(P));
+		const auto* Object=Session.WorldObjects.Find(P.Guid);
+		if (!TestNotNull(TEXT("Queued rest packet creates a world object"),Object)) continue;
+		TestEqual(TEXT("Initial queued pose survives Ready forward command"),Object->InitialMotionCommand,int32(Command));
+		TestEqual(TEXT("Movement parsing retains following motion table"),Object->MotionTableId,P.MotionTable);
+		TestEqual(TEXT("Movement parsing retains following position"),Object->Position.Location.X,double(P.X));
+		TestTrue(TEXT("Named decoration keeps server UIHidden"),Object->IsUiHidden());
+		TestFalse(TEXT("Named decoration is excluded from keyboard selection"),Object->IsSelectableWorldObject());
+		Session.SelectObject(P.Guid);
+		TestFalse(TEXT("Named decoration is rejected by direct selection"),Session.SelectedObject.bValid);
+		// Truncate inside the action. Physics and PublicWeenieDesc bytes after the
+		// declared block must not be consumed to complete the missing command.
+		P.Movement.SetNum(P.Movement.Num()-4);
+		const auto Bytes=ObjectPacket(P);
+		FACEBinaryReader R(Bytes); R.ReadUInt32(); FACEDecodedObject Decoded;
+		TestFalse(TEXT("Truncated motion cannot borrow bytes from the physics description"),FACEObjectCreateParser::Parse(R,Decoded));
+	}
+	return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACECustomObjectReplicationTest, "ACE.RetailParity.CustomObjectReplication",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACECustomObjectReplicationTest::RunTest(const FString&)
 {
+	// PhysicsDesc elasticity is optional; retail defaults to .05 and clamps
+	// supplied values to [0, .1]. Test the real create/update wire path.
+	{
+		FACESession PhysicsSession; FObjectPacket P;
+		PhysicsSession.HandleGameMessage(ObjectPacket(P));
+		TestEqual(TEXT("Omitted elasticity retains retail default"),PhysicsSession.WorldObjects[P.Guid].Elasticity,.05f);
+		for (float Value : {0.f,.08f,-1.f,2.f})
+		{
+			P.Elasticity=Value;
+			PhysicsSession.HandleGameMessage(ObjectPacket(P,ACEOpcode::UpdateObject));
+			TestEqual(TEXT("Object replacement uses server restitution within retail bounds"),
+				PhysicsSession.WorldObjects[P.Guid].GetValidElasticity(),FMath::Clamp(Value,0.f,.1f));
+		}
+		P.Elasticity=.08f;
+		PhysicsSession.HandleGameMessage(ObjectPacket(P));
+		TestEqual(TEXT("Duplicate create cannot overwrite existing physics constants"),PhysicsSession.WorldObjects[P.Guid].Elasticity,.1f);
+	}
 	{
 		FACESession HookSession;
 		FObjectPacket Hook; Hook.HouseHook=true; Hook.Setup=0x02001632; Hook.Placement=103;
+		Hook.HookType=2; Hook.HookItems=ACEItemType::Misc; Hook.HouseOwner=0x5000123;
 		Hook.DescriptionFlags=ACEObjectDescFlag::Openable;
 		HookSession.HandleGameMessage(ObjectPacket(Hook));
 		TestTrue(TEXT("PublicWeenieDesc retains house-hook identity"),HookSession.WorldObjects[Hook.Guid].bIsHouseHook);
 		TestFalse(TEXT("Openable hook does not imply a closed chest animation"),HookSession.WorldObjects[Hook.Guid].UsesOnOffMotion());
-		Hook.HouseHook=false;
+		const auto& Container=HookSession.WorldObjects[Hook.Guid];
+		TestEqual(TEXT("Hook type survives the descriptor"),Container.HookType,Hook.HookType);
+		TestEqual(TEXT("Hook item mask survives the descriptor"),Container.HookItemTypes,Hook.HookItems);
+		TestEqual(TEXT("Hook owner survives the descriptor"),uint32(Container.HouseOwnerId),Hook.HouseOwner);
+		FACEWorldObject Item; Item.ItemType=ACEItemType::Misc; Item.HookType=2;
+		TestTrue(TEXT("Compatible owned hook accepts item"),ACEInventoryRules::CheckHookStatus(Item,Container));
+		Item.HookType=1;
+		TestFalse(TEXT("Wrong hook orientation rejects item"),ACEInventoryRules::CheckHookStatus(Item,Container));
+		Item.HookType=2;Item.ItemType=ACEItemType::Container;
+		TestFalse(TEXT("Wrong item type rejects item"),ACEInventoryRules::CheckHookStatus(Item,Container));
+		Item.ItemType=ACEItemType::Misc;
+		FACEWorldObject Unowned=Container;Unowned.HouseOwnerId=0;
+		TestFalse(TEXT("Unowned house rejects hook item"),ACEInventoryRules::CheckHookStatus(Item,Unowned));
+		Hook.HouseHook=false;Hook.HookType=0;Hook.HouseOwner=0;
 		HookSession.HandleGameMessage(ObjectPacket(Hook,ACEOpcode::UpdateObject));
 		TestFalse(TEXT("Replacement descriptor clears previous hook identity"),HookSession.WorldObjects[Hook.Guid].bIsHouseHook);
+		TestEqual(TEXT("Replacement clears stale hook type"),HookSession.WorldObjects[Hook.Guid].HookType,uint16(0));
+		TestEqual(TEXT("Replacement clears stale hook item mask"),HookSession.WorldObjects[Hook.Guid].HookItemTypes,0u);
+		TestEqual(TEXT("Replacement clears stale house owner"),HookSession.WorldObjects[Hook.Guid].HouseOwnerId,0);
 		TestTrue(TEXT("Ordinary openable containers retain chest animation"),HookSession.WorldObjects[Hook.Guid].UsesOnOffMotion());
 	}
 	// ACSmartBox queues F74C for absent objects and newer incarnations, then
@@ -337,6 +428,19 @@ bool FACECustomObjectReplicationTest::RunTest(const FString&)
 	TestEqual(TEXT("Recreated world placement supersedes retained inventory ownership"), Session.WorldObjects[P.Guid].ContainerId, 0);
 
 	// Custom scenery can be physically visible while excluded from the UI.
+	{
+		FACEWorldObject Remains;Remains.Guid=1000;Remains.bHasPosition=true;Remains.ItemType=ACEItemType::Container;
+		Remains.ObjectDescriptionFlags=ACEObjectDescFlag::Stuck|ACEObjectDescFlag::Openable;
+		Remains.InitialMotionCommand=ACEMotion::Dead;Remains.MotionTableId=0x09000001;
+		TestFalse(TEXT("An explicit remains pose is not replaced by chest Off"),Remains.UsesOnOffMotion());
+		TestFalse(TEXT("Nameless stuck scenery has no world UI selection"),Remains.IsSelectableWorldObject());
+		Remains.Name=TEXT("Quest remains");
+		TestTrue(TEXT("Named interactive remains stay selectable"),Remains.IsSelectableWorldObject());
+		Remains.ObjectDescriptionFlags=ACEObjectDescFlag::Openable;Remains.ItemType=ACEItemType::Container;
+		TestTrue(TEXT("An openable dropped backpack can be picked up"),Remains.IsWorldLootable());
+		Remains.ObjectDescriptionFlags|=ACEObjectDescFlag::Stuck;
+		TestFalse(TEXT("A fixed chest is still not portable"),Remains.IsWorldLootable());
+	}
 	Session.ClearWorldState(); P = FObjectPacket();
 	P.DescriptionFlags = ACEObjectDescFlag::UiHidden; Create();
 	TestTrue(TEXT("Create preserves server UIHidden flag"), Session.WorldObjects[P.Guid].IsUiHidden());

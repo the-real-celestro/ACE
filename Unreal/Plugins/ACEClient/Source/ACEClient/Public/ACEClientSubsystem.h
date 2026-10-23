@@ -66,8 +66,10 @@ class ACECLIENT_API UACEClientSubsystem : public UGameInstanceSubsystem, public 
 	friend class FACEPluginRequestsTest;
 	friend class FACEUCMLootLatencyTest;
     friend class FACEPluginCompanionTest;
+    friend class FACEThirdEyeTest;
     friend class FACEPluginPublicAPITest;
 	friend class FACEItemToolsTest;
+    friend class FACEAutoCraftTest;
     friend class FACEPluginRampRouteTest;
 	GENERATED_BODY()
 	friend class FACEVRRenderReplicationTest;
@@ -78,6 +80,7 @@ class ACECLIENT_API UACEClientSubsystem : public UGameInstanceSubsystem, public 
 	friend class FACEBarberTest;
 	friend class FACEItemPresentationTest;
 	friend class FACESelectionToolbarTest;
+    friend class FACEActionDeckTest;
 	friend class FACEChatParityTest;
 	friend class FACEUILayoutCommandsTest;
 	friend class FACEUIInteractionParityTest;
@@ -386,6 +389,9 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "ACE|Inventory")
 	bool IsUseBusy() const;
+
+	/** The world view is in a portal transition; interface browsing remains available. */
+	bool IsInPortalSpace() const;
 
 	/** Drag & drop: equip an item onto the paper doll (EquipMask location). */
 	UFUNCTION(BlueprintCallable, Category = "ACE|Inventory")

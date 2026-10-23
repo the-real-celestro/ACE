@@ -185,7 +185,7 @@ bool UACEPluginSubsystem::ExecuteItemTools(FACEClientPlugin& P,const TSharedPtr<
     if(RawAmount<1||RawAmount>100000||FMath::FloorToDouble(RawAmount)!=RawAmount)return Fail(TEXT("Invalid transfer quantity."));
     const int32 Amount=int32(RawAmount);const int32 Vendor=C->GetOpenVendorGuid();
     if(Action==TEXT("it_refresh_chest"))
-    {if(!Nearby()||!Target.IsOpenable())return Fail(TEXT("Chest is no longer available."));Appraisals.Remove(TargetId);Session->SendIdentifyObject(TargetId);P.NextAction=FPlatformTime::Seconds()+1;return true;}
+    {if(!Nearby()||!Target.IsOpenable())return Fail(TEXT("Chest is no longer available."));Appraisals.Remove(TargetId);C->RequestBackgroundAppraisal(TargetId);P.NextAction=FPlatformTime::Seconds()+1;return true;}
     if(Action==TEXT("it_close"))
     {if(C->GetOpenExternalContainerGuid()==TargetId)C->SendNoLongerViewingContents(TargetId);return true;}
     if(Action==TEXT("it_give"))
@@ -198,7 +198,8 @@ bool UACEPluginSubsystem::ExecuteItemTools(FACEClientPlugin& P,const TSharedPtr<
     {
         if(!Vendor||Vendor!=Guid(I,TEXT("vendor")))return Fail(TEXT("Vendor changed; purchase stopped."));
         const auto Stock=C->GetVendorMerchandise();const auto* V=Stock.FindByPredicate([&](const auto& O){return O.Guid==Id;});
-        if(!V||Amount>ACEInventoryRules::VendorPurchaseLimit(*V)||ACEVendorPricing::VendorSellCost(*V,Amount,C->GetVendorSellRate())>uint32(FMath::Max(0,Session->GetVendorCurrencyCount())))return Fail(TEXT("Vendor stock or currency changed; purchase stopped."));
+        bool ServerBank=false;P.Profile->TryGetBoolField(TEXT("server_bank"),ServerBank);
+        if(!V||Amount>ACEInventoryRules::VendorPurchaseLimit(*V)||(!ServerBank&&ACEVendorPricing::VendorSellCost(*V,Amount,C->GetVendorSellRate())>uint32(FMath::Max(0,Session->GetVendorCurrencyCount()))))return Fail(TEXT("Vendor stock or currency changed; purchase stopped."));
         if(PurchaseRoom(C,*V)<Amount)return Fail(TEXT("Inventory space changed; purchase stopped."));
         C->SendBuyItems(Vendor,{{Amount,Id}});
     }

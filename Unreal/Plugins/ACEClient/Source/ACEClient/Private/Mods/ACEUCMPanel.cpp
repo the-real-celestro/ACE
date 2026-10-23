@@ -38,28 +38,33 @@
 
 namespace ACEUCMPanelPrivate
 {
-    const FLinearColor Bg(.025f,.016f,.008f),Card(.012f,.009f,.004f),Ink(.94f,.9f,.8f),Muted(.65f,.59f,.45f),Accent(1,.76f,.25f);
+    const FLinearColor Bg(.025f,.016f,.008f),Card(.012f,.009f,.004f),Ink(1.f,.98f,.92f),Muted(.86f,.83f,.75f),Accent(1,.76f,.25f);
     const FSlateBrush* White(){return FCoreStyle::Get().GetBrush("WhiteBrush");}
     const FButtonStyle& Style() {return FACEPluginStyle::Current()->Button;}
     const FSliderStyle& SliderStyle() {return FACEPluginStyle::Current()->Slider;}
-    TSharedRef<STextBlock> Text(const FString& S,int Size=16,FLinearColor Color=Ink)
-    {return SNew(SACEPluginText).Text(FText::FromString(S)).Font(FCoreStyle::GetDefaultFontStyle("Regular",Size)).ColorAndOpacity(Color).AutoWrapText(true);}
+    TSharedRef<STextBlock> Text(const FString& S,int Size=16,FLinearColor Color=Ink,bool Wrap=true)
+    {return SNew(SACEPluginText).Text(FText::FromString(S)).Font(FACEPluginStyle::NativeFont("Regular",Size)).ColorAndOpacity(Color).AutoWrapText(Wrap);}
     TSharedRef<STextBlock> LiveText(TFunction<FString()> Value)
-    {return SNew(SACEPluginText).Text_Lambda([Value](){return FText::FromString(Value());}).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).ColorAndOpacity(Ink).OverflowPolicy(ETextOverflowPolicy::Ellipsis);}
+    {return SNew(SACEPluginText).Text_Lambda([Value](){return FText::FromString(Value());}).Font(FACEPluginStyle::NativeFont("Regular",16)).ColorAndOpacity(Ink).OverflowPolicy(ETextOverflowPolicy::Ellipsis);}
     TSharedRef<SWidget> ChoiceButton(const FString& Caption,TFunction<bool()> Selected,TFunction<void()> Action)
-    {return SNew(SButton).Tag(FName(*(TEXT("UCMChoice.")+Caption))).ButtonStyle(&Style()).IsFocusable(false).ContentPadding(FMargin(10,9)).ToolTipText(FText::FromString(Caption)).OnClicked_Lambda([Action](){Action();return FReply::Handled();})
-        [SNew(SHorizontalBox)+SHorizontalBox::Slot().AutoWidth()[SNew(SBox).WidthOverride(14)
+    {return SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).Tag(FName(*(TEXT("UCMChoice.")+Caption))).ButtonStyle(&Style()).IsFocusable(false).ToolTip(FACEPluginStyle::Tooltip(FText::FromString(Caption))).OnClicked_Lambda([Action](){Action();return FReply::Handled();})
+        [SNew(SHorizontalBox)+SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(SBox).WidthOverride(14)
             [SNew(SACEPluginText).Text(FText::FromString(TEXT("•"))).ColorAndOpacity(Accent)
                 .Visibility_Lambda([Selected](){return Selected()?EVisibility::HitTestInvisible:EVisibility::Hidden;})]]
-        +SHorizontalBox::Slot().FillWidth(1)[SNew(SACEPluginText).Text(FText::FromString(Caption)).OverflowPolicy(ETextOverflowPolicy::Ellipsis)
-            .Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).ColorAndOpacity(Ink)]];}
+        +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[SNew(SACEPluginText).Text(FText::FromString(Caption)).OverflowPolicy(ETextOverflowPolicy::Ellipsis)
+            .Font(FACEPluginStyle::NativeFont("Regular",16)).ColorAndOpacity(Ink)]
+        +SHorizontalBox::Slot().AutoWidth()[SNew(SBox).WidthOverride(14)]];}
     TSharedRef<SWidget> Button(const FString& Caption,TFunction<void()> Action)
     {const bool Selected=Caption.EndsWith(TEXT(" •"))||Caption.EndsWith(TEXT(" *"));
      return ChoiceButton(Selected?Caption.LeftChop(2):Caption,[Selected](){return Selected;},MoveTemp(Action));}
+    TSharedRef<SWidget> MenuButton(const FString& Caption,TFunction<void()> Action)
+    {return SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(&FACEPluginStyle::Current()->MenuItem).IsFocusable(false)
+
+        .OnClicked_Lambda([Action](){Action();return FReply::Handled();})[Text(Caption,15)];}
     TSharedRef<SWidget> LiveButton(TFunction<FString()> Caption,TFunction<void()> Action)
-    {return SNew(SButton).ButtonStyle(&Style()).IsFocusable(false).ContentPadding(FMargin(12,9)).OnClicked_Lambda([Action](){Action();return FReply::Handled();})
+    {return SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(&Style()).IsFocusable(false).OnClicked_Lambda([Action](){Action();return FReply::Handled();})
         [SNew(SACEPluginText).Text_Lambda([Caption](){return FText::FromString(Caption());}).OverflowPolicy(ETextOverflowPolicy::Ellipsis)
-            .Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).ColorAndOpacity(Ink)];}
+            .Font(FACEPluginStyle::NativeFont("Regular",16)).ColorAndOpacity(Ink)];}
     double Num(const TSharedPtr<FJsonObject>& P,const TCHAR* K,double D=0){double V;return P->TryGetNumberField(K,V)?V:D;}
     FString Str(const TSharedPtr<FJsonObject>& P,const TCHAR* K,const FString& D=FString()){FString V;return P->TryGetStringField(K,V)?V:D;}
     bool Bool(const TSharedPtr<FJsonObject>& P,const TCHAR* K,bool D=false){bool V;return P->TryGetBoolField(K,V)?V:D;}
@@ -88,7 +93,7 @@ namespace ACEUCMPanelPrivate
                 +SVerticalBox::Slot().AutoHeight().Padding(0,8)[SNew(SBox).MaxDesiredHeight(100)
                     .Visibility_Lambda([this](){return !ImportLog.IsEmpty()||(Host.IsValid()&&!Host->Notice.IsEmpty())?EVisibility::Visible:EVisibility::Collapsed;})
                     [SNew(SHorizontalBox)+SHorizontalBox::Slot().FillWidth(1)[SNew(SScrollBox)+SScrollBox::Slot()
-                        [SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",14)).ColorAndOpacity(Muted).AutoWrapText(true)
+                        [SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",14)).ColorAndOpacity(Muted).AutoWrapText(true)
                             .Text_Lambda([this](){return FText::FromString(!ImportLog.IsEmpty()?ImportLog:Host.IsValid()?Host->Notice.Left(16000):FString());})]]
                     +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Top).Padding(6,0)[SNew(SVerticalBox)
                         +SVerticalBox::Slot().AutoHeight()[Button(TEXT("Clear"),[this](){ImportLog.Empty();Host->Notice.Empty();})]
@@ -158,14 +163,14 @@ namespace ACEUCMPanelPrivate
         void ResetProfileEditors(){LootDraft.Reset();ConditionDraft.Reset();StateIndex=0;ExpandedMonster=INDEX_NONE;}
         TSharedRef<SWidget> ProfileChoice(const FString& Section)
         {
-            return SNew(SComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo).ButtonStyle(&Style()).ContentPadding(8)
-                .ButtonContent()[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).ColorAndOpacity(Accent)
-                    .OverflowPolicy(ETextOverflowPolicy::Ellipsis).ToolTipText_Lambda([this,Section](){return FText::FromString(Host->UCMSectionName(Section));})
+            return SNew(SACEPluginComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo)
+                .ButtonContent()[SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",16)).ColorAndOpacity(Accent)
+                    .OverflowPolicy(ETextOverflowPolicy::Ellipsis).ToolTip(FACEPluginStyle::Tooltip(TAttribute<FText>::CreateLambda([this,Section](){return FText::FromString(Host->UCMSectionName(Section));})))
                     .Text_Lambda([this,Section](){const FString Name=Host->UCMSectionName(Section);
                         return FText::FromString(Section+TEXT(": ")+(Name.IsEmpty()?TEXT("Unsaved"):Name));})]
                 .OnGetMenuContent_Lambda([this,Section]()->TSharedRef<SWidget>{
                     auto List=SNew(SVerticalBox);
-                    for(const auto& Name:Host->UCMSectionProfiles(Section))List->AddSlot().AutoHeight()[Button(Name,[this,Section,Name](){
+                    for(const auto& Name:Host->UCMSectionProfiles(Section))List->AddSlot().AutoHeight()[MenuButton(Name,[this,Section,Name](){
                         if(!CanLeaveLootRule())return;
                         if(Host->SelectUCMSection(Section,Name)){ResetProfileEditors();CreatingSection.Empty();DeletingSection.Empty();}
                         FSlateApplication::Get().DismissAllMenus();Rebuild();})];
@@ -188,7 +193,7 @@ namespace ACEUCMPanelPrivate
             Add(Tile(Row));
             if(Manage&&CreatingSection==Section)
             {
-                Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FCoreStyle::GetDefaultFontStyle("Regular",16))
+                Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",16))
                     .Text(FText::FromString(SectionNewNames.FindRef(Section))).HintText(FText::FromString(TEXT("New profile name")))
                     .OnTextChanged_Lambda([this,Section](const FText& Value){SectionNewNames.Add(Section,Value.ToString());}));
                 Add(Text(Section==TEXT("Routes")?TEXT("Creates an empty route. The existing route is kept."):TEXT("Creates a profile with default settings."),14,Muted));
@@ -213,8 +218,8 @@ namespace ACEUCMPanelPrivate
             if(!Plugin->Enabled)Add(Button(TEXT("Enable UCM capabilities"),[this](){Host->SetEnabled(Plugin->Id,true);Rebuild();}));
             auto Activities=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(12,4));
             Activities->AddSlot()[CombatToggle(TEXT("Enable Combat"))];
-            Activities->AddSlot()[Toggle(TEXT("buffing"),TEXT("Enable Buffs"),TEXT("Maintain buffs."),true)];
-            Activities->AddSlot()[Toggle(TEXT("recovery"),TEXT("Enable Recovery"),TEXT("Maintain vitals."),true)];Add(Activities);
+            Activities->AddSlot()[Toggle(TEXT("buffing"),TEXT("Enable Buffs"),TEXT("Maintain buffs."),true,false)];
+            Activities->AddSlot()[Toggle(TEXT("recovery"),TEXT("Enable Recovery"),TEXT("Maintain vitals."),true,false)];Add(Activities);
             auto Grid=SNew(SUniformGridPanel).SlotPadding(FMargin(4,6));int32 Index=0;
             for(const auto& Section:TArray<FString>{TEXT("Character"),TEXT("Routes"),TEXT("Loot"),TEXT("Vendors"),TEXT("Metas"),TEXT("Monsters")})
             {
@@ -241,11 +246,11 @@ namespace ACEUCMPanelPrivate
                 +SVerticalBox::Slot().AutoHeight().Padding(0,4,0,0)[Text(TEXT("Edits UCM's active loot profile. Opening or closing this window does not toggle looting."),14,Muted)];
             auto Row=SNew(SHorizontalBox);
             Row->AddSlot().FillWidth(1)[SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight()[SNew(SBox).Visibility(ShowTitle?EVisibility::Visible:EVisibility::Collapsed)[Text(TEXT("UCM"),22)]]
-                +SVerticalBox::Slot().AutoHeight().Padding(0,6)[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",14)).ColorAndOpacity(Accent).AutoWrapText(true)
-                    .Text_Lambda([P=Plugin](){return FText::FromString(P->Status);})]];
-            Row->AddSlot().AutoWidth().VAlign(VAlign_Center)[SNew(SButton).ButtonStyle(&Style()).IsFocusable(false).ContentPadding(FMargin(16,12))
+                +SVerticalBox::Slot().AutoHeight().Padding(0,6)[SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",14)).ColorAndOpacity(Accent).AutoWrapText(true)
+                    .Text_Lambda([this](){return FText::FromString(TEXT("Current status: ")+Host->UCMCurrentStatus());})]];
+            Row->AddSlot().AutoWidth().VAlign(VAlign_Center)[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(&Style()).IsFocusable(false)
                 .OnClicked_Lambda([this](){if(Plugin->Running)Host->Stop(Plugin->Id,TEXT("Stopped"),true);else Host->Start(Plugin->Id);return FReply::Handled();})
-                [SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Bold",18)).ColorAndOpacity(Ink)
+                [SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Bold",18)).ColorAndOpacity(Ink)
                     .Text_Lambda([P=Plugin](){return FText::FromString(P->Running?TEXT("Stop"):P->CanResumeMeta?TEXT("Resume"):TEXT("Start"));})]];
             return Row;
         }
@@ -258,11 +263,10 @@ namespace ACEUCMPanelPrivate
             for(const auto& Name:Names)
             {
                 const FString TargetPage=EditorOnly&&Name==TEXT("Loot rules")?TEXT("Loot"):EditorOnly&&Name==TEXT("Import")?TEXT("Import tools"):Name;
-                Row->AddSlot()[SNew(SButton).Tag(TEXT("UCMTab")).ButtonStyle(&Style()).IsFocusable(false).ContentPadding(FMargin(5,4)).HAlign(HAlign_Center).VAlign(VAlign_Center)
-                    .ToolTipText(FText::FromString(Name==TEXT("Import")?TEXT("Import / compatibility"):Name))
-                    .OnClicked_Lambda([this,TargetPage](){Page=TargetPage;BodyScroll->ScrollToStart();Rebuild();return FReply::Handled();})
-                    [SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Bold",14)).Text(FText::FromString(Name))
-                        .ColorAndOpacity_Lambda([this,TargetPage](){return Page==TargetPage?Accent:Muted;})]];
+                Row->AddSlot()[SNew(SACEPluginTab).ContentPadding(FMargin(FACEPluginStyle::CompactButtonPadding)).Tag(TEXT("UCMTab")).Text(FText::FromString(Name))
+                    .Selected_Lambda([this,TargetPage,Name](){return Page==TargetPage||(Name==TEXT("Import")&&(Page==TEXT("Files")||Page.StartsWith(TEXT("Import "))||Page==TEXT("Legacy loot")));})
+                    .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(Name==TEXT("Import")?TEXT("Import / compatibility"):Name)))
+                    .OnClicked_Lambda([this,TargetPage](){Page=TargetPage;BodyScroll->ScrollToStart();Rebuild();return FReply::Handled();})];
             }
             return Row;
         }
@@ -272,19 +276,19 @@ namespace ACEUCMPanelPrivate
                 .OnCheckStateChanged_Lambda([this](ECheckBoxState State){P()->SetStringField(TEXT("combat"),State==ECheckBoxState::Checked?TEXT("auto"):TEXT("off"));P()->SetBoolField(TEXT("manual_combat"),false);Save();})
                 [Text(Caption,16)];
         }
-        TSharedRef<SWidget> Toggle(const TCHAR* Key,const FString& Caption,const FString& Help,bool Default=false)
+        TSharedRef<SWidget> Toggle(const TCHAR* Key,const FString& Caption,const FString& Help,bool Default=false,bool WrapText=true)
         {
             return SNew(SCheckBox).Style(&FACEPluginStyle::Current()->Check).IsChecked_Lambda([this,Key,Default](){return Bool(P(),Key,Default)?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
                 .OnCheckStateChanged_Lambda([this,Key](ECheckBoxState State){P()->SetBoolField(Key,State==ECheckBoxState::Checked);Save();})
-                .ToolTipText(FText::FromString(Help))
-                [SNew(SBox).MinDesiredHeight(32).VAlign(VAlign_Center).Padding(8,0)[Text(Caption,16)]];
+                .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(Help)))
+                [SNew(SBox).MinDesiredHeight(32).VAlign(VAlign_Center).Padding(8,0)[Text(Caption,16,Ink,WrapText)]];
         }
 
         void Slider(const TCHAR* Key,const FString& Caption,float Min,float Max,float Default,FLinearColor Color=Accent,const FString& Unit=TEXT("%"))
         {
             auto V=SNew(SVerticalBox);
             V->AddSlot().AutoHeight()[SNew(SHorizontalBox)+SHorizontalBox::Slot().FillWidth(1)[Text(Caption,18)]
-                +SHorizontalBox::Slot().AutoWidth()[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Bold",18)).ColorAndOpacity(Color)
+                +SHorizontalBox::Slot().AutoWidth()[SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Bold",18)).ColorAndOpacity(Color)
                     .Text_Lambda([this,Key,Default,Unit](){return FText::FromString(FString::Printf(TEXT("%.0f%s"),Num(P(),Key,Default),*Unit));})]];
             V->AddSlot().AutoHeight().Padding(0,5)[SNew(SSlider).Tag(FName(Key)).Style(&SliderStyle()).MinValue(Min).MaxValue(Max).StepSize(1).MouseUsesStep(true).SliderHandleColor(FLinearColor::White).SliderBarColor(FLinearColor::White)
                 .Value_Lambda([this,Key,Default](){return float(Num(P(),Key,Default));})
@@ -296,10 +300,9 @@ namespace ACEUCMPanelPrivate
             auto Row=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(5,5));
             for(const auto& V:Values)
             {
-                Row->AddSlot()[SNew(SButton).ButtonStyle(&Style()).IsFocusable(false).ContentPadding(FMargin(12,9))
-                .OnClicked_Lambda([this,Key,V](){P()->SetStringField(Key,V);Save();return FReply::Handled();})
-                [SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Bold",16)).Text(FText::FromString(V))
-                .ColorAndOpacity_Lambda([this,Key,V](){return Str(P(),Key)==V?Accent:Muted;})]];
+                Row->AddSlot()[SNew(SACEPluginTab).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).Text(FText::FromString(V)).FontSize(16)
+                .Selected_Lambda([this,Key,V](){return Str(P(),Key)==V;})
+                .OnClicked_Lambda([this,Key,V](){P()->SetStringField(Key,V);Save();return FReply::Handled();})];
             }
             Add(Row);
         }
@@ -329,12 +332,12 @@ namespace ACEUCMPanelPrivate
         {
             auto* C=Host->GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
             auto* D=Host->GetGameInstance()->GetSubsystem<UACEDatSubsystem>();
-            Add(SNew(SComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo).ButtonContent()[LiveText([this,D](){FString Name=TEXT("Automatic attack spell");uint32 Icon=0;if(int32 Id=int32(Num(P(),TEXT("attack_spell"))))D->TryGetSpellInfo(Id,Name,Icon);return Name;})]
+            Add(SNew(SACEPluginComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo).ButtonContent()[LiveText([this,D](){FString Name=TEXT("Automatic attack spell");uint32 Icon=0;if(int32 Id=int32(Num(P(),TEXT("attack_spell"))))D->TryGetSpellInfo(Id,Name,Icon);return Name;})]
                 .OnGetMenuContent_Lambda([this,C,D]()
                 {
                     auto List=SNew(SVerticalBox);
                     auto Choose=[this](int32 Id){P()->SetNumberField(TEXT("attack_spell"),Id);FSlateApplication::Get().DismissAllMenus();Save();};
-                    List->AddSlot().AutoHeight()[Button(TEXT("Automatic attack spell"),[Choose](){Choose(0);})];
+                    List->AddSlot().AutoHeight()[MenuButton(TEXT("Automatic attack spell"),[Choose](){Choose(0);})];
                     auto Known=C->GetKnownSpells();Known.Sort();
                     for(int32 Id:Known)
                     {
@@ -342,7 +345,7 @@ namespace ACEUCMPanelPrivate
                         if(!D->TryGetPluginSpellInfo(Id,School,Power,Category,Flags,Duration)||(Flags&4))continue;
                         const bool Attack=(Category>=117&&Category<=130)||(Category>=222&&Category<=228)||(Category>=243&&Category<=249)||(Category>=639&&Category<=641);
                         if(!Attack||!D->TryGetSpellInfo(Id,Name,IconId))continue;
-                        List->AddSlot().AutoHeight()[Button(Name,[Choose,Id](){Choose(Id);})];
+                        List->AddSlot().AutoHeight()[MenuButton(Name,[Choose,Id](){Choose(Id);})];
                     }
                     return SNew(SBox).MaxDesiredHeight(350)[SNew(SScrollBox)+SScrollBox::Slot()[List]];
                 }));
@@ -357,7 +360,9 @@ namespace ACEUCMPanelPrivate
         {
             auto* C=Host->GetGameInstance()->GetSubsystem<UACEClientSubsystem>();TSet<int32> Seen;
             const TCHAR* Key=Consumables?TEXT("consumables"):TEXT("weapon_items");
-            Heading(Consumables?TEXT("Recovery items"):TEXT("Equipment pool"),TEXT("An empty list allows automatic selection. Add individual weapons or supply types to restrict the pool. Refresh updates this list after inventory changes."));
+            Heading(Consumables?TEXT("Recovery items"):TEXT("Equipment pool"),Consumables
+                ?TEXT("An empty list allows automatic selection. Add supply types to restrict the pool. Refresh updates this list after inventory changes.")
+                :TEXT("Select weapons to restrict automatic equipment selection. Selecting only essences leaves weapon selection automatic. In a selected pool, only selected essences are summoned or refilled. An empty pool allows automatic selection of both. Refresh updates this list after inventory changes."));
             Add(Button(TEXT("Refresh inventory"),[this](){Rebuild();}));
             for(const auto& O:C->GetWorldObjects())
             {
@@ -397,13 +402,13 @@ namespace ACEUCMPanelPrivate
                 if(Offhand?(Melee||Shield):Primary&&(!DefaultMelee||(O.ItemType&ACEItemType::MeleeWeapon))&&!(O.ObjectDescriptionFlags&ACEObjectDescFlag::WieldLeft))Items.Add(O);
             }
             Items.Sort([](const auto& A,const auto& B){return ACERetailObjectNames::Name(A)<ACERetailObjectNames::Name(B);});
-            Add(SNew(SComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo).ButtonContent()[Text((Offhand?TEXT("Offhand: "):DefaultMelee?TEXT("Main hand: "):TEXT("Weapon: "))+Caption)]
+            Add(SNew(SACEPluginComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo).ButtonContent()[Text((Offhand?TEXT("Offhand: "):DefaultMelee?TEXT("Main hand: "):TEXT("Weapon: "))+Caption)]
                 .OnGetMenuContent_Lambda([this,Rule,Key,Offhand,Modes,Items](){
                     auto List=SNew(SVerticalBox);
                     auto Select=[this,Rule,Key](double Value){Rule->SetNumberField(Key,Value);FSlateApplication::Get().DismissAllMenus();Save(true);Rebuild();};
-                    if(Offhand)List->AddSlot().AutoHeight()[Button(TEXT("Use default / Left-hand Tether"),[this,Rule,Key](){Rule->RemoveField(Key);FSlateApplication::Get().DismissAllMenus();Save(true);Rebuild();})];
-                    for(int32 I=0;I<Modes.Num();++I)List->AddSlot().AutoHeight()[Button(Modes[I],[Select,I,Offhand](){Select(Offhand?I:I-1);})];
-                    for(const auto& O:Items)List->AddSlot().AutoHeight()[Button(ACERetailObjectNames::Name(O)+((O.ObjectDescriptionFlags&ACEObjectDescFlag::WieldLeft)?TEXT(" (Left-hand Tether)"):TEXT("")),[Select,Id=uint32(O.Guid)](){Select(Id);})];
+                    if(Offhand)List->AddSlot().AutoHeight()[MenuButton(TEXT("Use default / Left-hand Tether"),[this,Rule,Key](){Rule->RemoveField(Key);FSlateApplication::Get().DismissAllMenus();Save(true);Rebuild();})];
+                    for(int32 I=0;I<Modes.Num();++I)List->AddSlot().AutoHeight()[MenuButton(Modes[I],[Select,I,Offhand](){Select(Offhand?I:I-1);})];
+                    for(const auto& O:Items)List->AddSlot().AutoHeight()[MenuButton(ACERetailObjectNames::Name(O)+((O.ObjectDescriptionFlags&ACEObjectDescFlag::WieldLeft)?TEXT(" (Left-hand Tether)"):TEXT("")),[Select,Id=uint32(O.Guid)](){Select(Id);})];
                     return SNew(SBox).MaxDesiredHeight(400)[SNew(SScrollBox)+SScrollBox::Slot()[List]];
                 }));
         }
@@ -481,9 +486,9 @@ namespace ACEUCMPanelPrivate
             {
                 const FString Key=Bane?TEXT("bane_profile"):TEXT("protection_profile"),Custom=Bane?TEXT("bane_custom"):TEXT("protection_custom");
                 const TArray<FString> Labels=Bane?TArray<FString>{TEXT("Custom"),TEXT("All"),TEXT("None"),TEXT("B"),TEXT("BPS"),TEXT("BPSA"),TEXT("BPSAC"),TEXT("ALFC")}:TArray<FString>{TEXT("Custom"),TEXT("All"),TEXT("None"),TEXT("B"),TEXT("BPS"),TEXT("BPSA"),TEXT("ALFC"),TEXT("BPSAC")};
-                Add(SNew(SComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo).ButtonStyle(&Style()).ContentPadding(8).ButtonContent()[LiveText([this,Key,Bane,Labels](){return (Bane?TEXT("Banes: "):TEXT("Protections: "))+Labels[FMath::Clamp(int32(Num(P(),*Key,2))-1,0,7)];})]
+                Add(SNew(SACEPluginComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo).ButtonContent()[LiveText([this,Key,Bane,Labels](){return (Bane?TEXT("Banes: "):TEXT("Protections: "))+Labels[FMath::Clamp(int32(Num(P(),*Key,2))-1,0,7)];})]
                     .OnGetMenuContent_Lambda([this,Key,Labels]()->TSharedRef<SWidget>{auto List=SNew(SVerticalBox);
-                        for(int32 I=0;I<Labels.Num();++I)List->AddSlot().AutoHeight()[Button(Labels[I],[this,Key,I](){P()->SetNumberField(Key,I+1);Save();FSlateApplication::Get().DismissAllMenus();})];return List;}));
+                        for(int32 I=0;I<Labels.Num();++I)List->AddSlot().AutoHeight()[MenuButton(Labels[I],[this,Key,I](){P()->SetNumberField(Key,I+1);Save();FSlateApplication::Get().DismissAllMenus();})];return List;}));
                 Add(SNew(SEditableTextBox).Visibility_Lambda([this,Key](){return Num(P(),*Key,2)==1?EVisibility::Visible:EVisibility::Collapsed;}).Style(&FACEPluginStyle::Current()->Edit).Text(FText::FromString(Str(P(),*Custom,TEXT("ALL")))).HintText(FText::FromString(TEXT("A acid, B bludgeon, C cold, L lightning, F fire, P pierce, S slash")))
                     .OnTextCommitted_Lambda([this,Custom](const FText& Value,ETextCommit::Type){FString Letters=Value.ToString().ToUpper();if(Letters.Len()<=7){P()->SetStringField(Custom,Letters);Save();}}));
             }
@@ -492,8 +497,8 @@ namespace ACEUCMPanelPrivate
         void ForceBuffControls()
         {
             auto Row=SNew(SHorizontalBox);
-            Row->AddSlot().AutoWidth()[Button(TEXT("Force Buff"),[this](){Host->RequestForceBuff();})];
-            Row->AddSlot().AutoWidth().Padding(8,0)[SNew(SButton).ButtonStyle(&Style()).IsFocusable(false)
+            Row->AddSlot().AutoWidth()[LiveButton([](){return FString(TEXT("Force Buff"));},[this](){Host->RequestForceBuff();})];
+            Row->AddSlot().AutoWidth().Padding(8,0)[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(&Style()).IsFocusable(false)
                 .IsEnabled_Lambda([this](){return Host->IsForceBuffRequested();})
                 .OnClicked_Lambda([this](){Host->CancelForceBuff();return FReply::Handled();})[Text(TEXT("Cancel refresh"))]];
             Add(Row);Add(Text(TEXT("Refresh all enabled buff families now, regardless of remaining time. If UCM is stopped, runs only buffs and recovery, then stops."),14,Muted));
@@ -517,11 +522,11 @@ namespace ACEUCMPanelPrivate
                 const FString Key=School.Key;
                 auto Menu=SNew(SVerticalBox);
                 for(int32 Level=0;Level<=8;++Level)
-                    Menu->AddSlot().AutoHeight()[Button(Level?FString::Printf(TEXT("Level %d"),Level):TEXT("Automatic highest"),[this,Key,Level]()
+                    Menu->AddSlot().AutoHeight()[MenuButton(Level?FString::Printf(TEXT("Level %d"),Level):TEXT("Automatic highest"),[this,Key,Level]()
                     {P()->SetNumberField(Key,Level);Save();FSlateApplication::Get().DismissAllMenus();})];
                 Add(SNew(SHorizontalBox)
                     +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[Text(School.Value)]
-                    +SHorizontalBox::Slot().AutoWidth()[SNew(SComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo).ButtonStyle(&Style()).ContentPadding(FMargin(12,8))
+                    +SHorizontalBox::Slot().AutoWidth()[SNew(SACEPluginComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo)
                         .ButtonContent()[SNew(SBox).MinDesiredWidth(130)[LiveText([this,Key](){const int32 Level=FMath::Clamp(int32(Num(P(),*Key)),0,8);return Level?FString::Printf(TEXT("Level %d"),Level):TEXT("Automatic highest");})]]
                         .MenuContent()[Menu]]);
             }
@@ -548,7 +553,7 @@ namespace ACEUCMPanelPrivate
                 const FString Name=School==4?TEXT("Creature"):School==2?TEXT("Life"):TEXT("Item");
                 const auto Tiers=Levels.FindRef(School);
                 const FString LevelKey=School==4?TEXT("creature_buff_level"):School==2?TEXT("life_buff_level"):TEXT("item_buff_level");
-                Add(Tile(SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",15)).ColorAndOpacity(Ink).AutoWrapText(true)
+                Add(Tile(SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",15)).ColorAndOpacity(Ink).AutoWrapText(true)
                     .Text_Lambda([this,School,Name,Tiers,LevelKey]()
                     {
                         const int32 Skill=BuffSchoolSkill(School),Buffer=FMath::RoundToInt(BuffMargin());
@@ -656,7 +661,7 @@ namespace ACEUCMPanelPrivate
                 Add(Toggle(TEXT("approach"),TEXT("Pursue targets outside attack range"),TEXT("Leave the route to approach visible monsters inside acquisition range, then return after combat. When off, UCM only attacks monsters already within attack range."),true));
                 Slider(TEXT("radius"),TEXT("Missile / spell attack range"),5,100,30,Accent,TEXT(" m"));
                 Slider(TEXT("melee_range"),TEXT("Melee approach distance"),1,5,2,Accent,TEXT(" m"));
-                Add(SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",15)).ColorAndOpacity(Accent).AutoWrapText(true)
+                Add(SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",15)).ColorAndOpacity(Accent).AutoWrapText(true)
                     .Text_Lambda([P=Plugin](){return FText::FromString(P->Running?P->TargetingStatus:FString());}));
                 Slider(TEXT("monster_attempts"),TEXT("Environment misses before skipping target"),0,20,4);
                 Slider(TEXT("monster_blacklist_seconds"),TEXT("Skip unreachable target for"),0,600,120,Accent,TEXT(" s"));
@@ -687,7 +692,7 @@ namespace ACEUCMPanelPrivate
                 for(int I=0;I<9;++I)Elements->AddSlot()[ChoiceButton(Names[I],[this,I](){return Num(P(),TEXT("damage_type"))==(I==8?1024:I?1<<(I-1):0)||(I==8&&Num(P(),TEXT("damage_type"))==128);},[this,I](){P()->SetNumberField(TEXT("damage_type"),I==8?1024:I?1<<(I-1):0);Save();})];Add(Elements);
                 AttackSpellControls();
                 Heading(TEXT("Summoned pets"),TEXT("Add essences to the equipment list below. Uses server requirements, remaining charges and cooldowns."));
-                Add(Toggle(TEXT("summon_pets"),TEXT("Summon combat pets"),TEXT("Choose an eligible essence for nearby monsters; keep an existing pet active.")));
+                Add(Toggle(TEXT("summon_pets"),TEXT("Enable Summoning"),TEXT("Summon an eligible essence for nearby monsters when its cooldown expires. Works with Combat disabled; keeps an existing pet active.")));
                 Add(Toggle(TEXT("refill_summons"),TEXT("Refill summon essences"),TEXT("Use Encapsulated Spirit from your inventory to refill low-charge essences in the equipment pool. Works independently of automatic summoning.")));
                 Slider(TEXT("summon_refill_charges"),TEXT("Refill at or below remaining charges"),0,50,5,Accent,TEXT(" charges"));
                 Add(LiveButton([this](){return Num(P(),TEXT("pet_range_mode"))==1?TEXT("Pet range: custom"):TEXT("Pet range: attack distance");},[this](){P()->SetNumberField(TEXT("pet_range_mode"),Num(P(),TEXT("pet_range_mode"))==1?0:1);Save();}));
@@ -715,7 +720,7 @@ namespace ACEUCMPanelPrivate
                         P()->SetBoolField(TEXT("use_imported_recovery_order"),false);Save();
                     })
                     [SNew(SBox).MinDesiredHeight(32).VAlign(VAlign_Center).Padding(8,0)[Text(TEXT("Prefer kits and consumables"))]]);
-                Add(SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",14)).ColorAndOpacity(Muted).AutoWrapText(true)
+                Add(SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",14)).ColorAndOpacity(Muted).AutoWrapText(true)
                     .Text_Lambda([this]()
                     {
                         if(P()->HasField(TEXT("recharge_handlers"))&&Bool(P(),TEXT("use_imported_recovery_order"),true))
@@ -762,10 +767,12 @@ namespace ACEUCMPanelPrivate
                 Option(TEXT("navigation"),TEXT("Enable Route Navigation"),TEXT("Start joins the nearest waypoint, then follows the route in order. Route edits stop the current run."));
                 Option(TEXT("open_doors"),TEXT("Open doors along route"),TEXT("Use a closed door only when it lies on the current walking segment."),true);
                 Option(TEXT("route_preview"),TEXT("Show route in world"),TEXT("Updates as points are added or edited."),true);
-                Option(TEXT("follow_corners"),TEXT("Follow around corners"),TEXT("Imported follow routes retain the target player's observed path."));
+                Option(TEXT("follow_corners"),TEXT("Follow around corners"),TEXT("Follow the selected player's observed footsteps in order, retaining bends and elevation changes."));
                 Option(TEXT("loop_route"),TEXT("Loop route"),TEXT("Repeat from the first point when the route finishes."));
                 Option(TEXT("reverse_route"),TEXT("Reverse at route ends"),TEXT("VT Linear mode: walk back along the same points. Takes priority over Loop."));Add(Options);
                 auto Buttons=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(5,5));
+                Buttons->AddSlot()[Button(TEXT("Follow selected player"),[this](){Host->SetUCMFollowSelected(true);Rebuild();})];
+                Buttons->AddSlot()[Button(TEXT("Stop following"),[this](){Host->SetUCMFollowSelected(false);Rebuild();})];
                 Buttons->AddSlot()[Button(TEXT("+ Walk here"),[this](){Host->RecordRouteAction(TEXT("walk"));Rebuild();})];
                 Buttons->AddSlot()[Button(TEXT("+ Use selected"),[this](){Host->RecordRouteAction(TEXT("use"));Rebuild();})];
                 Buttons->AddSlot()[Button(TEXT("+ Portal selected"),[this](){Host->RecordRouteAction(TEXT("portal"));Rebuild();})];
@@ -801,13 +808,13 @@ namespace ACEUCMPanelPrivate
             {
                 SectionSelector(TEXT("Monsters"));
                 Heading(TEXT("New Monster"),TEXT("First matching name or expression wins. Higher priority targets are chosen first. New monsters inherit the defaults on Combat."));
-                Add(SAssignNew(MonsterName,SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).HintText(FText::FromString(TEXT("Monster name begins with…"))));
+                Add(SAssignNew(MonsterName,SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",16)).HintText(FText::FromString(TEXT("Monster name begins with…"))));
                 auto Actions=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(6,6));
                 Actions->AddSlot()[Button(TEXT("Add monster by name"),[this](){AddMonster(MonsterName->GetText().ToString());})];
                 Actions->AddSlot()[Button(TEXT("Add selected monster"),[this](){AddSelectedMonster();})];Add(Actions);
                 SectionBody.Reset();
                 Add(SNew(SHorizontalBox)+SHorizontalBox::Slot().FillWidth(1)[SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit)
-                    .Font(FCoreStyle::GetDefaultFontStyle("Regular",16))
+                    .Font(FACEPluginStyle::NativeFont("Regular",16))
                     .HintText(FText::FromString(TEXT("Find a monster..."))).Text(FText::FromString(MonsterSearch))
                     .OnTextChanged_Lambda([this](const FText& Value){MonsterSearch=Value.ToString();})
                     .OnTextCommitted_Lambda([this](const FText&,ETextCommit::Type How){if(How==ETextCommit::OnEnter){MonsterFilter=MonsterSearch.TrimStartAndEnd();Rebuild();}})]
@@ -834,8 +841,8 @@ namespace ACEUCMPanelPrivate
                 {
                     Heading(TEXT("Imported Virindi meta"),TEXT("The meta loads its referenced character, monster, loot and route profiles when their actions run. Some metas wait for a chat command or required items before choosing a route. Start/Stop resumes the current run."));
                     Add(Toggle(TEXT("meta_enabled"),TEXT("Run imported meta"),TEXT("Meta rules can change activity settings and replace the active navigation route."),true));
-                    Add(SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Bold",18)).Text_Lambda([this](){return FText::FromString(TEXT("Current state: ")+(Plugin->MetaState.IsEmpty()?TEXT("Default"):Plugin->MetaState)+(Plugin->Running?TEXT(""):TEXT(" (stopped)")));}));
-                    Add(SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",15)).ColorAndOpacity(Ink).AutoWrapText(true)
+                    Add(SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Bold",18)).Text_Lambda([this](){return FText::FromString(TEXT("Current state: ")+(Plugin->MetaState.IsEmpty()?TEXT("Default"):Plugin->MetaState)+(Plugin->Running?TEXT(""):TEXT(" (stopped)")));}));
+                    Add(SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",15)).ColorAndOpacity(Ink).AutoWrapText(true)
                         .Text_Lambda([this](){return FText::FromString(Plugin->MetaStatus);}));
                     TMap<FString,int32> Counts;for(const auto& R:*ImportedRules)++Counts.FindOrAdd(Str(R->AsObject(),TEXT("state")));
                     Counts.FindOrAdd(TEXT("Default"));
@@ -845,11 +852,11 @@ namespace ACEUCMPanelPrivate
                         const bool WasRunning=Plugin->Running;
                         if(Host->SelectUCMSection(TEXT("Metas"),Host->UCMSectionName(TEXT("Metas")))&&WasRunning)Host->Start(TEXT("ucm"));
                     })];
-                    Controls->AddSlot().FillWidth(1).Padding(6,0,0,0)[SNew(SComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo).ButtonStyle(&Style())
+                    Controls->AddSlot().FillWidth(1).Padding(6,0,0,0)[SNew(SACEPluginComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo)
                         .IsEnabled_Lambda([this](){return Plugin->Running;}).ButtonContent()[Text(TEXT("Go to state..."))]
                         .OnGetMenuContent_Lambda([this,Names]()->TSharedRef<SWidget>{
                             auto List=SNew(SVerticalBox);
-                            for(const auto& Name:Names)List->AddSlot().AutoHeight()[Button(Name,[this,Name](){Host->RunUCMCommand(TEXT("setmetastate ")+Name);FSlateApplication::Get().DismissAllMenus();})];
+                            for(const auto& Name:Names)List->AddSlot().AutoHeight()[MenuButton(Name,[this,Name](){Host->RunUCMCommand(TEXT("setmetastate ")+Name);FSlateApplication::Get().DismissAllMenus();})];
                             return SNew(SBox).MaxDesiredHeight(300)[SNew(SScrollBox)+SScrollBox::Slot()[List]];
                         })];
                     Add(Controls);
@@ -877,7 +884,7 @@ namespace ACEUCMPanelPrivate
                 StateIndex=FMath::Clamp(StateIndex,0,StateList->Num()-1);
                 auto StateTabs=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4,4));
                 for(int Index=0;Index<StateList->Num();++Index){auto State=(*StateList)[Index]->AsObject();StateTabs->AddSlot()[Button(Str(State,TEXT("name"))+(StateIndex==Index?TEXT(" •"):TEXT("")),[this,Index](){StateIndex=Index;Rebuild();})];}Add(StateTabs);
-                Add(SAssignNew(NewStateName,SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).HintText(FText::FromString(TEXT("New state name"))).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)));
+                Add(SAssignNew(NewStateName,SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).HintText(FText::FromString(TEXT("New state name"))).Font(FACEPluginStyle::NativeFont("Regular",16)));
                 Add(Button(TEXT("Create state"),[this](){const FString Name=NewStateName->GetText().ToString().TrimStartAndEnd();if(Name.IsEmpty())return;
                     auto States=P()->GetArrayField(TEXT("states"));for(auto V:States)if(Str(V->AsObject(),TEXT("name"))==Name){Host->Notice=TEXT("State name already exists");return;}
                     auto State=MakeShared<FJsonObject>();State->SetStringField(TEXT("name"),Name);States.Add(MakeShared<FJsonValueObject>(State));P()->SetArrayField(TEXT("states"),States);StateIndex=States.Num()-1;Save(true);Rebuild();}));
@@ -1134,7 +1141,7 @@ bool FACEUCMImportUITest::RunTest(const FString&)
     auto FindButton=[](const TSharedRef<SWidget>& Root,const FString& Caption)
     {
         TSharedPtr<SButton> Result;TFunction<void(const TSharedRef<SWidget>&)> Visit;
-        Visit=[&](const TSharedRef<SWidget>& W){if(W->GetType()==FName(TEXT("SButton"))&&W->GetTag()==FName(*(TEXT("UCMChoice.")+Caption)))Result=StaticCastSharedRef<SButton>(W);
+        Visit=[&](const TSharedRef<SWidget>& W){if(W->GetType()==FName(TEXT("SACEPluginButton"))&&W->GetTag()==FName(*(TEXT("UCMChoice.")+Caption)))Result=StaticCastSharedRef<SButton>(W);
             const auto Children=W->GetChildren();for(int I=0;I<Children->Num();++I)Visit(Children->GetChildAt(I));};Visit(Root);return Result;
     };
     auto Clear=FindButton(Panel,TEXT("Clear"));if(TestTrue(TEXT("Clear button available"),Clear.IsValid()))Clear->SimulateClick();
@@ -1161,6 +1168,53 @@ bool FACEUCMImportUITest::RunTest(const FString&)
     TestFalse(TEXT("Restarting a stopped meta does not unexpectedly start UCM"),Plugin->Running);
     TestTrue(TEXT("Restart keeps meta execution enabled for the next Start"),Plugin->Profile->GetBoolField(TEXT("meta_enabled")));
     TestTrue(TEXT("Restart clears prior state diagnostics"),Plugin->MetaState.IsEmpty()&&Plugin->MetaStatus.IsEmpty());
+    auto FindTabs=[](const TSharedRef<SWidget>& Root,FName Tag)
+    {
+        TArray<TSharedRef<SACEPluginTab>> Result;TFunction<void(TSharedRef<SWidget>)> Visit;
+        Visit=[&](TSharedRef<SWidget> W){if(W->GetType()==TEXT("SACEPluginTab")&&W->GetTag()==Tag)Result.Add(StaticCastSharedRef<SACEPluginTab>(W));
+            const auto Children=W->GetChildren();for(int32 I=0;I<Children->Num();++I)Visit(Children->GetChildAt(I));};Visit(Root);return Result;
+    };
+    auto CheckTabs=[&](const TSharedRef<SWidget>& Root,FName Tag,int32 Expected)
+    {
+        auto Tabs=FindTabs(Root,Tag);if(!TestEqual(TEXT("Expected navigation tabs are present"),Tabs.Num(),Expected))return;
+        for(int32 I=0;I<Expected;++I)
+        {
+            Tabs=FindTabs(Root,Tag);Tabs[I]->SimulateClick();Root->SlatePrepass();Tabs=FindTabs(Root,Tag);
+            int32 Selected=0;for(const auto& Tab:Tabs)Selected+=Tab->IsSelected()?1:0;
+            TestTrue(TEXT("Clicking a navigation tab selects only that tab"),Selected==1&&Tabs.IsValidIndex(I)&&Tabs[I]->IsSelected());
+        }
+    };
+    CheckTabs(Panel,TEXT("UCMTab"),12);
+    // Subpages retain their parent indicator instead of leaving every tab idle.
+    Panel->Page=TEXT("Import tools");Panel->Rebuild();
+    TestTrue(TEXT("Import subpage keeps Import selected"),FindTabs(Panel,TEXT("UCMTab"))[10]->IsSelected());
+    Panel->Page=TEXT("Loot");Panel->Rebuild();CheckTabs(Panel,TEXT("UCMLootTab"),4);
+    auto Editor=SNew(SUCMPanel).Host(Host).InitialPage(TEXT("Standalone loot"));
+    CheckTabs(Editor,TEXT("UCMTab"),3);
+    auto Items=Host->MakeItemToolsPanel(false);CheckTabs(Items,TEXT("ItemToolsTab"),5);
+    if(FApp::CanEverRender())
+    {
+        TestTrue(TEXT("Retail tab artwork loads"),GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")));
+        Panel->Page=TEXT("Loot");Panel->Rebuild();Editor->Page=TEXT("Loot");Editor->Rebuild();
+        FWidgetRenderer Renderer(false,true);
+        for(int32 Width:{450,780})for(int32 View=0;View<3;++View)
+        {
+            const FVector2D Size(Width,760);TSharedRef<SWidget> Widget=View==0?StaticCastSharedRef<SWidget>(Panel):View==1?StaticCastSharedRef<SWidget>(Editor):Items;
+            auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);
+            for(int32 Pass=0;Pass<3;++Pass){++GFrameCounter;Renderer.DrawWidget(Target,Widget,Size,.016f);FlushRenderingCommands();}
+            const auto Tabs=FindTabs(Widget,View==2?TEXT("ItemToolsTab"):TEXT("UCMTab"));
+            for(const auto& Tab:Tabs)
+            {
+                const auto& G=Tab->GetCachedGeometry();const auto At=Widget->GetCachedGeometry().AbsoluteToLocal(G.GetAbsolutePosition());
+                TestTrue(TEXT("Navigation tabs fit narrow and wide plugin windows"),At.X>=0&&At.X+G.GetLocalSize().X<=Width+1&&G.GetLocalSize().Y>=24);
+                TestTrue(TEXT("Native tab labels stay on a single line"),G.GetLocalSize().Y<=40);
+            }
+            TArray<FColor> Pixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);TArray64<uint8> PNG;
+            FImageUtils::PNGCompressImageArray(Width,760,Pixels,PNG);
+            FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/FString::Printf(TEXT("PluginTabs-%s-%d.png"),View==0?TEXT("UCM"):View==1?TEXT("LootEditor"):TEXT("ItemTools"),Width)));
+            Target->ReleaseResource();
+        }
+    }
     return true;
 }
 }

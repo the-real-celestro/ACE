@@ -1,5 +1,295 @@
 # Retail parity regression tests
 
+## Character-selection button masks (2026-10-21)
+
+Run `ACE.RetailParity.CharacterButtonMasks`, `ACE.RetailParity.CharacterManagement`,
+`ACE.RetailParity.CharacterScreenRendering`, `ACE.RetailParity.UIScreens` and
+`ACE.RetailParity.UIInteractions` with rendering enabled. The mask test compares
+every pixel of the real DAT Enter/Create/Delete/Restore/Credits/Exit interaction
+masks against retail's `UIRegion::PointIsOverRegion` / `SurfaceWindow::PointTestOverlay`
+rule. It exercises Canvas pointer routing at multiple window sizes and DPI scales,
+disabled buttons, image-only states, masked children, and cancelling a click by
+releasing outside the mask. Masks are decoded once on the CPU, without GPU readback.
+
+## Low-end video settings (2026-10-21)
+
+Run `ACE.Rendering.LowEndVideoSettings`, `ACE.Rendering.MobileShadowReceiver`,
+`ACE.Rendering.CrowdEffectLighting` and `ACE.Rendering.DisplaySettings` with
+rendering enabled. Coverage includes saved Off/Low/Full dynamic lighting,
+shadow quality and distance, actual effect-light allocation, loaded and newly
+streamed doorway lights, and restoring lighting without reloading. The real
+DAT character shadow fixture renders Shadows Off and restored shadows into
+`Saved/PerformanceShadowTests/Shadow-Settings-*.png`. This verifies reduced
+rendering work, not an FPS guarantee for a specific laptop.
+
+## Plugin button layout (2026-10-21)
+
+Run `ACE.Plugins.LiveUI` and `ACE.Plugins.HostAndPanel` with rendering enabled.
+They check content centering and border clearance across native plugin panels,
+retained Lua controls, compact buttons, multiline and fallback-font captions,
+and normal/hover/pressed/disabled states. Single-symbol actions reserve a usable
+interior beyond the retail bevel even when zero padding is requested. Run
+`ACE.Plugins.Ledgers` for the actual Supply Ledger add control at minimum window
+size, including clicking it while pinned. Captures are written to
+`Saved/PluginButtons.png`, `Saved/PluginButtons-ucm.png` and
+`Saved/PluginButtons-itemtools.png`. `ACE.Plugins.AutoCraft.Production` also
+checks that the shared dropdown retains its open searchable menu on refresh.
+
+## Plugin hover text (2026-10-21)
+
+Plugin controls, icons, window chrome and API-provided hover text use the same
+DAT object tooltip as inventory slots. `ACE.Plugins.Tooltips` compares rendered
+short and multiline plugin tooltips pixel-for-pixel with inventory tooltips,
+including font, frame, background, padding and wrapping. It also checks empty
+and changing bound text; `ACE.Plugins.LiveUI` covers live API snapshot updates.
+Run alongside `ACE.RetailParity.TooltipWidget`. Comparison captures are saved as
+`Saved/PluginTooltip.png` and `Saved/InventoryTooltip-reference.png`.
+
+## Action Deck display options and target timers (2026-10-21)
+
+Run `ACE.Plugins.ActionDeck` with rendering enabled. It covers pinned toolbar
+visibility, settings persistence and character isolation, independent native
+spell/combat bar suppression and restoration, and real DAT debuff/DoT durations
+through session cast and chat confirmation events with UCM disabled. It checks
+resists, fizzles, refreshes, target changes, death, expiry, object deletion and
+character changes. Render captures include `Saved/ActionDeck-Pinned.png` and
+`Saved/ActionDeck-TargetTimers.png`. Existing tests still cover keyboard priority,
+inventory availability, native icon composition and foreground dragging.
+
+## Apostate resonator hand-in (2026-10-20)
+
+Run `ACE.Input.DesktopHighlights` and `ACE.RetailParity.CustomWorldPresentation`
+with the editor renderer enabled. The former checks eight elevated/circling
+screen-space drops in the real deposit room and writes the GiveObjectRequest
+action to `Unreal/Saved/Automation/ApostateGiveObject.bin`. The latter covers
+the gateway's reported ledge viewpoint, deferred appearance and cell visibility.
+
+Replay the generated action through ACE's real hand-in and NPC reward paths:
+
+```powershell
+$env:ACE_TEST_CONFIG = 'C:/path/to/local/test/Config.js'
+$env:ACE_TEST_DAT = "C:/Turbine/Asheron's Call"
+$env:ACE_TEST_APOSTATE_PACKET = "$PWD/Unreal/Saved/Automation/ApostateGiveObject.bin"
+dotnet test Source/ACE.Server.Tests/ACE.Server.Tests.csproj -p:Platform=x64 --filter 'FullyQualifiedName~ApostateQuestIntegrationTests'
+```
+
+Requires standard world templates/quests in the configured database. Reads
+templates; captures all inventory persistence in an inert queue without running
+a shard or writing character data. Tests begin with the quest accepted and a
+resonator in inventory. They verify reach at 0/2/12 metres of elevation, waiting
+for approach, item consumption, quest stamping, Ned's XP/luminance/title reward
+and duplicate-reward prevention. Simulated approach arrival does not test route
+finding or a full live dungeon traversal. Missing inputs report inconclusive.
+
+## Carried weapon illumination (2026-10-19)
+
+`ACE.Rendering.DualWieldLighting` uses actual DAT Flaming, Frost and Lightning
+Nekodes plus the Quintessence Sickle, attached to both human holding locations.
+It checks moving/turning, swapping hands and a camera nearest the Sickle's black
+overlay. Before the fix that overlay won the light slot: the Sickle illuminated
+zero of 240 measured frames in either hand. Black effects now remain visible
+particles without claiming scene lights. Carried-light color uses the texture's
+hue independently of its dark padding; authored luminosity and live particle
+opacity still control intensity.
+
+Rendered captures isolate neutral receivers from particle sprites and verify
+simultaneous fire and purple Sickle contributions. `CrowdEffectLighting.LocalHeldWeapons`
+checks both local held actors among 32 nearer effects, desktop/mobile-sized
+budgets, camera changes, dropping, black overlays and disabling lighting.
+The existing global light-count and overlapping-intensity caps remain enforced.
+
+Retail `CPartArray::InitLights` and `CObjCell::add_dynamic_to_global_lights`
+process each object's lights without a main-hand exception. Our inferred
+particle illumination remains a bounded scene-light approximation; these tests
+do not claim exact retail photometric matching.
+
+Validation: Windows editor build, all nine `ACE.Rendering.DualWieldLighting`,
+`CrowdWeaponLighting` and `CrowdEffectLighting` tests, and
+`ACE.RetailParity.SceneryParticleLighting` pass. The 64-weapon fixture retained
+eight lights and measured 0.0406 ms/frame for lighting work (CPU-only fixture,
+not a live gameplay FPS measurement). Quest shared sources pass the sync check.
+Reports are in `Saved/OffhandProbe`; no release was published.
+
+## Lua chat filters and window controls (2026-10-17)
+
+`ACE.Plugins.PublicAPI` checks permission-gated chat filters, per-window masks,
+sender/type/literal matching, expiry, atomic rejection, and cleanup on Stop and
+character change. A filtered response produces no native chat row while still
+reaching the Lua reader. The documented Chat Tools example executes in the real
+sandbox with polling off by default and an on-demand `/myquests` request.
+
+Rendered checks exercise separate, toggle and hidden lifecycle controls, custom
+labels, optional settings, and unchanged widget identities. The `item_icon`
+control is compared pixel-for-pixel with Supply Ledger artwork including its
+background, underlay, overlay and effects. `LootIconProperties` verifies the
+corresponding snapshot fields.
+
+Validation: Windows editor build passed. PublicAPI, Companions, HostAndPanel,
+LootIconProperties, LiveUI and ChatInputAndCommands all pass in
+`Saved/Automation/PluginAPIUpdates` with the corrected PublicAPI rerun in
+`Saved/Automation/PluginAPIUpdates-Final`. No live server commands are sent by
+these tests. Quest shared sources pass the sync check; no release was published.
+
+## Post-kill auto-target (2026-10-17)
+
+`ACE.RetailParity.UIScreens` exercises the selection-loss callback and deferred
+combat tick in melee and missile modes, outdoors (75 m radar) and indoors
+(25 m). After a kill, it requires the nearest eligible creature even when a
+farther creature attacked recently, includes creatures behind the player, and
+leaves selection empty when only out-of-range or ineligible creatures remain.
+Combat entry retains recent-attacker preference only within radar range.
+`ACE.RetailParity.CameraAndEdges` covers the shared nearest-target filtering,
+distance ordering, and radar boundaries.
+
+## Container and inventory follow-up (2026-10-17)
+
+`ACE.RetailParity.InventoryOrder` covers fourteen transfers across two packs,
+including PublicUpdateInstanceId(Container=0) before InventoryRemoveObject,
+with and without a cached ViewContents list, followed by another drag reorder.
+`WorldLootPlacement` and `UIScreens` cover F pickup and occupied/empty pack-slot
+drops of portable backpacks. Fixed chests remain nonportable.
+
+`ACE.Plugins.Summoning` covers repeated summoning with Combat disabled and
+priority appraisal of selected essences. `ResourceMaintenance` covers junk
+mana donors with an unrelated consumables selection; `LootIconProperties`
+checks explicit zero mana, dead/positionless pet records, and completed-corpse
+history outside the Lua VM. The history follows VT's `fo` lifetime: retained
+across Stop and visibility releases, invalidated on GUID reuse at another
+position, and expired after an hour absent. `LootRules` covers bounded waits
+for missing corpse descriptions, excluding player-opened packs from looting,
+and a confirmed final-item pickup that closes the corpse automatically.
+
+Item Tools has an explicit server-bank purchase setting. Its transaction tests
+require supply receipts without physical currency changes; a note sale without
+inventory proceeds stops with an explanation instead of selling further notes.
+Actual custom-server bank balances are not available through the standard
+protocol, so live Conquest/Dreamweave acceptance is still needed.
+
+`GroundItemPlacement` checks every placement frame in the human DAT setup stays
+unchanged over ticks when the server supplies no motion table. Retail
+`CPhysicsObj::set_description` calls `SetMotionTableID` even for zero, replacing
+the setup default, before selecting a placement frame. Explicit rest poses
+also bypass chest On/Off handling. Unnamed fixed scenery has no selection UI,
+while creatures, portals, doors, vendors and lifestones retain interaction.
+
+`ChatInputAndCommands` tests the reading anchor when a full history evicts its
+oldest row in main and extra chat. `UIScreens` checks scrollbar dragging and
+the individual chat windows' jump-to-bottom indicators.
+
+The supplied ContainerHang logs contain no fatal crash record; Hang2 completes
+normal D3D12/engine shutdown. The separate leftover-process report remains
+unreproduced and is not claimed fixed by these tests.
+
+Validation: Windows editor build succeeded. All 61 targeted suites pass across
+`Saved/Automation/ContainerFollowupFinal` and the five affected suites rerun in
+`Saved/Automation/ContainerFollowupUI`. The rerun corrects an overbroad unnamed
+scenery filter caught by the NPC/portal/door interaction tests. Final chat checks
+pass in `Saved/Automation/ContainerFollowupChat`, including retail state 1
+artwork and gutter bounds; the extra-window yellow arrow was visually checked.
+Quest shared
+sources pass `Sync-ClientSource.ps1 -CheckOnly`; no release was published.
+
+## Cliff and ledge support
+
+`ACE.RetailParity.LedgeSafety` covers flat and sloping ledges, desktop and VR,
+walking/running, low frame rates, diagonal edge slides, room-scale movement,
+Use-approach, wall slides, deliberate jumps, unsupported spawns and an open gap
+whose endpoints are both supported. It checks the half-radius support boundary
+on both box and cooked triangle collision, terrain's vertical low-point rule,
+and agreement between visible feet and the position/contact state sent to the
+server. The footprint assertions reproduced failures with the old sphere-only
+support check. No server-side fall damage is suppressed or changed.
+
+Retail references: `SPHEREPATH::check_walkables` (half-radius polygon test),
+`CPolygon::check_walkable`/`check_small_walkable`,
+`OBJECTINFO::validate_walkable` (terrain low point), and
+`CTransition::calc_num_steps`, `step_down`, `check_walkable`, `edge_slide`.
+The cooked collision BVH supplies polygon geometry; normal full-sphere collision
+and verified lower-tread clearance remain separate from precipice support.
+Desktop movement now samples support between endpoints using retail's
+lower-sphere-radius insertion distance.
+
+Validation on 2026-10-17: Windows editor build succeeded. `LedgeSafety`,
+`LedgeStairs`, `FortTethStairs`, `RoofEdges`, `RunSpeed`, `EntranceTransitions`,
+`TerrainHeight` and `TerrainSeams` passed. The broader `ACE.VR.WallContact` suite
+passed its wall/ramp-seam cases but retained the same 14 assertions in two
+144-Hz creature-top cases (setup `02000A95`, scale 1.2) as the unchanged baseline.
+Reports: `Saved/Automation/LedgeParityFinal`, `LedgeTerrainRegression`, and
+`LedgeOriginalComparison`. Shared Quest sources were synchronized; no release
+or Quest binary was built. These offline checks do not establish the cause of
+an unspecified live cliff death or prove complete client/server parity.
+
+### Mansion roof at A9A10016
+
+`ACE.RetailParity.MansionEdges` loads the real A9A1 mansion shell and connected
+EnvCells, including collision residency changes. It starts at the reported
+`[68.678311 127.423019 147.944502]` pose and on the outer front-door roof rim.
+The 96 cases cover desktop/VR, walking/running, three headings (including the
+reported quaternion), and 10/30/90/144 Hz. They check support, backing away,
+visible/reported position agreement and contact flags. Four additional cases
+verify deliberate jumps still cross the edge. Diagonal edge slides stop before
+entering the adjoining sloped roof, where the flat-roof assertions do not apply.
+
+The review found an outward-creep fallback in `ACELedgeSlide::Resolve`: local
+movement restored the last supported boundary point instead of the original
+position when no tangent was possible. Both fallback exits now honor the
+original position. Flat polygon support also retains the authored plane rather
+than treating the rounded sphere/rim contact as a progressively lower floor.
+Walkability retries and center-ray fallbacks use retail's intermediate
+step-down probe, so a rejected roof rim is not validated against a much lower
+balcony across the entire descent budget. The full physical collision sweep
+remains separate for ramp/flat seams.
+
+`CPartArray::GetStepDownHeight` returns the scaled Setup value without the
+client's former one-meter clamp: the human Setup specifies 1.5 meters.
+`CTransition::transitional_insert`/`check_walkable` split a long two-sphere
+descent, while single-sphere bodies use half their radius. The synthetic ledge
+test checks a rejected rim above a balcony, a valid clear 1.2-meter descent,
+and the single-sphere limit. `CameraAndEdges` checks repeated rejected input
+does not creep outward.
+
+An offline comparison with ACE's port of those retail collision transitions
+using the same DAT confirmed that some diagonal approaches from the outer rim
+can legitimately step down to this balcony; the fixture preserves those cases.
+This was a source/physics comparison, not a live retail executable comparison.
+The Windows editor build and all ten targeted suites passed in
+`Saved/Automation/MansionParityFinal`: `MansionEdges`, `LedgeSafety`,
+`LedgeStairs`, `FortTethStairs`, `RoofEdges`, `CameraAndEdges`, `RunSpeed`,
+`EntranceTransitions`, `TerrainHeight`, and `TerrainSeams`. The broader
+`WallContact` suite retains only the same 14 baseline creature-top assertions
+described above; its ramp/flat seam cases pass. Quest shared-source verification
+passes. Temporary exploratory reports, logs and the standalone comparison
+project were removed. Live multiplayer acceptance at this mansion is still
+required before claiming complete retail parity.
+
+## Summoning and salvage transfers
+
+`ACE.Plugins.Summoning` exercises the reported level-100 essence with 35 charges
+and a 615 Summoning requirement, selected alone in the equipment pool. Essences
+do not restrict automatic weapon selection; explicit weapon selections still do,
+including unavailable selections. Summoning and refilling share the same essence
+selection, while a combat retry delay cannot pause the separate pet activity.
+Coverage includes pending and rejected summons, cooldown expiry, an active pet,
+level/skill/training/mastery/charge requirements, and continued void casting.
+`ACE.Plugins.VirindiRuntime` also checks meta wand selection with an essence-only
+pool and with an unavailable selected weapon.
+
+The Item Tools give-all report duplicates the v121 bonded/attuned fix.
+`ACE.Plugins.ItemTools.Transactions` now repeats the 14-bag scenario for both
+Steel and Green Garnet Salvage (100), with eight ordinary bags and six bonded
+bags in another pack, an unlimited transfer count, and a 250 ms confirmation
+delay. Each inventory-removal packet is processed through the session; every
+bag must transfer and the job must finish cleanly.
+
+Validation on 2026-10-17: the new summoning suite reproduced 20 failed assertions
+before the fix. Afterward, the editor build and all 10 targeted suites passed:
+`Summoning`, `ItemTools.Transactions`, `ActivityFailureIsolation`,
+`ResourceMaintenance`, `CharacterSettings`, `VoidCombat`, `Decisions`,
+`RouteAndTellRequests`, `EquipmentBuffCycle`, and `VirindiRuntime`.
+These are offline policy/session tests, including ordinary Use packets in all
+combat stances; a live-server summon/transfer session was not performed.
+Quest shared sources were synchronized; no release packages were built.
+
 ## Tailored clothing layers
 
 `ACE.RetailParity.TailoringLayers` decodes the actual Hoary Mattekar Over-robe
@@ -81,6 +371,51 @@ lag settings are script parameters. A failed assertion exits with an error.
 Reports contain frame times, network workload and movement counters; heavyweight
 traces and screenshots are disabled. These tests exercise a synthetic server
 workload and do not establish performance for every live-server event.
+
+### Moving crowds in the Glenden Wood hallway
+
+`-ACEPerfCrowdMotion` makes synthetic creatures repeatedly approach the player
+through the real remote movement and collision path. With `ace.PerfScene glenden`,
+`-ACEPerfGlendenHall` selects the corridor near the reported video's 79.40N,
+100.73W position (DAT cell `01E3029F`), rather than the dungeon entrance. The
+wasp count, volley, player-input and loopback-lag parameters also apply here.
+For example, after building the editor, run a ten-minute sample in a fresh
+temporary user directory:
+
+```powershell
+& 'C:/Program Files/Epic Games/UE_5.8/Engine/Binaries/Win64/UnrealEditor-Cmd.exe' 'C:/dev/ACE/Unreal/ACUnreal.uproject' -game -d3d12 -RenderOffscreen -unattended -nosound -nohmd -ACEPerfQuit -ACEPerfNoCapture -ACEPerfNoTrace -ACEPerfCrowdMotion -ACEPerfGlendenHall -ACEPerfWaspCount=120 -ACEPerfVolleyWasps=8 -ACEPerfVolleyInterval=0.5 -ACEPerfCastingSeconds=600 -ACEPerfPlayerMotion -ACEPerfNetworkLag -ACEPerfLagRttMs=16000 -ACEPerfLagJitterMs=80 -ACEPerfLagRecoveryMs=800 -ACEPerfResolution=1920x1080 '-UserDir=C:/dev/ACE/Unreal/Saved/DungeonCrowdRun' '-ExecCmds=t.MaxFPS 0,r.VSync 0,ace.PerfScene glenden'
+```
+
+The sample begins after 45 seconds of warmup. Inspect frame times by minute,
+network recovery/correction counters, and `movement-summary.json`; dense crowds
+can block the requested walking/jumps, so input alone does not prove traversal.
+This is a synthetic crowded corridor, not a replay of the live server's AI or
+the user's entire route. Remove its temporary user directory after analysis.
+
+`ACE.Collision.CrowdSupport` compares batched and reference floor queries with
+0–120 overlapping bodies at large world coordinates, including valid creature
+top support. `ACE.RetailParity.RemoteSupport` also checks wall/headroom blocking
+at 2 and 5 FPS. The batching optimization must not change collision results.
+Informational query timings have no machine-specific pass/fail threshold.
+
+`/acueperf` and automatic slow-frame reports now include inclusive CPU work from
+the previous frame: player, remote creatures, network, world, terrain, portal
+visibility, animation, appearance, effects, HUD and sky. Nested costs must not
+be added together. Only two fixed-size frame records are retained; this does
+not enable a trace or accumulate a session history.
+
+Validation on 2026-10-17 (Windows D3D12, 1920x1080): the same 60-second,
+120-creature hallway workload improved from 33.074 to 24.822 ms mean frame time
+(30.24 to 40.29 FPS); p99 improved from 49.094 to 41.828 ms. The blocked-crowd
+input did not produce meaningful traversal in those short comparison runs.
+The separate ten-minute run with 16-second simulated RTT, jitter and recovery
+averaged 33.22 FPS (32.24–33.85 FPS by minute), p99 43.877 ms, maximum 96.541 ms.
+It received 9,600 casts and 155 player corrections with zero correction errors;
+movement included 203 jumps and server correction displacement. No 1–2 FPS
+collapse was reproduced. These measurements do not prove the reported live
+server hang is resolved. Seven focused collision, remote movement, ledge,
+network and frame-diagnostic suites passed; the final crowd/diagnostic rerun
+had no warnings. Raw performance captures were removed after analysis.
 
 ## Retail parity suite
 
@@ -576,3 +911,124 @@ generated upload mip byte-for-byte, then recreates the texture resource.
 `ACE.VR.RigAndMenus` checks hold-X options, tap inventory, and cancellation when
 tracking is lost. The packaged Windows executable passes the latter two suites,
 `TextureBudget`, and `AcademyCorners` in `Saved/Automation/v54Packaged`.
+## Armor distance rendering
+
+`ACE.RetailParity.ArmorDistance` audits every clothing table in the installed
+portal DAT and checks each distinct part's authored detail levels, draw modes,
+thresholds, close-model surface mapping, and independent collision geometry.
+The standard DAT covers 1,917 tables, 15,803 table/setup combinations, 3,261 part
+roots, and 5,046 detail levels. It also exercises male/female Celdon combinations,
+over-robe layering (including intentionally hidden body parts), local-player and
+paperdoll detail, and scale-aware distance selection.
+
+Offscreen Celdon captures at 3, 9, 40 and 90 meters are compared pixel-for-pixel
+with single-level reference meshes, then the camera returns to 3 meters to check
+restored detail and color without a geometry/animation rebuild. Captures are
+written to `Saved/Automation/ArmorDistance-*.png`.
+
+Retail references: `CPhysicsPart.cpp` `LoadGfxObjArray` (0050DCF0),
+`UpdateViewerDistance` (0050E030), `Draw` (shared customized surface array), and
+`GfxObjDegradeInfo.cpp` `get_degrade` (0051E4B0). The local player's part stays at
+level zero; other characters select their own part levels using authored ideal
+distances. Tests also cover the reference bias/offset formula and exact boundary
+semantics. No armor-name, clothing-family, or item-ID rendering exceptions are
+used. Existing placement, tailoring, appearance cache, and dual-wield lighting
+regressions should run alongside this test when changing the shared renderer.
+
+## Weapon appraisal properties and colors
+
+Weapon appraisal checks: `ACE.RetailParity.AppraisalPresentation` verifies that
+gear ratings keep their server value, end with retail punctuation, and start a
+separate paragraph after workmanship. It checks neutral, increased and decreased
+caster damage colors across the heading, PvM and PvP rows. `ACE.RetailParity.UIScreens`
+exercises every DAT creature enum as a slayer, including casters without weapon
+profiles, partial appraisal, unknown types and the retail human-slayer title.
+It also checks the rendered text widget's colors and captures
+`Saved/Automation/RetailParity/GameplaySlayerSceptreInspection.png`.
+References: `ItemExamineUI::Appraisal_ShowSpecialProperties`,
+`Appraisal_ShowRatings`, `Appraisal_ShowCasterData`,
+`AppraisalSystem::InqCreatureDisplayName`, and `AppraisalProfile::InqFloatEnchantmentMod`.
+
+## Idle UCM appraisal workload and self selection
+
+`ACE.Performance.UCMIdleWorkload` runs the stock Lua policy with combat disabled,
+512 carried items, 2,048 retail spells and eight nearby creatures. It reports
+snapshot/Lua averages and total p95/peak decision time over 64 samples, with and
+without background appraisal replies. Timing is diagnostic rather than a flaky
+hardware-dependent assertion. Assertions check immediate appraisal updates,
+unchanged row reuse, immutable previous snapshots, equipment and inventory
+changes, wield requirements, resource consumption and disconnect invalidation.
+
+Run it with `ACE.Plugins`, `ACE.Performance.UIAndLuaWorkload`,
+`ACE.Input.DesktopHighlights` and `ACE.RetailParity.SelectionToolbar` after
+changing snapshot caches. DesktopHighlights checks that self remains selected
+for actions without a world frame or direction arrow. Selecting self applies the
+normal object glow to the possessed pawn in desktop and VR; changing selection,
+disabling glow, portal/session transitions and unpossessing clear it. Other
+creatures retain their selection frame/highlight. `/acueperf` now includes plugin tick,
+snapshot and Lua CPU scopes (inclusive, so do not add them together).
+
+## Gameplay interface in portal space
+
+`ACE.Input.DesktopHighlights` also checks usable attackable creatures using the
+stock cow model (WCID 14). A single click selects; a double click emits one Use
+request with the correct GUID and preserves the server use radius. Busy clicks
+do not duplicate requests. Interact shares the same dispatch; changing the name
+and template ID does not change behavior. Non-usable and target-only monsters
+remain select-only, and NeverWalk creatures send Use without a local approach.
+The stock TippedRight server emote is replayed through the world actor/DAT
+animator and checked for visible mesh motion without death state.
+
+`ACE.RetailParity.PortalInterface` uses the real DAT gameplay layout and a local
+UDP peer to check that a portal retains the HUD, inventory window, chat history
+and draft. It checks incoming/outgoing chat, panel shortcuts through the portal
+controller tick, the retail busy cursor, manual interface hiding, rejection of
+combat requests without optimistic stance changes, cancellation of held attacks,
+and resumption after the transition flags clear. Server stance updates remain
+authoritative. It does not connect to a live server.
+
+Run with `ACE.RetailParity.LoadingTransition` (initial login HUD prefetch),
+`ACE.RetailParity.PortalDrops` (destination placement and transition completion),
+`ACE.RetailParity.ChatInputAndCommands`, `ACE.RetailParity.KeyboardBindings`,
+and `ACE.RetailParity.UIInteractions`. The retail references are
+`gmSmartBoxUI::UseTime`, `CPlayerSystem::SetTeleportInProgress`,
+`ClientUISystem::UpdateCursorState`, and `ClientCombatSystem::SetCombatMode`.
+
+### Windowed pointer release and Windows shutdown
+
+`ACE.Input.DesktopPointerConfinement` exercises login, camera turning and return
+from camera capture with the actual Unreal input modes. Windowed and borderless
+release the visible pointer; exclusive fullscreen retains confinement. Temporary
+mouse-down capture remains available for item dragging. The Linux SDL companion
+fixture verifies mode transitions and native grab release as well.
+
+`Build/VR/Tests/Test-WindowsExit.ps1` builds an isolated native fixture using the
+same Windows guard as the packaged game. It checks normal/active execution,
+blocked teardown, repeated exit signals, and another healthy client surviving a
+neighbor's shutdown timeout. The packaged Windows guard starts its 15-second
+grace period only on an explicit exit/error notification; it never uses frame
+rate, window visibility or focus as a reason to terminate. It uses the current
+process handle and avoids Unreal logging/graphics locks in the timeout path.
+This bounds leftover-process shutdown but does not identify the underlying
+intermittent driver/engine stall.
+
+For a normal Quit smoke test, launch an isolated development client with
+`-game -unattended -nohmd -ACEQuitProcessTest -ExecCmds="ace.TestQuitButton"`.
+The test broadcasts the live login Quit button after five seconds. Require the
+`ACE quit process test: pressing the lobby Quit button` log entry, normal engine
+shutdown and process exit, not just a closed window. Do not run this command in
+an interactive session; it intentionally closes its test process.
+
+### Inventory icon cutouts and scaled edges
+
+`ACE.RetailParity.IconRendering` checks the stock torch (0x06001072) against
+retail `IconData::RenderIcons` and `SurfaceWindow::ReplaceColor`, including every
+authored effect-map entry. Native alpha coverage and visible colors must match;
+only invisible RGB is extended at final texture upload to prevent white DAT
+texels bleeding into scaled edges. All 256 alpha levels, including visible white
+art, are preserved. A rendered cutout regression at 32, 40, 48 and 64 pixels
+detects the original white halo and requires it to be absent after preparation.
+`Saved/Automation/ItemIcons/TorchScaling.png` shows the old torch above the fixed
+torch at those sizes. Run with `ACE.RetailParity.ItemPresentation` (structure
+meters and inventory invalidation) and `ACE.Plugins.ActionDeck` (shared item and
+spell composition). These checks use local retail DAT artwork, not a live server.

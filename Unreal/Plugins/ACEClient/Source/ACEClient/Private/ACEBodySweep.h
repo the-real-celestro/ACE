@@ -12,6 +12,10 @@
 namespace ACEBodySweep
 {
     bool BatchCrowdQueries();
+    // Returns unset for non-polygon collision. CPolygon::check_walkable tests
+    // the vertical projection with half the lower sphere's radius.
+    TOptional<bool> HasMeshWalkableFootprint(const FHitResult& Hit, const FVector& Feet,
+        float Radius, float MaxDown, float MaxUp, TOptional<float>* FlatSupportZ = nullptr);
     inline bool IsCreatureBody(const FHitResult& Hit)
     {
         return Hit.Component.IsValid() && Hit.Component->ComponentTags.Contains(TEXT("ACECreatureBody"));
@@ -531,6 +535,31 @@ namespace ACEBodySweep
         return RecoverEmbedded(World,From,Capsule,Params);
     }
 
+    // Ground support is a vertical adjustment (OBJECTINFO::validate_walkable,
+    // CTransition::step_down). A normal-directed recovery on a walkable slope
+    // adds downhill XY on every ground snap. Try the equivalent vertical
+    // clearance first, still checking the crown and neighboring solids. Keep
+    // ordinary recovery when a ceiling prevents it or the contact is a wall.
+    inline FVector RecoverGrounded(UWorld& World, const FVector& From, const FVector& Push,
+        const FHitResult& Hit, const FACECollisionBody& Body, const FCollisionQueryParams& Params)
+    {
+        if (!IsUpperBodyContact(Hit) && !IsCreatureBody(Hit) && Hit.Normal.Z>=.6641741f && Push.Z>0.f)
+        {
+            const double Clearance=FMath::Max(double(Hit.PenetrationDepth+.2f),FVector::DotProduct(Push,Hit.Normal));
+            const FVector Up=RecoverAlong(World,From,FVector(0,0,Clearance/Hit.Normal.Z),Hit,Body,Params);
+            if (!Up.Equals(From,.01f)) return Up;
+        }
+        return Recover(World,From,Push,Hit,Body,Params);
+    }
+
+    // CTransition::transitional_insert/check_walkable split descents longer
+    // than the lower sphere's diameter. Single-sphere bodies use half a radius.
+    inline float StepDownProbeDistance(float Radius, int32 SphereCount, float Distance)
+    {
+        if(Distance<=Radius*2.f)return Distance;
+        return SphereCount<2 ? Radius*.5f : Distance*.5f;
+    }
+
     // CTransition::step_down tests the lower sphere, not just the center ray.
     // Preserve its contact while crossing the edge of a narrow seat/tread;
     // otherwise the ray sees the floor below and pushes the body into the seat.
@@ -538,31 +567,87 @@ namespace ACEBodySweep
     // for airborne landings: using it here lets feet roll off a precipice.
     inline bool FindFootSupport(UWorld& World, const FVector& Feet, float Radius,
         float MaxDown, const FCollisionQueryParams& Params, float& SupportZ, float MaxUp = 0.f,
-        bool bHasLowerTread = false, bool bRequireWalkableNormal = false, FVector* SupportNormal = nullptr)
+        bool bHasLowerTread = false, bool bRequireWalkableNormal = false, FVector* SupportNormal = nullptr,
+        bool bCheckFootprint = true, int32 SphereCount = 2)
     {
+        TRACE_CPUPROFILER_EVENT_SCOPE(ACE_FootSupport);
         constexpr float Clearance=.5f;
         // A wall touching the body's side must not hide the floor from a
         // downward query. Remove only Chaos's sub-millimeter contact skin.
         const float SupportRadius=FMath::Max(1.f,Radius-.1f);
+        const float WalkableDown=StepDownProbeDistance(Radius,SphereCount,MaxDown);
+        float RemainingDown=SphereCount<2 ? WalkableDown : MaxDown;
         FHitResult Hit;
+        TOptional<float> FlatSupportZ;
         const FVector Top=Feet+FVector(0,0,SupportRadius+MaxUp+Clearance);
         FCollisionQueryParams SupportParams=Params;
         TSet<const UPrimitiveComponent*> Ignored;
+        int32 RejectedCreatures=0;
         for(;;)
         {
-            if (!World.SweepSingleByChannel(Hit,Top,Top-FVector(0,0,MaxDown+MaxUp+Clearance),
+            if (!World.SweepSingleByChannel(Hit,Top,Top-FVector(0,0,RemainingDown+MaxUp+Clearance),
                 FQuat::Identity,ECC_Pawn,FCollisionShape::MakeSphere(SupportRadius),SupportParams))return false;
-            if(!IsCreatureBody(Hit))break;
+            if(!IsCreatureBody(Hit))
+            {
+                if(bRequireWalkableNormal && bCheckFootprint && !bHasLowerTread)
+                {
+                    // The contact sweep can seat the sphere below a convex rim.
+                    // Validate the smaller polygon footprint, retaining the
+                    // authored flat plane rather than rolling down its edge.
+                    // Slopes keep the collision solution; a separately verified
+                    // lower tread already supplies support for stair descent.
+                    // CheckWalkable begins at the first contact, not at the
+                    // original probe height. A lower balcony must not validate
+                    // an unsupported roof rim across the entire descent budget.
+                    const FVector ContactFeet(Feet.X,Feet.Y,Hit.Location.Z-SupportRadius);
+                    const auto PolygonSupport=HasMeshWalkableFootprint(Hit,ContactFeet,Radius,WalkableDown,
+                        MaxUp+Radius*(1.f-.6641741f),&FlatSupportZ);
+                    if(PolygonSupport.IsSet() && !PolygonSupport.GetValue())
+                    {
+                        // A nearby tread can win the broad sphere sweep while
+                        // its polygon is outside the smaller support footprint.
+                        // Continue to the ramp/tread below it, within StepDown.
+                        const auto* Component=Hit.GetComponent();
+                        if(!Component || Ignored.Contains(Component))return false;
+                        RemainingDown=FMath::Min(RemainingDown,float(Feet.Z-ContactFeet.Z)+WalkableDown);
+                        Ignored.Add(Component);SupportParams.AddIgnoredComponent(Component);
+                        continue;
+                    }
+                }
+                break;
+            }
             // Retail land_on_sphere permits standing on a creature. Preserve
             // a nearby lower-sphere top contact after landing; do not step up
             // onto creatures or treat an initial side overlap as a floor.
-            const FVector Bottom=Top-FVector(0,0,MaxDown+MaxUp+Clearance);
+            const FVector Bottom=Top-FVector(0,0,RemainingDown+MaxUp+Clearance);
             if(RefineCreatureContact(Hit,Top,Bottom,SupportRadius)
                 && !Hit.bStartPenetrating && Hit.Normal.Z>=.6641741f
                 && Hit.Location.Z-SupportRadius<=Feet.Z+Clearance)break;
             const auto* Component=Hit.GetComponent();
             if (!Component || Ignored.Contains(Component)) return false;
             Ignored.Add(Component);SupportParams.AddIgnoredComponent(Component);
+            if(++RejectedCreatures==5 && BatchCrowdQueries())
+            {
+                TRACE_CPUPROFILER_EVENT_SCOPE(ACE_CrowdSupportGather);
+                // Side overlaps in a packed hallway are not foot support.
+                // Re-sweeping the whole scene once per rejected creature made
+                // every blocked monster's slide cost grow with the crowd.
+                // Gather candidates once, then apply the SAME sphere-contact
+                // test. Keep valid top contacts and all architecture in Chaos.
+                TArray<FOverlapResult> Nearby;
+                World.OverlapMultiByChannel(Nearby,(Top+Bottom)*.5,FQuat::Identity,ECC_Pawn,
+                    FCollisionShape::MakeCapsule(SupportRadius,SupportRadius+(Top.Z-Bottom.Z)*.5),SupportParams);
+                for(const auto& Overlap:Nearby)
+                {
+                    const auto* Sphere=Cast<USphereComponent>(Overlap.GetComponent());
+                    if(!Sphere || !Sphere->ComponentHasTag(TEXT("ACECreatureBody")))continue;
+                    FHitResult Candidate;Candidate.Component=Overlap.Component;
+                    if(RefineCreatureContact(Candidate,Top,Bottom,SupportRadius)
+                        && !Candidate.bStartPenetrating && Candidate.Normal.Z>=.6641741f
+                        && Candidate.Location.Z-SupportRadius<=Feet.Z+Clearance)continue;
+                    Ignored.Add(Sphere);SupportParams.AddIgnoredComponent(Sphere);
+                }
+            }
         }
         // Contact at a convex tread belongs to the lower sphere. Chaos can
         // report the riser's vertical triangle as ImpactNormal while the sphere
@@ -577,12 +662,29 @@ namespace ACEBodySweep
             // step, not permission to stand on a wall or roll over a cliff.
             || (bHasLowerTread && Hit.Normal.Z>.0871557f);
         if (Hit.bStartPenetrating || !bWalkableContact) return false;
-        const float Z=Hit.Location.Z-SupportRadius;
-        if (Z>Feet.Z+MaxUp+Clearance || Z<Feet.Z-MaxDown) return false;
+        const float ContactZ=Hit.Location.Z-SupportRadius;
+        if (ContactZ>Feet.Z+MaxUp+Clearance || ContactZ<Feet.Z-MaxDown) return false;
+        const float Z=FlatSupportZ.IsSet() ? FMath::Max(ContactZ,FlatSupportZ.GetValue()) : ContactZ;
         // Retain edge contact when descending and on sloped ramp planes, but
         // do not roll upward around a flat tread's vertical riser. That ascent
         // needs the full step/headroom checks instead of partial sphere lifts.
         if (Z>Feet.Z+Clearance && Hit.ImpactNormal.Z>.99f && Hit.Normal.Z<.6641741f) return false;
+        if(bRequireWalkableNormal && bCheckFootprint && !IsCreatureBody(Hit))
+        {
+            if(Hit.GetComponent() && Hit.GetComponent()->ComponentHasTag(TEXT("ACEOutdoorTerrain")))
+            {
+                // OBJECTINFO::validate_walkable tests the vertical low point on
+                // terrain. A sphere touching the plateau behind us is not land
+                // beneath the feet. Wading terrain is filtered by the caller.
+                FHitResult Ground;
+                if(!World.LineTraceSingleByChannel(Ground,Feet+FVector(0,0,MaxUp+Clearance),
+                    Feet-FVector(0,0,MaxDown),ECC_Pawn,SupportParams)
+                    || Ground.ImpactNormal.Z<.6641741f)return false;
+                SupportZ=Ground.ImpactPoint.Z;
+                if(SupportNormal)*SupportNormal=Ground.ImpactNormal;
+                return true;
+            }
+        }
         SupportZ=Z;
         if (SupportNormal) *SupportNormal=Hit.Normal.GetSafeNormal();
         return true;
@@ -593,7 +695,7 @@ namespace ACEBodySweep
     {
         const FVector Offset=Body.Centers[0]+FVector(0,0,Body.HalfHeight-Body.Radii[0]);
         if(!FindFootSupport(World,OriginFeet+Offset,Body.Radii[0],MaxDown,Params,SupportZ,
-            MaxUp,bHasLowerTread,bRequireWalkableNormal))return false;
+            MaxUp,bHasLowerTread,bRequireWalkableNormal,nullptr,true,Body.Count))return false;
         SupportZ-=Offset.Z;
         return true;
     }
@@ -646,8 +748,10 @@ namespace ACEBodySweep
         // Only a nearby, walkable lower-sphere contact is a ground plane.
         // A landed-on creature can support the feet; a side overlap or floor
         // far below a ledge cannot. Query only when resolving a blocking contact.
+        // This asks for the physical contact tangent; the destination's smaller
+        // walkable footprint is checked separately before committing movement.
         FindFootSupport(World,Center+Capsule.Centers[0]-FVector(0,0,Capsule.Radii[0]),
-            Capsule.Radii[0],2.f,Params,SupportZ,.5f,false,true,&Normal);
+            Capsule.Radii[0],2.f,Params,SupportZ,.5f,false,true,&Normal,false);
         return Normal;
     }
 
@@ -732,7 +836,8 @@ namespace ACEBodySweep
     // A jump collides with all faces, including a roof touched only by the lower
     // sphere. Center rays and 2D wall slides cannot validate this path.
     inline FAirborneMove MoveAirborne(UWorld& World, const FVector& From, const FVector& To,
-        const FACECollisionBody& Capsule, const FCollisionQueryParams& Params, bool bFalling, float LandingZ=.0871557f)
+        const FACECollisionBody& Capsule, const FCollisionQueryParams& Params, bool bFalling, float LandingZ=.0871557f,
+        bool bGroundedStepDown=false)
     {
         FAirborneMove Result{From};
         FVector Remaining=To-From;
@@ -752,10 +857,14 @@ namespace ACEBodySweep
                 // creatures too. Its creature exclusion is for support retries,
                 // not this first contact. Keep the landing before attempting
                 // the side/overlap escape below, or gravity pulls us into mobs.
-                if(!Hit.bStartPenetrating && !IsUpperBodyContact(Hit)
+                // Chaos may miss an end-of-step touch by less than our contact
+                // skin at large world coordinates. Retail land_on_sphere also
+                // accepts an intersecting lower sphere. Do not turn that tiny
+                // next-frame overlap into the side-contact escape below.
+                if((!Hit.bStartPenetrating || Hit.PenetrationDepth<=.1f) && !IsUpperBodyContact(Hit)
                     && Hit.Normal.Z>=LandingZ && Remaining.Z<0.f)
                 {
-                    Result.Position=Hit.Location+Hit.Normal*.1f;
+                    Result.Position=Hit.Location+Hit.Normal*(Hit.PenetrationDepth+.1f);
                     Result.ContactNormal=Hit.Normal;
                     Result.bLanded=true;
                     break;
@@ -808,8 +917,10 @@ namespace ACEBodySweep
                 // the same time-zero hit and gravity never moves the body.
                 if (!Normal.IsNearlyZero())
                 {
-                    const FVector Recovered = Recover(World, Start,
-                        Normal * (Hit.PenetrationDepth + .5f), Hit, Capsule, AirParams);
+                    const FVector Push=Normal*(Hit.PenetrationDepth+.5f);
+                    const FVector Recovered = bGroundedStepDown
+                        ? RecoverGrounded(World,Start,Push,Hit,Capsule,AirParams)
+                        : Recover(World,Start,Push,Hit,Capsule,AirParams);
                     if (!Recovered.Equals(Start, .01f))
                     {
                         Result.Position = Recovered;
@@ -848,7 +959,11 @@ namespace ACEBodySweep
                 }
                 break;
             }
-            Result.Position=Hit.Location+Normal*.1f;
+            // Contact skin must not turn a vertical grounded snap into lateral
+            // travel. Airborne wall/roof slides retain their contact normal.
+            const FVector Skin=bGroundedStepDown && !IsUpperBodyContact(Hit) && Normal.Z>=.6641741f
+                ? FVector(0,0,.1f/Normal.Z) : Normal*.1f;
+            Result.Position=Hit.Location+Skin;
             if (bFalling && !IsUpperBodyContact(Hit) && Normal.Z>=LandingZ && Remaining.Z<0.f)
             { Result.bLanded=true; break; }
             Remaining*=1.f-Hit.Time;

@@ -1,5 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "ACEClientSubsystem.h"
 #include "ACEClientChatCommands.h"
 #include "ACEInputBindings.h"
@@ -30,6 +32,17 @@
 #include "Slate/WidgetRenderer.h"
 #include "Misc/App.h"
 
+
+namespace
+{
+FString ACEChatTestsDatDirectory()
+{
+    FString Directory=TEXT("C:/Turbine/Asheron's Call");
+    FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),Directory);
+    return Directory;
+}
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEChatParityTest, "ACE.RetailParity.ChatInputAndCommands",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACEChatParityTest::RunTest(const FString&)
@@ -57,7 +70,7 @@ bool FACEChatParityTest::RunTest(const FString&)
     auto* Main = NewObject<UACEChatEntry>(); Main->InitializeChat(Binder);
     auto* Other = NewObject<UACEChatEntry>(); Other->InitializeChat(Binder);
     auto* Dat=NewObject<UACEDatSubsystem>(GI);
-    if (!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if (!Dat->LoadDatDirectory(ACEChatTestsDatDirectory())) return false;
     auto* Resources=NewObject<UACEUIResourceResolver>(); Resources->Initialize(Dat);
     auto* Output=NewObject<UACERetailTextBlock>(); Output->SetSelectable(true);
     Output->SetText(FText::FromString(TEXT("Copy this chat message")));
@@ -145,6 +158,7 @@ bool FACEChatParityTest::RunTest(const FString&)
         // The editable chat command is intentionally single-line; test its
         // clipboard behavior separately from copying multiline chat history.
         Copied=TEXT("Copy"); FPlatformApplicationMisc::ClipboardCopy(*Copied);
+        ReadClipboard(Copied);
         Main->SetChatText(TEXT("")); Focus(Main); Ctrl(EKeys::V);
         TestEqual(TEXT("Copied chat pastes into the editable entry"),Main->GetText().ToString(),Copied);
         Ctrl(EKeys::A); Ctrl(EKeys::C);
@@ -173,6 +187,8 @@ bool FACEChatParityTest::RunTest(const FString&)
         // typing. Merely checking the prefilled text misses a misplaced caret.
         auto* Canvas=NewObject<UACEUICanvasWidget>();
         Canvas->WidgetTree=NewObject<UWidgetTree>(Canvas);Binder->Canvas=Canvas;
+        Canvas->SetResourceResolver(Resources);
+        for(int32 W=0;W<5;++W){Binder->ChatRowWidths[W]=480;Binder->ChatRowScales[W]=FVector2D(1,1);}
         Binder->ChatLog=NewObject<UScrollBox>();
         Binder->FloatyChatLogs.SetNum(4);Binder->FloatyChatLogs[0]=NewObject<UScrollBox>();
         Binder->FloatyChatLineCounts.SetNumZeroed(4);
@@ -199,6 +215,32 @@ bool FACEChatParityTest::RunTest(const FString&)
             }
         }
         TestEqual(TEXT("Clicking a name only prepares a tell without sending it"),Session.CachedC2SPackets.Num(),0);
+        if(FApp::CanEverRender())
+        {
+            FWidgetRenderer Renderer;
+            const auto PreviousContent=Window->GetContent();
+            for(int32 W:{0,1})
+            {
+                auto* Log=Binder->GetChatLogWidget(W);
+                Window->SetContent(Log->TakeWidget());
+                for(int32 RowIndex=1;RowIndex<Binder->MaxChatLines;++RowIndex)
+                    Binder->AppendChatLineToLog(W,FString::Printf(TEXT("Message %d"),RowIndex),FLinearColor::White,TEXT(""));
+                Renderer.DrawWidget(Window,FVector2D(500,140));
+                Renderer.DrawWidget(Window,FVector2D(500,140));
+                Binder->ScrollChatLog(-200,W);
+                Renderer.DrawWidget(Window,FVector2D(500,140));
+                const float Before=Log->GetScrollOffset();
+                const float RemovedHeight=Log->GetChildAt(0)->GetDesiredSize().Y;
+                TestTrue(TEXT("Chat fixture is scrolled into history"),Before>RemovedHeight && RemovedHeight>0);
+                Binder->AppendChatLineToLog(W,TEXT("New incoming message at the history cap"),FLinearColor::White,TEXT(""));
+                Renderer.DrawWidget(Window,FVector2D(500,140));
+                TestTrue(TEXT("Evicting the oldest message preserves the visible reading position"),FMath::IsNearlyEqual(Log->GetScrollOffset(),Before-RemovedHeight,.1f));
+                TestFalse(TEXT("New messages do not re-enable following"),W==0?Binder->bChatStickToBottom:Binder->bFloatyChatStickToBottom[W-1]);
+                Binder->ScrollChatLog(100000,W);
+                TestTrue(TEXT("Scrolling to the bottom resumes following"),W==0?Binder->bChatStickToBottom:Binder->bFloatyChatStickToBottom[W-1]);
+            }
+            Window->SetContent(PreviousContent);
+        }
         Binder->Canvas=nullptr;Binder->ChatLog=nullptr;Binder->FloatyChatLogs.Reset();Binder->ChatRowSenders.Reset();
     }
     Main->SetChatText(TEXT("")); Other->SetChatText(TEXT(""));

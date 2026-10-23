@@ -22,6 +22,12 @@ class FDisplayInput final : public IInputProcessor
     double SaveAt = 0;
     double RestoreAt = 0;
     bool PendingRestore = false;
+#if PLATFORM_MAC
+    // 0 = not started, 1 = left fullscreen, waiting to re-enter, 2 = done.
+    int32 MacFullscreenFix = 0;
+    double MacFullscreenAt = 0;
+    EWindowMode::Type MacFullscreenMode = EWindowMode::WindowedFullscreen;
+#endif
 
     void SavePosition(const FVector2D& Position)
     {
@@ -54,6 +60,35 @@ public:
         if (!Window || PC->IsVRActive()) return;
         const auto Mode=Window->GetWindowMode();
         const double Now=FPlatformTime::Seconds();
+#if PLATFORM_MAC
+        // macOS: a window that starts fullscreen keeps the menu-bar/notch strip
+        // black and pushes the bottom of the game off-screen. Leaving and
+        // re-entering fullscreen fixes it, so do that once on the first frames.
+        if (MacFullscreenFix==0)
+        {
+            MacFullscreenFix=2;
+            if (Mode!=EWindowMode::Windowed && !Window->IsWindowMinimized())
+                if (auto* Settings=UGameUserSettings::GetGameUserSettings())
+                {
+                    MacFullscreenMode=Mode; MacFullscreenFix=1; MacFullscreenAt=Now+.25;
+                    Settings->SetFullscreenMode(EWindowMode::Windowed);
+                    Settings->ApplyResolutionSettings(false);
+                    return;
+                }
+        }
+        if (MacFullscreenFix==1)
+        {
+            if (Now<MacFullscreenAt) return;
+            MacFullscreenFix=2;
+            if (auto* Settings=UGameUserSettings::GetGameUserSettings())
+            {
+                Settings->SetFullscreenMode(MacFullscreenMode);
+                Settings->ApplyResolutionSettings(false);
+                Settings->SaveSettings();
+            }
+            return;
+        }
+#endif
         if (!Restored)
         {
             Restored=true;

@@ -13,6 +13,9 @@ local loot_full=nil
 local monster_failures,monster_blacklist,combat_serial={},{},0
 local ghost_attempts,ghost_hp={},{ }
 local corpse_pending=nil
+local corpse_contents_wait=nil
+local corpse_spawn_wait,combat_death_seen=nil,nil
+local completed_corpse=nil
 local mana_refill_pending=nil
 local mana_fill_pending,pet_refill_pending=nil,nil
 local mana_sources={} -- only junk whose corpse-to-inventory receipt was confirmed
@@ -36,6 +39,7 @@ local loot_jobs={}
 local loot_job_pending=nil
 local scroll_reads={}
 local combine_pending=nil
+local stack_pending=nil
 -- An operational failure belongs to one activity, never the whole scheduler.
 -- Cooldowns prevent a failing high-priority activity starving combat/recovery.
 local activity,activity_time,activity_pauses='meta',0,{}
@@ -77,6 +81,29 @@ local function contains(list,id) for _,v in ipairs(list or {}) do if v==id then 
 local function vt_string(value) if type(value)=='number' then return string.format('%.15g',value) end;return tostring(value) end
 local function allowed(list,id) return not list or #list==0 or contains(list,id) end
 local function band(a,b) return (a or 0)&b end
+local function pet_device(v)
+ local q=v.int_properties or {}
+ return v.pet_device or q['280']==213 or q['366']==54 or q['368']==54 or (q['362'] or 0)>0 or (q['266'] or 0)>0
+end
+local function equipment_selection(p,inventory)
+ local selected_types,selected_ids,weapon_types,weapon_ids={},{},{},{}
+ for _,id in ipairs(p.weapons or {}) do selected_types[id]=true;weapon_types[id]=true end
+ for _,id in ipairs(p.weapon_items or {}) do selected_ids[id]=true;weapon_ids[id]=true end
+ -- Essences share the equipment picker but are not weapons. Selecting just
+ -- an essence must not exclude every wand/sword. Keep unknown selections
+ -- restrictive: an absent selected weapon must not enable unrelated gear.
+ for _,v in ipairs(inventory) do if pet_device(v) then
+  if v.wcid then weapon_types[v.wcid]=nil end
+  if v.id then weapon_ids[v.id]=nil end
+ end end
+ local restrict_types,restrict_ids=next(weapon_types)~=nil,next(weapon_ids)~=nil
+ local automatic_pets=next(selected_types)==nil and next(selected_ids)==nil
+ local function weapon_allowed(v)
+  return not pet_device(v) and (not restrict_types or weapon_types[v.wcid]) and (not restrict_ids or weapon_ids[v.id])
+ end
+ local function pet_allowed(v) return automatic_pets or selected_types[v.wcid] or selected_ids[v.id] end
+ return weapon_allowed,pet_allowed
+end
 local function route_kind(v)
  -- Earlier imports flattened NAV OpenVendor into Use. Only type 5 encoded
  -- both a GUID and name; preserve those saved routes without requiring import.
@@ -205,6 +232,13 @@ local function buff_refresh_window(s,p,duration)
  if s.time<buff_recast_until then refresh=refresh+30 end
  return duration and duration>0 and math.min(refresh,duration*.5) or refresh
 end
+local function timed_buff(e)
+ -- VT gz.cs sends only positive-duration enchantments to BuffController.
+ -- Wield effects disappear with the buff wand; counting them here alternates
+ -- the wand and combat weapon forever without casting the lasting self buffs.
+ -- Older snapshot fixtures omitted duration and supplied only remaining time.
+ return e.duration==nil or e.duration>0
+end
 -- A side-effect-free buff plan is shared by NeedBuff and the casting policy.
 local function compute_buff(s,p)
  local trained={};for _,id in ipairs(s.trained_skills or {}) do trained[id]=true end
@@ -261,7 +295,7 @@ local function compute_buff(s,p)
  -- A configured refresh window must never make a freshly cast short buff stale.
  local function refresh_window(duration) return buff_refresh_window(s,p,duration) end
  for _,e in ipairs(s.enchantments or {}) do local v=by_id[e.id] or best[e.category]
-  if e.remaining>refresh_window(e.duration or (v and v.duration)) then active[e.category]=math.max(active[e.category] or 0,e.power) end
+  if timed_buff(e) and e.remaining>refresh_window(e.duration or (v and v.duration)) then active[e.category]=math.max(active[e.category] or 0,e.power) end
  end
  for _,e in ipairs(s.item_buffs or {}) do local v=best[e.category] or item_best[e.category]
   if e.expires-s.time>refresh_window(e.duration or (v and v.duration)) then local k=tostring(e.target)..':'..e.category;confirmed[k]=math.max(confirmed[k] or 0,e.power) end
@@ -546,9 +580,10 @@ meta_expression=function(e,s)
    end
    if s.busy or s.ready==false or meta.pending or #meta.queue>0 or s.jumping then return 0 end
    local wand,unknown
+   local weapon_allowed=equipment_selection(p,s.inventory or {})
    for _,v in ipairs(s.inventory or {}) do if band(v.type,0x8000)~=0 then
     if v.equipped then wand=v;break end
-    if allowed(p.weapons,v.wcid) and allowed(p.weapon_items,v.id) then
+    if weapon_allowed(v) then
      if v.identified and v.can_wield then wand=wand or v elseif not v.identified then unknown=unknown or v end
     end
    end end
@@ -977,7 +1012,6 @@ local function mana_source_candidate(v,p,option)
 end
 local function empty_mana_stone(v,p)
  return v.identified and v.usable and v.mana_empty and band(v.type,0x80000)~=0
-  and allowed(p.consumables,v.wcid)
 end
 local function mana_source_demand(inventory,p,option)
  if not option('fill_mana_stones',false) or mana_fill_pending then return 0 end
@@ -1040,10 +1074,6 @@ local function equipment_mana(s,p,inventory,option)
  end
 end
 
-local function pet_device(v)
- local q=v.int_properties or {}
- return v.pet_device or q['280']==213 or q['366']==54 or q['368']==54 or (q['362'] or 0)>0 or (q['266'] or 0)>0
-end
 local function pet_eligible(s,v)
  local q=v.int_properties or {};local skills=s.skills or {}
  if not v.identified or not v.usable or not pet_device(v) then return false end
@@ -1201,6 +1231,28 @@ local function tick(s,p)
   if activity_ready('meta') then return failed('Unknown activity state: '..invalid..'; using base settings') end
  end
  local function option(k,default) if k=='navigation' and navigation_paused then return false end;if current[k]~=nil then return current[k] end;if p[k]~=nil then return p[k] end;return default end
+ -- ACE creates a corpse only after the death animation. Do not start retracing
+ -- a combat excursion in that gap. Only the host's confirmed combat death can
+ -- arm this wait; disappearing, ignored or out-of-sight targets cannot.
+ local death=s.combat_death
+ if death and death.time~=combat_death_seen then
+  combat_death_seen=death.time;corpse_spawn_wait=death
+ end
+ if corpse_spawn_wait then
+  local elapsed=s.time-corpse_spawn_wait.time
+  if elapsed<0 or elapsed>=8 or corpse_spawn_wait.teleport_sequence~=s.teleport_sequence
+   or not option('looting',false) or not s.position or distance(s.position,corpse_spawn_wait)>option('loot_range',15) then
+   corpse_spawn_wait=nil
+  else
+   -- Any newly arrived visible corpse within loot range can be considered by
+   -- the normal ownership/rule checks now. Old corpses do not end the wait.
+   for _,c in ipairs(s.corpses or {}) do
+    if c.observed_age and c.observed_age<=elapsed+.05 and c.distance<=option('loot_range',15) and c.line_of_sight~=false then
+     corpse_spawn_wait=nil;break
+    end
+   end
+  end
+ end
  -- Failure counts come from server combat feedback, not from elapsed attack time
  -- or evades. Match VT's strict count > limit and let the route run past failures.
  local present={};for _,t in ipairs(s.targets or {}) do present[t.id]=true end
@@ -1340,10 +1392,7 @@ local function tick(s,p)
  local inventory=s.inventory or {}
 
  local usable_names={};for _,v in ipairs(inventory) do if v.usable and v.name then usable_names[v.name]=v end end
- local weapon_types,weapon_ids={},{ }
- for _,v in ipairs(p.weapons or {}) do weapon_types[v]=true end
- for _,v in ipairs(p.weapon_items or {}) do weapon_ids[v]=true end
- local function weapon_allowed(v) return (#(p.weapons or {})==0 or weapon_types[v.wcid]) and (#(p.weapon_items or {})==0 or weapon_ids[v.id]) end
+ local weapon_allowed,pet_allowed=equipment_selection(p,inventory)
  for _,v in ipairs(inventory) do
   if not v.equipped then item_attempts['equip'..v.id..':remove']=0
   elseif band(v.equipped_slot,0x200000)~=0 then item_attempts['equip'..v.id..':offhand']=0
@@ -1425,13 +1474,16 @@ local function tick(s,p)
   local idle=idle_stance();if idle then return idle end
   if (p.follow_name or '')~='' or (p.follow_id or 0)~=0 then
    local follow
-   for _,o in ipairs(s.route_objects or {}) do if o.id==p.follow_id or o.name==p.follow_name then follow=o;break end end
+   for _,o in ipairs(s.route_objects or {}) do
+    if ((p.follow_name or '')~='' and o.name==p.follow_name) or ((p.follow_name or '')=='' and o.id==p.follow_id) then follow=o;break end
+   end
    if not follow then return result(nil,'Waiting for follow target to enter range') end
-   if follow.distance<=option('follow_distance',3) then return result(nil,'Following '..follow.name) end
+   -- Being close through a wall is not the same as reaching the next footstep.
+   if (not option('follow_corners',false) or #follow_path<=1) and follow.distance<=option('follow_distance',3) then return result(nil,'Following '..follow.name) end
    local aim=option('follow_corners',false) and follow_path[1] or follow
    aim=aim or follow
    local door=route_door(aim);if door then return door end
-   return {action='move',cell=aim.cell,x=aim.x,y=aim.y,z=aim.z,status='Following '..follow.name}
+   return {action='move',cell=aim.cell,x=aim.x,y=aim.y,z=aim.z,arrival_radius=option('follow_corners',false) and .15 or nil,status='Following '..follow.name}
   end
   if meta.route_changed then return result(nil,'Loading route geometry') end
   local route=p.route or {};if #route==0 then return result(nil,'Record a route to begin navigation') end
@@ -1854,6 +1906,12 @@ local function tick(s,p)
    end
   end
  end
+ if option('fill_mana_stones',false) then
+  for _,v in ipairs(inventory) do
+   if not v.identified and v.usable and band(v.type,0x80000)~=0 and (item_attempts['id'..v.id] or 0)<3
+    and s.time>=(until_time['id'..v.id] or 0) then activity='item_mana';return assess(v) end
+  end
+ end
  local mana_action=equipment_mana(s,p,inventory,option);if mana_action then return mana_action end
  local function buffs(refresh)
  if health_critical or not activity_ready('buffs') then return end
@@ -1862,7 +1920,7 @@ local function tick(s,p)
   -- Failed uses rotate to the next item instead of consuming a whole stack.
   if buff_item_pending then
    local confirmed=false
-   for _,e in ipairs(s.enchantments or {}) do if e.category==buff_item_pending.category and e.power>=buff_item_pending.power and e.remaining>buff_item_pending.before then confirmed=true;break end end
+   for _,e in ipairs(s.enchantments or {}) do if timed_buff(e) and e.category==buff_item_pending.category and e.power>=buff_item_pending.power and e.remaining>buff_item_pending.before then confirmed=true;break end end
    if confirmed then
     if forced_buff then forced_buff.done['item'..buff_item_pending.name]=true end
     item_attempts['buffitem'..buff_item_pending.name]=0;buff_item_pending=nil
@@ -1895,7 +1953,7 @@ local function tick(s,p)
   for _,b in ipairs(p.buff_items or {}) do
    local spell=by_id[b.spell];local item=usable_names[b.name]
    if spell and item and (band(spell.flags,0x2000)==0 or s.in_fellowship) then
-    local active,before=false,0;for _,e in ipairs(s.enchantments or {}) do if e.category==spell.category and e.power>=spell.power then before=math.max(before,e.remaining);if e.remaining>buff_refresh_window(s,settings,e.duration or spell.duration) then active=true end end end
+    local active,before=false,0;for _,e in ipairs(s.enchantments or {}) do if timed_buff(e) and e.category==spell.category and e.power>=spell.power then before=math.max(before,e.remaining);if e.remaining>buff_refresh_window(s,settings,e.duration or spell.duration) then active=true end end end
     local needed=forced_buff and not forced_buff.done['item'..b.name] or (not forced_buff and not active)
     if needed and (item_attempts['buffitem'..b.name] or 0)<3 then
      local key='buffitem'..b.name
@@ -1993,7 +2051,13 @@ local function tick(s,p)
  local combat=activity_ready('combat') and option('combat','off') or 'off'
  if combat~='off' and not option('manual_combat',false) then combat='auto' end
  activity='pets'
- local refill=refill_pet(s,p,inventory,option,weapon_allowed);if refill then return refill end
+ if option('summon_pets',false) then
+  for _,v in ipairs(inventory) do
+   if not v.identified and v.usable and pet_allowed(v) and band(v.type,128)~=0
+    and (item_attempts['id'..v.id] or 0)<3 and s.time>=(until_time['id'..v.id] or 0) then return assess(v) end
+  end
+ end
+ local refill=refill_pet(s,p,inventory,option,pet_allowed);if refill then return refill end
  if pet_pending then
   local cooldown=((s.cooldowns or {})[tostring(math.floor(pet_pending.cooldown))] or 0)>0
   if s.owned_pet or cooldown then pet_pending=nil
@@ -2001,7 +2065,8 @@ local function tick(s,p)
    until_time['pet'..pet_pending.item]=s.time+30;pet_pending=nil
   end -- Continue combat/recovery while waiting; do not submit another summon.
  end
- if activity_ready('pets') and not pet_pending and not pet_refill_pending and combat~='off' and option('summon_pets',false) and not s.owned_pet then
+ -- A combat loadout retry pauses attacking, not the independent pet activity.
+ if activity_ready('pets') and not pet_pending and not pet_refill_pending and option('summon_pets',false) and not s.owned_pet then
    local pet_target,pet_rule,count=nil,nil,0
    local range=option('pet_range_mode',0)==1 and option('pet_range',5) or option('radius',30)
    for _,t in ipairs(s.targets or {}) do
@@ -2027,8 +2092,7 @@ local function tick(s,p)
     for _,v in ipairs(inventory) do local props=v.int_properties or {}
      -- VT's equipment list explicitly opts devices in. A native profile can
      -- instead select device classes through its equipment picker.
-     local selected=weapon_ids[v.id] or weapon_types[v.wcid] or (#(p.weapons or {})==0 and #(p.weapon_items or {})==0)
-     if selected and pet_eligible(s,v) and s.time>=(until_time['pet'..v.id] or 0) then
+     if pet_allowed(v) and pet_eligible(s,v) and s.time>=(until_time['pet'..v.id] or 0) then
       local damage=({[1]=4,[32]=8,[64]=64,[128]=16,[256]=32})[v.icon_effects] or 4
       local rank=resistance(pet_target,damage)
       if damage==preferred then rank=rank+1000000
@@ -2090,14 +2154,25 @@ local function tick(s,p)
       mana_sources[received.id]={count=loot_pending.amount,wcid=loot_pending.wcid}
      else loot_jobs[#loot_jobs+1]={id=received.id,count=loot_pending.amount,action=loot_pending.after,wcid=loot_pending.wcid} end
     end
-    if s.container~=loot_pending.container then corpses[loot_pending.container]=s.time+30 end
+    if s.container~=loot_pending.container then
+     corpses[loot_pending.container]=s.time+30
+     if loot_pending.empties then completed_corpse=loot_pending.container end
+    end
     loot_pending=nil
    end
  local need_mana_source=mana_source_demand(inventory,p,option)>0
  if not loot_full and option('looting',false) and (#(p.loot_rules or {})>0 or option('read_unknown_scrolls',false) or option('fill_mana_stones',false)) then
   if s.container and s.container~=0 then
-   if s.container_is_corpse==false then return result(nil,'Waiting for the open container to close') end
-   if s.contents_ready==false then return result(nil,'Waiting for corpse item descriptions') end
+   -- A player-opened pack/chest must not block combat, recovery or navigation.
+   -- Only corpse looting owns the contents of a corpse.
+   if s.container_is_corpse==false then corpse_contents_wait=nil;return end
+   if s.contents_ready==false then
+    if not corpse_contents_wait or corpse_contents_wait.id~=s.container then corpse_contents_wait={id=s.container,deadline=s.time+20} end
+    if s.time<corpse_contents_wait.deadline then return result(nil,'Waiting for corpse item descriptions') end
+    corpses[s.container]=s.time+30;corpse_contents_wait=nil
+    return {action='close_corpse',status='Corpse contents incomplete; retrying later'}
+   end
+   corpse_contents_wait=nil
    -- Charge actual work, not all the conditions/spells a rule might examine.
    -- Stable ordering prevents snapshot enumeration changes restarting the scan.
    local rules=p.loot_rules or {};local contents=s.contents or {}
@@ -2154,7 +2229,7 @@ local function tick(s,p)
       local amount=rule.keep_up_to and rule.keep_up_to>0 and math.min(item.count,math.max(0,rule.keep_up_to-have)) or item.count
       if rule.action~='skip' and amount>0 then
        local before={};for _,v in ipairs(inventory) do before[v.id]=true end
-       loot_scan={};loot_pending={container=s.container,before=before,amount=amount,id=item.id,count=item.count,wcid=item.wcid,expected=(owned[item.wcid] or 0)+amount,expires=s.time+10,after=rule.action}
+       loot_scan={};loot_pending={container=s.container,empties=#contents==1 and amount==item.count,before=before,amount=amount,id=item.id,count=item.count,wcid=item.wcid,expected=(owned[item.wcid] or 0)+amount,expires=s.time+10,after=rule.action}
        return {action='loot',item=item.id,amount=amount,status='Looting '..item.name..' ('..(rule.label or 'matching rule')..')'}
       end
       break
@@ -2175,7 +2250,7 @@ local function tick(s,p)
       end
      elseif mana_source_candidate(item,p,option) then
       local before={};for _,v in ipairs(inventory) do before[v.id]=true end
-      loot_scan={};loot_pending={container=s.container,before=before,amount=1,id=item.id,count=item.count,wcid=item.wcid,expected=(owned[item.wcid] or 0)+1,expires=s.time+10,after='mana_source'}
+      loot_scan={};loot_pending={container=s.container,empties=#contents==1 and item.count==1,before=before,amount=1,id=item.id,count=item.count,wcid=item.wcid,expected=(owned[item.wcid] or 0)+1,expires=s.time+10,after='mana_source'}
       return {action='loot',item=item.id,amount=1,status='Looting '..item.name..' to fill an empty mana stone'}
      end
     end
@@ -2183,7 +2258,7 @@ local function tick(s,p)
    end
    local waiting=loot_scan.waiting;loot_scan={}
    if waiting then return result(nil,'Waiting for loot appraisal') end
-   corpses[s.container]=s.time+300;return {action='close_corpse',status='Loot complete'}
+   corpses[s.container]=s.time+300;return {action='close_corpse',completed=true,status='Loot complete'}
   end
  end
  -- Only the explicit unknown-scroll option authorizes reading carried scrolls.
@@ -2287,7 +2362,7 @@ local function tick(s,p)
   end
  else inventory_salvage_scan={} end
  if not loot_full and option('looting',false) and (#(p.loot_rules or {})>0 or option('read_unknown_scrolls',false) or need_mana_source) then
-  for _,c in ipairs(s.corpses or {}) do if c.line_of_sight~=false and c.distance<=option('loot_range',15) and s.time>=(corpses[c.id] or 0) then
+  for _,c in ipairs(s.corpses or {}) do if not c.looted and c.line_of_sight~=false and c.distance<=option('loot_range',15) and s.time>=(corpses[c.id] or 0) then
    if (c.ownership_available or option('loot_only_rare',false)) and not c.identified then return assess(c) end
    local permitted=true
    if c.ownership_available then
@@ -2326,12 +2401,11 @@ local function tick(s,p)
  for _,v in ipairs(spell_groups.offense) do
   if element(v)~=0 and not v.beneficial and v.category~=636 and v.category~=637 and v.category~=638 then
    local key=tostring(v.category)..':'..tostring(band(v.flags,0x1000))
-   -- An explicit spell choice must survive family compaction.
-   if not p.attack_spell or p.attack_spell==0 or p.attack_spell==v.id then
+   -- Keep other elements available for monster overrides, while preserving
+   -- an explicit lower-tier spell within its own family.
     local index=attack_indices[key]
     if not index then attack_spells[#attack_spells+1]=v;attack_indices[key]=#attack_spells
-    elseif v.power>attack_spells[index].power then attack_spells[index]=v end
-   end
+    elseif v.id==p.attack_spell or (attack_spells[index].id~=p.attack_spell and v.power>attack_spells[index].power) then attack_spells[index]=v end
   elseif not v.beneficial and not v.caster_target and (v.duration or 0)>0 and (not best_debuffs[v.category] or v.power>best_debuffs[v.category].power) then best_debuffs[v.category]=v end
  end
  for _,v in ipairs(inventory) do if band(v.type,0x8101)~=0 or band(v.slots,0x800000)~=0 then combat_inventory[#combat_inventory+1]=v end end
@@ -2380,6 +2454,12 @@ local function tick(s,p)
   if requested==0 then target_combat='magic' end
   local damage_override=target_rule and target_rule.damage_type or p.damage_type
   if damage_override==128 then damage_override=1024 end -- previous UCM Nether setting
+  local strict_damage=damage_override and damage_override~=0
+  local selected_spell=p.attack_spell
+  if target_rule and (target_rule.damage_type or 0)~=0 then
+   local selected=by_id[selected_spell]
+   if not selected or element(selected)~=damage_override then selected_spell=nil end
+  end
   local attack,best_score=nil,-1
   local ring,ring_score,streak_spell,streak_score=nil,-1,nil,-1
   local arc,arc_score=nil,-1
@@ -2402,7 +2482,7 @@ local function tick(s,p)
    for _,v in ipairs(attack_spells) do
     local e=element(v)
     if e~=0 and not v.beneficial and (not damage_override or damage_override==0 or damage_override==e)
-     and (not p.attack_spell or p.attack_spell==0 or p.attack_spell==v.id) then magic_skill=math.max(magic_skill,trained_skill(s,combat_school_skill[v.school])) end
+     and (not selected_spell or selected_spell==0 or selected_spell==v.id) then magic_skill=math.max(magic_skill,trained_skill(s,combat_school_skill[v.school])) end
    end
   end
   local bolt_enabled=not target_rule or target_rule.bolt~=false
@@ -2410,7 +2490,7 @@ local function tick(s,p)
   for _,v in ipairs(attack_spells) do local e=element(v)
    local streak=(v.category>=243 and v.category<=249) or v.category==639
    local is_ring=(v.category>=222 and v.category<=228) or v.category==641
-   if e~=0 and not v.beneficial and (not p.attack_spell or p.attack_spell==0 or p.attack_spell==v.id) and trained_skill(s,combat_school_skill[v.school])>=magic_skill then
+   if e~=0 and not v.beneficial and (not selected_spell or selected_spell==0 or selected_spell==v.id) and trained_skill(s,combat_school_skill[v.school])>=magic_skill then
     local score=v.power*resistance(target,e);if damage_override and damage_override~=0 and e~=damage_override then score=-1 end
     if is_ring then if use_ring and score>ring_score then ring=v;ring_score=score end
     elseif streak then if streak_enabled and score>streak_score then streak_spell=v;streak_score=score end
@@ -2429,7 +2509,7 @@ local function tick(s,p)
   if ring and (ring_count>=option('ring_min_targets',4) or (not bolt_enabled and not streak_enabled and ring_count>0)) then attack=ring;best_score=ring_score end
   local casting_attack=attack or dot_attack
   local casting_score=attack and best_score or dot_score
-  local weapon,score,best_skill,best_preference=nil,-1,-1,-1
+  local weapon,score,best_skill,best_preference,best_requested=nil,-1,-1,-1,false
   local usable_caster=false
   local unassessed,unassessed_ammo
   local ammo_scores,ammo_elements,ammo_preferences,unknown_ammo={},{},{},{}
@@ -2446,15 +2526,15 @@ local function tick(s,p)
   end end
   for _,v in ipairs(combat_inventory) do
    local melee=band(v.type,1)~=0;local missile=band(v.type,0x100)~=0 and band(v.slots,0x800000)==0;local caster=band(v.type,0x8000)~=0
-   local allowed=explicit and v.id==explicit.id or not explicit and weapon_allowed(v)
+   local allowed=explicit and v.id==explicit.id or (not explicit or strict_damage) and weapon_allowed(v)
    local main_hand=option('melee_weapon',-1)
    if melee then
-    if not explicit and main_hand>0 then allowed=v.id==main_hand end
+    if not explicit and main_hand>0 and not strict_damage then allowed=v.id==main_hand end
     if v.auto_wield_left then allowed=false end
    end
    if caster and allowed and v.identified and v.can_wield then usable_caster=true end
    if not v.identified and allowed and (melee or missile or caster) then unassessed=v end
-   if v.identified and v.can_wield and allowed and (explicit or (target_combat=='auto' and (melee or missile or (caster and casting_attack))) or (target_combat=='melee' and melee) or (target_combat=='missile' and missile) or (target_combat=='magic' and caster)) then
+   if v.identified and v.can_wield and allowed and ((explicit and v.id==explicit.id) or (target_combat=='auto' and (melee or missile or (caster and casting_attack))) or (target_combat=='melee' and melee) or (target_combat=='missile' and missile) or (target_combat=='magic' and caster)) then
     local damage=v.damage_type or 0
     local _,resist,preference=preferred_damage(target,damage)
     if damage==0 then resist=1;preference=0 end
@@ -2475,13 +2555,19 @@ local function tick(s,p)
     if v.equipped and band(v.equipped_slot,0x200000)==0 then value=value*1.01 end
     -- Bows/launchers inherit the ammunition's element. Their own piercing
     -- profile must not reject a requested fire/acid/etc. arrow loadout.
-    if not explicit and damage_override and damage_override~=0 and not caster and not launcher and damage~=0 and band(damage,damage_override)==0 then value=-1 end
+    if strict_damage and not caster and not launcher and band(damage,damage_override)==0 then value=-1 end
     -- Compare usable skill first, then damage within that skill. A wand's
     -- spell damage is not comparable to a sword's per-swing damage.
     local skill_id=caster and casting_attack and combat_school_skill[casting_attack.school] or v.weapon_skill
     local rank=trained_skill(s,skill_id)
     if target_combat~='auto' then rank=0 end
-    if value>=0 and (rank>best_skill or (rank==best_skill and (preference>best_preference or (preference==best_preference and value>score)))) then weapon=v;score=value;best_skill=rank;best_preference=preference end
+    -- An explicit weapon is preferred only if it can deliver this element.
+    -- Otherwise search the permitted equipment pool instead of attacking with
+    -- the wrong damage or getting stuck on an incompatible manual preference.
+    local preferred=explicit and v.id==explicit.id or not explicit and melee and main_hand>0 and v.id==main_hand or false
+    if value>=0 and ((preferred and not best_requested) or (preferred==best_requested and (rank>best_skill or (rank==best_skill and (preference>best_preference or (preference==best_preference and value>score)))))) then
+     weapon=v;score=value;best_skill=rank;best_preference=preference;best_requested=preferred
+    end
    end
   end
   local mode=weapon and (band(weapon.type,0x8000)~=0 and 'magic' or band(weapon.type,0x100)~=0 and 'missile' or 'melee') or target_combat
@@ -2568,6 +2654,12 @@ local function tick(s,p)
   if weapon and (not weapon.equipped or band(weapon.equipped_slot,0x200000)~=0) then return equip(weapon) end
   local secondary_request=target_rule and target_rule.secondary_equip
   if secondary_request==nil then secondary_request=option('melee_secondary_equip',nil) end
+  if damage_override and damage_override~=0 then
+   for _,v in ipairs(inventory) do
+    if band(v.type,1)~=0 and band(v.damage_type,damage_override)==0
+     and (secondary_request==v.id or (secondary_request==nil and v.equipped and band(v.equipped_slot,0x200000)~=0)) then secondary_request=2;break end
+   end
+  end
   -- With no explicit offhand rule, Left-hand Tether is the user's assignment.
   -- Do not rank this weapon as a main hand or repeatedly swap the two hands.
   local tether_only=secondary_request==nil
@@ -2583,7 +2675,7 @@ local function tick(s,p)
     if v.id~=weapon.id and (melee or armor) and (not tether_only or v.auto_wield_left)
      and (requested>3 and requested==v.id or requested<=2 and weapon_allowed(v)) then
      if not v.identified then unknown=v
-     elseif v.can_wield then
+     elseif v.can_wield and (not melee or not damage_override or damage_override==0 or band(v.damage_type,damage_override)~=0) then
       if requested>3 then secondary=v
       elseif armor and not shield then shield=v
       elseif melee then
@@ -2693,11 +2785,39 @@ local function tick(s,p)
    end
   end end
  end
- if activity_ready('inventory') and option('autostack',false) then
-  local stacks={};for _,v in ipairs(inventory) do if v.max_stack>1 then
-   local old=stacks[v.wcid];if old and old.count<old.max_stack then return {action='merge',item=v.id,target=old.id,status='Stacking '..v.name} end
-   stacks[v.wcid]=v
-  end end
+ if activity_ready('inventory') and option('autostack',false) and (not s.container or s.container==0) then
+  if stack_pending then
+   local source,target
+   for _,v in ipairs(inventory) do
+    if v.id==stack_pending.source then source=v end
+    if v.id==stack_pending.target then target=v end
+   end
+   -- Wait for both inventory updates, not UseDone or an unrelated stack change.
+   if (not source or (source.count or 1)<stack_pending.source_count)
+    and target and (target.count or 1)>stack_pending.target_count then stack_pending=nil
+   elseif ((s.action_serial or 0)~=stack_pending.serial and (s.action_error or 0)~=0)
+    or s.time>=stack_pending.deadline then return failed('Stack combination was not confirmed; inventory management will retry')
+   else return result(nil,'Waiting for stack combination') end
+  end
+  local stacks={}
+  for _,v in ipairs(inventory) do
+   -- Full stacks are already compact. Moving one into a partial stack just
+   -- swaps which stack is full and can repeat forever.
+   if (v.max_stack or 0)>1 and (v.count or 1)<v.max_stack and (v.wcid or 0)>0
+    and not v.equipped and not v.retained and v.resource_available~=false then
+    local target=stacks[v.wcid];local source=v
+    if target then
+     stack_pending={source=source.id,target=target.id,source_count=source.count or 1,target_count=target.count or 1,serial=s.action_serial or 0,deadline=s.time+15}
+     return {action='merge',item=source.id,target=target.id,status='Combining stacks: '..(v.name or 'item')}
+    end
+    stacks[v.wcid]=v
+   end
+  end
+ elseif not option('autostack',false) then stack_pending=nil end
+ if corpse_spawn_wait and not option('nav_priority',false) and option('navigation',false)
+  and not loot_full and (#(p.loot_rules or {})>0 or option('read_unknown_scrolls',false) or need_mana_source)
+  and activity_ready('loot') then
+  return result(nil,'Waiting for defeated creature\'s corpse')
  end
  local nav=navigate();if nav then return nav end
  local idle=idle_stance();if idle then return idle end
@@ -2729,6 +2849,7 @@ local function pause_activity(s,name,reason)
  elseif name=='item_mana' then mana_refill_pending=nil;mana_fill_pending=nil;item_attempts.mana_refill=0
  elseif name=='pets' then pet_pending=nil;pet_refill_pending=nil
  elseif name=='combine' then combine_pending=nil
+ elseif name=='inventory' then stack_pending=nil
  elseif name=='helper' then helper_pending=nil
  elseif name=='dispel' then dispel_pending=nil
  elseif name=='buffs' then buff_item_pending=nil
@@ -2818,22 +2939,41 @@ local function run(s,p)
  -- Retain the followed player's observed path even while combat/actions pause walking.
  if effective.follow_corners and effective.navigation then
   local target
-  for _,o in ipairs(s.route_objects or {}) do if o.id==effective.follow_id or o.name==effective.follow_name then target=o;break end end
+  for _,o in ipairs(s.route_objects or {}) do
+   if ((effective.follow_name or '')~='' and o.name==effective.follow_name) or ((effective.follow_name or '')=='' and o.id==effective.follow_id) then target=o;break end
+  end
   if not target or target.id~=follow_target or follow_teleport~=s.teleport_sequence then follow_path={} end
   follow_target=target and target.id;follow_teleport=s.teleport_sequence
   if target then
-   local last=follow_path[#follow_path]
-   if last and distance(last,target)>50 then follow_path={} end
-   if #follow_path==0 or distance(follow_path[#follow_path],target)>=.096 then
-    if #follow_path>=512 then return pause_navigation('follow path exceeded 512 points') end
-    follow_path[#follow_path+1]=target
+   local function remember(observation)
+    local last=follow_path[#follow_path]
+    if last and distance(last,observation)>50 then follow_path={} end
+    if #follow_path>0 and distance(follow_path[#follow_path],observation)<.096 then return end
+    local at={cell=observation.cell,x=observation.x,y=observation.y,z=observation.z}
+    -- Compress only collinear observations; preserve turns, stairs and loops.
+    local replace=false
+    if #follow_path>=2 then
+     local ax,ay,az=world(follow_path[#follow_path-1]);local bx,by,bz=world(follow_path[#follow_path]);local cx,cy,cz=world(at)
+     local dx,dy,dz=cx-ax,cy-ay,cz-az;local length=dx*dx+dy*dy+dz*dz
+     local t=length>0 and ((bx-ax)*dx+(by-ay)*dy+(bz-az)*dz)/length or 0
+     replace=length<=36 and t>0 and t<1 and (bx-ax-t*dx)^2+(by-ay-t*dy)^2+(bz-az-t*dz)^2<=.02^2
+    end
+    if replace then follow_path[#follow_path]=at
+    else
+     if #follow_path>=512 then return pause_navigation('follow path exceeded 512 points') end
+     follow_path[#follow_path+1]=at
+    end
    end
-   local px,py,pz=world(s.position)
-   for i=#follow_path,2,-1 do
-    local ax,ay,az=world(follow_path[i-1]);local bx,by,bz=world(follow_path[i]);local dx,dy,dz=bx-ax,by-ay,bz-az
-    local length=dx*dx+dy*dy+dz*dz;local t=length>0 and math.max(0,math.min(1,((px-ax)*dx+(py-ay)*dy+(pz-az)*dz)/length)) or 0
-    if (px-ax-t*dx)^2+(py-ay-t*dy)^2+(pz-az-t*dz)^2<2.4^2 then for j=1,i-1 do table.remove(follow_path,1) end;break end
+   -- Network observations are collected even while the host is waiting for a
+   -- cast/equipment acknowledgment and deliberately does not run the policy.
+   if s.follow_motion_target==target.id then
+    if s.follow_motion_overflow then return pause_navigation('follow movement history exceeded its limit') end
+    for _,at in ipairs(s.follow_motion or {}) do local limit=remember(at);if limit then return limit end end
    end
+   local limit=remember(target);if limit then return limit end
+   -- Never search backwards for a nearby later segment: adjacent hallways and
+   -- returning leaders can be close in space but far apart along the path.
+   while #follow_path>1 and distance(s.position,follow_path[1])<=.15 do table.remove(follow_path,1) end
   end
  else follow_path={};follow_target=nil end
  local route=effective.route or {}
@@ -2916,6 +3056,7 @@ local function run(s,p)
 end
 
 return function(s,p)
+ completed_corpse=nil
  targeting_status=nil
  activity_time=s.time;activity='meta'
  if p.ucm_resume then
@@ -2932,9 +3073,9 @@ return function(s,p)
   meta.pending=nil;meta.queue=loads;meta.loading=false;meta.awaiting_load=#loads>0;meta.profile_load=nil;meta.forcebuff=false
   if meta.route then meta.route_changed=true end
   route_pending=nil;loot_pending=nil;loot_full=nil;recovery_pending=nil;buff_item_pending=nil
-  corpse_pending=nil;purchase_pending=nil;note_pending=nil;mana_refill_pending=nil;mana_fill_pending=nil;pet_refill_pending=nil;helper_pending=nil;debuff_pending=nil;debuff_scan=nil;pea_pending=nil;pet_pending=nil;dispel_pending=nil
+  corpse_pending=nil;corpse_contents_wait=nil;corpse_spawn_wait=nil;combat_death_seen=s.combat_death and s.combat_death.time;purchase_pending=nil;note_pending=nil;mana_refill_pending=nil;mana_fill_pending=nil;pet_refill_pending=nil;helper_pending=nil;debuff_pending=nil;debuff_scan=nil;pea_pending=nil;pet_pending=nil;dispel_pending=nil
   last_cast=nil;unavailable_spells={};forced_buff=nil;buff_skips={};buff_recast_until=0;other_job=nil
-  loot_scan={};loot_jobs={};loot_job_pending=nil;mana_sources={};scroll_reads={};combine_pending=nil;inventory_salvage_scan={};inventory_salvage_blocked={}
+  loot_scan={};loot_jobs={};loot_job_pending=nil;mana_sources={};scroll_reads={};combine_pending=nil;stack_pending=nil;inventory_salvage_scan={};inventory_salvage_blocked={}
   retries={};until_time={};item_attempts={};corpses={};monster_failures={};monster_blacklist={};ghost_attempts={};ghost_hp={}
   follow_path={};follow_target=nil;follow_teleport=nil
   activity_pauses={};activity_pause_reasons={}
@@ -2955,6 +3096,7 @@ return function(s,p)
    end
   end
  end
+ if completed_corpse then intent=intent or result(nil,'Loot complete');intent.completed_corpse=completed_corpse end
  buff_plan=nil -- do not retain the previous full snapshot across callbacks
  catalog_snapshot=nil;catalog_by_id=nil;catalog_supplied=nil;catalog_usable=nil;catalog_groups=nil
  object_snapshot=nil -- references keep IDs; the full world snapshot can be collected

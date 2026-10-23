@@ -290,6 +290,12 @@ void UACEUIGameplayBinder::ShowKeymapImport(const FString& Report)
   FButtonStyle Button;const auto Background=Brush(0x060012b3);Button.SetNormal(Background).SetHovered(Background).SetPressed(Background).SetNormalPadding(FMargin(0)).SetPressedPadding(FMargin(0));
   auto Style=KeymapFileChoice->GetWidgetStyle();Style.ComboButtonStyle.SetButtonStyle(Button).SetDownArrowImage(Brush(0x060012b1)).SetMenuBorderBrush(Background).SetContentPadding(FMargin(0));
   KeymapFileChoice->SetWidgetStyle(Style);KeymapFileChoice->OnGenerateWidgetEvent.BindDynamic(this,&UACEUIGameplayBinder::GenerateKeymapFileLabel);
+  auto Items=KeymapFileChoice->GetItemStyle();const auto Selected=Brush(0x060012b4);
+  Items.SetEvenRowBackgroundBrush(Background).SetOddRowBackgroundBrush(Background)
+   .SetEvenRowBackgroundHoveredBrush(Selected).SetOddRowBackgroundHoveredBrush(Selected)
+   .SetActiveBrush(Selected).SetActiveHoveredBrush(Selected).SetInactiveBrush(Selected).SetInactiveHoveredBrush(Selected)
+   .SetSelectorFocusedBrush(Selected).SetTextColor(FLinearColor::White).SetSelectedTextColor(FLinearColor::White);
+  KeymapFileChoice->SetItemStyle(Items);
   KeymapImportPath=Canvas->WidgetTree->ConstructWidget<UEditableTextBox>();
   auto EntryStyle=KeymapImportPath->GetWidgetStyle();EntryStyle.SetPadding(FMargin(2,0));
   EntryStyle.SetBackgroundImageNormal(Background).SetBackgroundImageHovered(Background).SetBackgroundImageFocused(Background);
@@ -380,16 +386,7 @@ void UACEUIGameplayBinder::PollKeyboardActions(APlayerController* PC)
  }
  if(Pressed(TEXT("Examine")))ExamineSelectedObject();
  if(ACEInputBindings::Pressed(PC,EKeys::F))UseInventoryItem(Client->GetSelectedObject().Guid);
- if(ACEInputBindings::Pressed(PC,EKeys::I))ToggleGameplayPanel(TEXT("InventoryPanel_Field"));
- if(ACEInputBindings::Pressed(PC,EKeys::P))ToggleGameplayPanel(TEXT("SkillManagementPanel_Field"),TEXT("AttributePage"));
- if(ACEInputBindings::Pressed(PC,EKeys::M))ToggleGameplayPanel(TEXT("SpellManagementPanel_Field"),TEXT("SpellbookPage"));
- if(ACEInputBindings::Pressed(PC,EKeys::U))ToggleGameplayPanel(TEXT("QuestManagementPanel_Field"));
- if(ACEInputBindings::Pressed(PC,EKeys::O))ToggleGameplayPanel(TEXT("OptionsPanel_Field"));
- if(Pressed(TEXT("Skills")))ToggleGameplayPanel(TEXT("SkillManagementPanel_Field"),TEXT("SkillPage"));
- if(Pressed(TEXT("Components")))ToggleGameplayPanel(TEXT("SpellManagementPanel_Field"),TEXT("SpellComponentPage"));
- if(Pressed(TEXT("World")))ToggleGameplayPanel(TEXT("WorldPanel_Field"));
- if(Pressed(TEXT("Allegiance")))ToggleGameplayPanel(TEXT("SocialPanel_Field"),TEXT("AllegiancePage"));
- if(Pressed(TEXT("Fellowship")))ToggleGameplayPanel(TEXT("SocialPanel_Field"),TEXT("FellowshipPage"));
+ PollInterfaceKeyboardActions(PC);
  if(Pressed(TEXT("Ready")))PlayEmoteHotkey(ACEMotion::Ready,true);
  if(Pressed(TEXT("Laugh")))PlayEmoteHotkey(0x13000080u,false);
  if(Pressed(TEXT("Cheer")))PlayEmoteHotkey(0x1300004cu,false);
@@ -426,4 +423,41 @@ void UACEUIGameplayBinder::PollKeyboardActions(APlayerController* PC)
    && !ACEInputBindings::Down(PC,ACEInputBindings::Action(Missile?TEXT("MissileHigh"):TEXT("MeleeHigh"))))
   {bCombatKeyboardHeld=false;ReleaseCombatPowerCharge();}
  }
+}
+
+void UACEUIGameplayBinder::PollInterfaceKeyboardActions(APlayerController* PC)
+{
+ ACEInputBindings::SetCombatContext(CombatMode);
+ if(!Client||!PC||ACEInputBindings::IsEditing()||ACEInputBindings::IsTextEntryFocused()||IsChatEntryFocused())return;
+ auto Pressed=[&](const TCHAR* Name){return ACEInputBindings::Pressed(PC,ACEInputBindings::Action(Name));};
+ if(ACEInputBindings::Pressed(PC,EKeys::I))ToggleGameplayPanel(TEXT("InventoryPanel_Field"));
+ if(ACEInputBindings::Pressed(PC,EKeys::P))ToggleGameplayPanel(TEXT("SkillManagementPanel_Field"),TEXT("AttributePage"));
+ if(ACEInputBindings::Pressed(PC,EKeys::M))ToggleGameplayPanel(TEXT("SpellManagementPanel_Field"),TEXT("SpellbookPage"));
+ if(ACEInputBindings::Pressed(PC,EKeys::U))ToggleGameplayPanel(TEXT("QuestManagementPanel_Field"));
+ if(ACEInputBindings::Pressed(PC,EKeys::O))ToggleGameplayPanel(TEXT("OptionsPanel_Field"));
+ if(Pressed(TEXT("Skills")))ToggleGameplayPanel(TEXT("SkillManagementPanel_Field"),TEXT("SkillPage"));
+ if(Pressed(TEXT("Components")))ToggleGameplayPanel(TEXT("SpellManagementPanel_Field"),TEXT("SpellComponentPage"));
+ if(Pressed(TEXT("World")))ToggleGameplayPanel(TEXT("WorldPanel_Field"));
+ if(Pressed(TEXT("Allegiance")))ToggleGameplayPanel(TEXT("SocialPanel_Field"),TEXT("AllegiancePage"));
+ if(Pressed(TEXT("Fellowship")))ToggleGameplayPanel(TEXT("SocialPanel_Field"),TEXT("FellowshipPage"));
+ struct FPanel {const TCHAR* Action;const TCHAR* Page;const TCHAR* Tab;};
+ static const FPanel Panels[]={
+  {TEXT("TogglePositiveEffectsPanel"),TEXT("PositiveEffectsPanel_Field"),nullptr},
+  {TEXT("ToggleNegativeEffectsPanel"),TEXT("NegativeEffectsPanel_Field"),nullptr},
+  {TEXT("ToggleVitaePanel"),TEXT("VitaePanel_Field"),nullptr},
+  {TEXT("ToggleLinkStatusPanel"),TEXT("LinkStatusPanel_Field"),nullptr},
+  {TEXT("ToggleConfigOptionsPanel"),TEXT("OptionsPanel_Field"),TEXT("ConfigPage")},
+  {TEXT("ToggleFriendsPanel"),TEXT("SocialPanel_Field"),TEXT("FriendsPage")},
+  {TEXT("ToggleHousePanel"),TEXT("WorldPanel_Field"),TEXT("HousePage")},
+  {TEXT("ToggleJournalPanel"),TEXT("QuestManagementPanel_Field"),TEXT("JournalPage")},
+  {TEXT("TogglePageListPanel"),TEXT("QuestManagementPanel_Field"),TEXT("PageListPage")},
+  {TEXT("ToggleQuestManagementPanel"),TEXT("QuestManagementPanel_Field"),nullptr}};
+ for(const auto& P:Panels)if(Pressed(P.Action))
+ {
+  ToggleGameplayPanel(P.Page,P.Tab ? P.Tab : TEXT(""));
+ }
+ for(int32 I=1;I<=4;++I)if(Pressed(*FString::Printf(TEXT("ToggleFloatingChatWindow%d"),I)))HandleNamedClick(FString::Printf(TEXT("FloatingChat%d"),I));
+ if(Pressed(TEXT("LOGOUT")))Client->Logout();
+ if(Pressed(TEXT("CaptureScreenshot")))RequestGameplayScreenshot();
+ if(Pressed(TEXT("ToggleKeyboardPanel")))ToggleKeyboardMappingUI();
 }

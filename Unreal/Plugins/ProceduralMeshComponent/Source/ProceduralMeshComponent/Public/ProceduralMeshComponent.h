@@ -4,6 +4,7 @@
 
 #include "Interfaces/Interface_CollisionDataProvider.h"
 #include "Components/MeshComponent.h"
+#include "ProceduralMeshDistanceLOD.h"
 #include "ProceduralMeshComponent.generated.h"
 
 #define UE_API PROCEDURALMESHCOMPONENT_API
@@ -164,10 +165,30 @@ public:
 	UPROPERTY()
 	bool bPreferCachedDraws = false;
 
+	/** Skip temporal hardware occlusion for geometry whose visibility is already
+	 * resolved by portals for the current view. Set before registration; changing
+	 * this on a registered mesh requires MarkRenderStateDirty(). */
+	UPROPERTY()
+	bool bDisableOcclusionQueries = false;
+
 	/** Authored draw mode: 1 rigid, 2 viewer-facing, 3..5 axis-constrained.
 	 * Applied per view by the renderer; component/collision transforms stay intact. */
 	UE_API void SetViewFacing(uint32 Mode, const FVector& SortCenter);
 	uint32 GetViewFacingMode() const { return ViewFacingMode; }
+	UE_API void SetDistanceLevels(TArray<FProcMeshDistanceLevel> Levels, float UnitsPerMeter);
+	UE_API void SetForceHighestDetail(bool bForce);
+	int32 GetDistanceLevel(const FVector& Viewer) const
+	{
+		return ProceduralMeshDistanceLOD::Select(DistanceLevels,
+			ProceduralMeshDistanceLOD::Distance(GetComponentTransform(), ViewFacingSortCenter, Viewer, DistanceUnitsPerMeter), bForceHighestDetail);
+	}
+	const TArray<FProcMeshDistanceLevel>& GetDistanceLevels() const { return DistanceLevels; }
+	UE_API FBoxSphereBounds GetHighestDetailBounds() const;
+	// Collision/picking never uses the distant render alternatives.
+	bool IsHighestDetailSection(int32 MeshSectionIndex) const
+	{
+		return DistanceLevels.IsEmpty() || ProceduralMeshDistanceLOD::ContainsSection(DistanceLevels[0], MeshSectionIndex);
+	}
 
 	/** Update a packed prefix of a non-colliding section without re-uploading immutable
 	 * UVs or unused capacity. The index prefix must reference only the supplied vertices.
@@ -379,6 +400,9 @@ private:
 
 	friend class FProceduralMeshSceneProxy;
 	uint32 ViewFacingMode = 1;
+	TArray<FProcMeshDistanceLevel> DistanceLevels;
+	float DistanceUnitsPerMeter = 100.f;
+	bool bForceHighestDetail = false;
 	FVector ViewFacingSortCenter = FVector::ZeroVector;
 };
 

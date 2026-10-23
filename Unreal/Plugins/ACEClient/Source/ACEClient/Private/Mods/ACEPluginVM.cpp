@@ -1,4 +1,5 @@
 #include "ACEPluginVM.h"
+#include "ACEProfiling.h"
 #include "ACEVTRegex.h"
 #include "ACEVTProfile.h"
 #include "Interfaces/IPluginManager.h"
@@ -343,6 +344,7 @@ bool FACEPluginVM::Load(const FString& Source, FString& Error, const FString& Po
 bool FACEPluginVM::Step(const TSharedPtr<FJsonObject>& Snapshot, const TSharedPtr<FJsonObject>& Profile,
     TSharedPtr<FJsonObject>& Intent, FString& Error)
 {
+    ACE_PROFILE_SCOPE(PluginLua);
     TRACE_CPUPROFILER_EVENT_SCOPE(ACEPluginLuaStep);
     Intent.Reset();RegexWork=0;SpellIndexWork=0;Instructions=0;
     lua_settop(State, 0);
@@ -384,7 +386,7 @@ bool FACEPluginVM::Step(const TSharedPtr<FJsonObject>& Snapshot, const TSharedPt
             Intent->SetNumberField(Key, Value);
         }
         else if (lua_isboolean(State, -1)) Intent->SetBoolField(Key, lua_toboolean(State, -1) != 0);
-        else if((Key==TEXT("presentation")||Key==TEXT("state")||Key==TEXT("ui")||Key==TEXT("markers")||Key==TEXT("messages")||Key==TEXT("requests")||Key==TEXT("profile_patch"))&&lua_istable(State,-1))
+        else if((Key==TEXT("presentation")||Key==TEXT("state")||Key==TEXT("ui")||Key==TEXT("chat_filters")||Key==TEXT("markers")||Key==TEXT("messages")||Key==TEXT("requests")||Key==TEXT("profile_patch"))&&lua_istable(State,-1))
         {
             int Nodes=0,OutputBytes=0;auto Value=ReadOutput(State,-1,0,Nodes,OutputBytes,Error,Key==TEXT("profile_patch")||Key==TEXT("requests"));
             if(!Value){lua_settop(State,0);return false;}
