@@ -445,6 +445,15 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     if (!Layout->LoadLayout(0x21000004)) return false;
     TestEqual(TEXT("Character selection fits the window with one uniform scale"),Manager->GetCanvasScale(FVector2D(2560,1440)),FVector2D(2.4,2.4));
     TestEqual(TEXT("Character selection keeps native pixels at its authored size"),Manager->GetCanvasScale(FVector2D(800,600)),FVector2D(1,1));
+    TestEqual(TEXT("Wide character selection scales to the window height"),Manager->GetCanvasScale(FVector2D(2560,1080)),FVector2D(1.8,1.8));
+    Manager->ApplyEdgeAnchoredLayout(2560,1080);
+    if (const auto Field=Manager->FindElementByName(TEXT("CharacterManagementField")))
+        TestEqual(TEXT("Character selection spans a 21:9 window"),Field->Width,1423);
+    if (const auto Exit=Manager->FindElementByName(TEXT("ExitButton")))
+        TestEqual(TEXT("EXIT follows the right edge"),Exit->GetScreenOrigin().X,Exit->X+623);
+    if (const auto List=Manager->FindElementByName(TEXT("CharacterListBoxFrame")))
+        TestEqual(TEXT("The character list stays on the left"),List->GetScreenOrigin().X,List->X);
+    Manager->ApplyEdgeAnchoredLayout(800,600);
     const auto Enter=Manager->FindElementByName(TEXT("EnterGameButton"));
     if (!TestTrue(TEXT("Character-select Enter element exists"),Enter.IsValid())) return false;
     TestEqual(TEXT("Enter pressed state retains retail smaller font"),Enter->States[3].FontId,0x40000011u);

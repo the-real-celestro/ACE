@@ -140,6 +140,8 @@ protected:
 	UPROPERTY() TObjectPtr<UBorder> PlayWindow;
 	UPROPERTY() TObjectPtr<UBorder> SelectedAccountRow;
 	UPROPERTY() TObjectPtr<class UImage> LobbyBackground;
+	/** Mirrored copy left of the backdrop for windows wider than it covers (as character select). */
+	UPROPERTY() TObjectPtr<class UImage> LobbyBackgroundSide;
 	UPROPERTY() TObjectPtr<UTextBlock> LobbySubtitle;
 	UPROPERTY() TObjectPtr<UTextBlock> LobbyBrand;
 	UPROPERTY() TObjectPtr<UScrollBox> ServerList;

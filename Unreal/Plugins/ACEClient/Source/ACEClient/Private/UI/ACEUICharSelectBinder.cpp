@@ -15,7 +15,6 @@
 #include "Components/Widget.h"
 #include "Engine/Texture2D.h"
 #include "Styling/SlateBrush.h"
-#include "ACELobbyArt.h"
 
 namespace
 {
@@ -58,7 +57,7 @@ namespace
 	constexpr int32 CharSelectOverlayZ = 200;
 	/** Opaque surround while the credits roll (retail black). */
 	const FLinearColor LetterboxBlack = FLinearColor::Black;
-	/** Surround for the scaled panel until its blurred backdrop is ready: retail night blue. */
+	/** Behind the backdrop until its art loads: retail night blue. */
 	const FLinearColor LetterboxNight = FLinearColor(.006f, .012f, .03f, 1.f);
 
 	/** The full-screen 800x600 backdrop image in the character-management layout. */
@@ -149,6 +148,9 @@ void UACEUICharSelectBinder::Shutdown()
 	};
 	RemoveOverlay(LetterboxFill);
 	LetterboxFill = nullptr;
+	for (TObjectPtr<UBorder>& B : BackdropTiles) { RemoveOverlay(B.Get()); }
+	BackdropTiles.Reset();
+	BackdropBrushes.Reset();
 	RemoveOverlay(WorldNameImage);
 	WorldNameImage = nullptr;
 	for (TObjectPtr<UBorder>& L : CharNameImages) { RemoveOverlay(L.Get()); }
@@ -580,6 +582,132 @@ void UACEUICharSelectBinder::PlaceListFrameChrome(float LayoutX, float LayoutY, 
 	PlacePart(7, DidListSideEdge, LayoutX + LayoutW - EdgeS, LayoutY + Corner, EdgeS, InnerH);
 }
 
+namespace
+{
+	// One run of backdrop art along an axis: where it goes (layout units) and which texels it shows.
+	struct FBackdropSpan
+	{
+		float Pos = 0.f, Size = 0.f, UV0 = 0.f, UV1 = 1.f;
+		bool bMirror = false;
+	};
+
+	// Fills Count spans of equal size from Pos, alternating mirrored/plain copies of the art run
+	// [Edge, Edge + Size) (or [Edge - Size, Edge) when bBefore), so each copy meets its neighbour
+	// at the same texel column and the extension has no seams. bFirstMirrored picks the start.
+	void AddMirroredRun(TArray<FBackdropSpan>& Out, float Pos, float Length, float Edge, float MaxRun, float Ref, bool bBefore, bool bFirstMirrored)
+	{
+		if (Length <= KINDA_SMALL_NUMBER)
+		{
+			return;
+		}
+		const int32 Count = FMath::Max(1, FMath::CeilToInt(Length / MaxRun));
+		const float Size = Length / Count;
+		const float A = bBefore ? Edge - Size : Edge;
+		for (int32 K = 0; K < Count; ++K)
+		{
+			FBackdropSpan Span;
+			Span.Pos = Pos + K * Size;
+			Span.Size = Size;
+			Span.UV0 = A / Ref;
+			Span.UV1 = (A + Size) / Ref;
+			Span.bMirror = ((K & 1) != 0) != bFirstMirrored;
+			Out.Add(Span);
+		}
+	}
+}
+
+void UACEUICharSelectBinder::PlaceBackdrop(const TSharedPtr<FACEUIElement>& Root, const FVector2D& ViewSize)
+{
+	const float S = Canvas->GetLastScaleX();
+	if (!BackdropImageId) BackdropImageId = FindBackdropImage(Root);
+	UTexture2D* Art = BackdropImageId && Canvas->GetResourceResolver() ? Canvas->GetResourceResolver()->ResolveTexture(BackdropImageId) : nullptr;
+	int32 Used = 0;
+	if (Art && Root.IsValid() && S > KINDA_SMALL_NUMBER && ViewSize.X >= 1.f && ViewSize.Y >= 1.f)
+	{
+		// The panel keeps its height-fit scale. The art's left strip (the World and Characters
+		// titles) stays with the left column and the rest (Asheron, the logo) with CREDITS/EXIT,
+		// both anchored like ApplyEdgeAnchoredLayout. The space between is filled with alternating
+		// mirrored copies of a plain stretch of the art just right of the titles, and extra height
+		// (windows narrower than 4:3) with mirrored copies of the top and bottom rows, so the art
+		// covers the whole window with no seams, letterbox or crop.
+		const float W = float(ACEUI::ReferenceWidth), H = float(ACEUI::ReferenceHeight);
+		constexpr float SplitX = 212.f;   // just right of the "Characters" title and World box
+		constexpr float MaxRunX = 70.f;   // plain art from SplitX to the logo's first letter
+		constexpr float MaxRunY = 16.f;   // above the logo / along the bottom edge
+		const float Gap = float(FMath::Max(0, Root->Width - ACEUI::ReferenceWidth));
+		const float Y0 = float(FMath::Max(0, Root->Height - ACEUI::ReferenceHeight) / 2);
+		const float LW = FMath::Max(float(ViewSize.X) / S, float(Root->Width));
+		const float LH = FMath::Max(float(ViewSize.Y) / S, float(Root->Height));
+
+		TArray<FBackdropSpan> Cols;
+		Cols.Add({0.f, SplitX, 0.f, SplitX / W, false});
+		AddMirroredRun(Cols, SplitX, Gap, SplitX, MaxRunX, W, false, false);
+		if (Gap > KINDA_SMALL_NUMBER && (Cols.Num() - 1) % 2 != 0)
+		{
+			// Keep an even count so the last copy is mirrored and ends on column SplitX again.
+			const int32 Count = Cols.Num(); Cols.SetNum(1);
+			const float Size = Gap / Count;
+			AddMirroredRun(Cols, SplitX, Gap, SplitX, Size + KINDA_SMALL_NUMBER, W, false, false);
+		}
+		Cols.Add({SplitX + Gap, W - SplitX, SplitX / W, 1.f, false});
+		if (LW > Gap + W + KINDA_SMALL_NUMBER)
+		{
+			AddMirroredRun(Cols, Gap + W, LW - Gap - W, W, MaxRunX, W, true, true);
+		}
+
+		TArray<FBackdropSpan> Rows;
+		if (Y0 > KINDA_SMALL_NUMBER)
+		{
+			// Built top-down; the copy touching the art (the last) must be mirrored.
+			const int32 Count = FMath::Max(1, FMath::CeilToInt(Y0 / MaxRunY));
+			AddMirroredRun(Rows, 0.f, Y0, 0.f, Y0 / Count + KINDA_SMALL_NUMBER, H, false, (Count & 1) != 0);
+		}
+		Rows.Add({Y0, H, 0.f, 1.f, false});
+		AddMirroredRun(Rows, Y0 + H, LH - Y0 - H, H, MaxRunY, H, true, true);
+
+		for (const FBackdropSpan& Row : Rows) for (const FBackdropSpan& Col : Cols)
+		{
+			if (Used == BackdropTiles.Num())
+			{
+				UBorder* Tile = Canvas->WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+				Tile->SetPadding(FMargin(0.f));
+				Tile->SetVisibility(ESlateVisibility::HitTestInvisible);
+				BackdropTiles.Add(Tile);
+			}
+			UBorder* Tile = BackdropTiles[Used++];
+			if (Tile->GetParent() != Canvas->GetElementLayer()) Canvas->GetElementLayer()->AddChild(Tile);
+			FSlateBrush Brush;
+			Brush.DrawAs = ESlateBrushDrawType::Image;
+			Brush.SetResourceObject(Art);
+			Brush.ImageSize = FVector2D(Col.Size, Row.Size);
+			Brush.SetUVRegion(FBox2f(FVector2f(Col.UV0, Row.UV0), FVector2f(Col.UV1, Row.UV1)));
+			Brush.Mirroring = Col.bMirror && Row.bMirror ? ESlateBrushMirrorType::Both : Col.bMirror ? ESlateBrushMirrorType::Horizontal
+				: Row.bMirror ? ESlateBrushMirrorType::Vertical : ESlateBrushMirrorType::NoMirror;
+			if (!BackdropBrushes.IsValidIndex(Used - 1) || !(BackdropBrushes[Used - 1] == Brush))
+			{
+				BackdropBrushes.SetNum(FMath::Max(BackdropBrushes.Num(), Used));
+				BackdropBrushes[Used - 1] = Brush;
+				Tile->SetBrush(Brush);
+			}
+			Tile->SetVisibility(ESlateVisibility::HitTestInvisible);
+			// Whole viewport pixels, each piece starting where the previous ends, so no seam shows.
+			const float PX0 = FMath::RoundToFloat(Col.Pos * S), PX1 = FMath::RoundToFloat((Col.Pos + Col.Size) * S);
+			const float PY0 = FMath::RoundToFloat(Row.Pos * S), PY1 = FMath::RoundToFloat((Row.Pos + Row.Size) * S);
+			if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Tile->Slot))
+			{
+				Slot->SetAnchors(FAnchors(0.f, 0.f));
+				Slot->SetAlignment(FVector2D(0.f, 0.f));
+				Slot->SetAutoSize(false);
+				Slot->SetPosition(FVector2D(PX0, PY0));
+				Slot->SetSize(FVector2D(FMath::Max(1.f, PX1 - PX0), FMath::Max(1.f, PY1 - PY0)));
+				Slot->SetZOrder(1);
+			}
+		}
+	}
+	for (int32 I = Used; I < BackdropTiles.Num(); ++I)
+		if (BackdropTiles[I]) BackdropTiles[I]->SetVisibility(ESlateVisibility::Collapsed);
+}
+
 void UACEUICharSelectBinder::EnsureOverlays()
 {
 	if (!Canvas || !Canvas->WidgetTree || !Canvas->GetElementLayer())
@@ -635,6 +763,7 @@ void UACEUICharSelectBinder::RefreshOverlays()
 		for (auto& Array : {&CharNameImages, &CharSlotTops, &CharSlotMiddles, &CharSlotBottoms, &ListFrameParts})
 			for (auto& Widget : *Array) if (Widget) Widget->SetVisibility(ESlateVisibility::Collapsed);
 		for (auto& Pair : ButtonTextImages) Pair.Value->SetVisibility(ESlateVisibility::Collapsed);
+		for (UBorder* Tile : BackdropTiles) if (Tile) Tile->SetVisibility(ESlateVisibility::Collapsed);
 		if (LetterboxFill && !(LetterboxBrush == ColorFill(LetterboxBlack)))
 		{
 			LetterboxBrush = ColorFill(LetterboxBlack);
@@ -643,8 +772,13 @@ void UACEUICharSelectBinder::RefreshOverlays()
 		return;
 	}
 
-	// Full-viewport letterbox behind the centered 800×600 panel (viewport pixels —
+	// Full-viewport fill and backdrop behind the panel (viewport pixels —
 	// do not run through PlaceScaled or Scale would inflate past the screen).
+	{
+		TSharedPtr<FACEUIElement> Root = Manager->FindElementByName(TEXT("CharacterManagementField"));
+		if (!Root.IsValid()) Root = Manager->GetSyntheticRoot();
+		PlaceBackdrop(Root, Canvas->GetCachedGeometry().GetLocalSize());
+	}
 	if (LetterboxFill)
 	{
 		const FVector2D Size = Canvas->GetCachedGeometry().GetLocalSize();
@@ -662,25 +796,7 @@ void UACEUICharSelectBinder::RefreshOverlays()
 			Slot->SetSize(FVector2D(FMath::Max(1.f, Size.X), FMath::Max(1.f, Size.Y)));
 			Slot->SetZOrder(0);
 		}
-		// The panel scales to fit the window; fill the margins with a soft, dark copy of its own
-		// backdrop, cropped to the window's aspect, so the screen reads as full-window art.
-		FSlateBrush Fill = ColorFill(LetterboxNight);
-		UACEDatSubsystem* Dat = Canvas->GetGameInstance() ? Canvas->GetGameInstance()->GetSubsystem<UACEDatSubsystem>() : nullptr;
-		TSharedPtr<FACEUIElement> Root = Manager->FindElementByName(TEXT("CharacterManagementField"));
-		if (!Root.IsValid()) Root = Manager->GetSyntheticRoot();
-		if (UTexture2D* Blur = Dat && Size.X >= 1.f && Size.Y >= 1.f ? ACELobbyArt::BlurredBackdrop(Dat, FindBackdropImage(Root)) : nullptr)
-		{
-			Fill = FSlateBrush();
-			Fill.DrawAs = ESlateBrushDrawType::Image;
-			Fill.SetResourceObject(Blur);
-			Fill.ImageSize = FVector2D(Blur->GetSizeX(), Blur->GetSizeY());
-			const float PanelAspect = float(ACEUI::ReferenceWidth) / ACEUI::ReferenceHeight;
-			const float ViewAspect = float(Size.X / Size.Y);
-			const float Crop = ViewAspect > PanelAspect ? PanelAspect / ViewAspect : ViewAspect / PanelAspect;
-			Fill.SetUVRegion(ViewAspect > PanelAspect
-				? FBox2f(FVector2f(0.f, (1.f - Crop) * .5f), FVector2f(1.f, (1.f + Crop) * .5f))
-				: FBox2f(FVector2f((1.f - Crop) * .5f, 0.f), FVector2f((1.f + Crop) * .5f, 1.f)));
-		}
+		const FSlateBrush Fill = ColorFill(LetterboxNight);
 		if (!(Fill == LetterboxBrush))
 		{
 			LetterboxBrush = Fill;

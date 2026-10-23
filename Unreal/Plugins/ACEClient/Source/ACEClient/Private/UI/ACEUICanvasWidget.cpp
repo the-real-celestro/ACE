@@ -712,6 +712,12 @@ void UACEUICanvasWidget::SyncElementRecursive(
 			RecurseChildren();
 			return;
 		}
+		// Character select spans the window; its binder extends the 800x600 backdrop to fill it.
+		if (CharSelectBinder && Element->ElementName == TEXT("CharacterManagementField"))
+		{
+			RecurseChildren();
+			return;
+		}
 
 		int32 DrawX = ElX0;
 		int32 DrawY = ElY0;

@@ -68,6 +68,7 @@ private:
 	int32 GetCharacterRowHeight() const;
 	void PlaceSlotChrome(int32 SlotIndex, float LayoutX, float LayoutY, float LayoutW, bool bSelected);
 	void PlaceListFrameChrome(float LayoutX, float LayoutY, float LayoutW, float LayoutH);
+	void PlaceBackdrop(const TSharedPtr<FACEUIElement>& Root, const FVector2D& ViewSize);
 	UBorder* EnsureTextImage(TObjectPtr<UBorder>& Slot);
 	void PlaceDatText(UBorder* Border, uint32 FontId, const FString& Text, FColor Color,
 		float BoxX, float BoxY, float BoxW, float BoxH, int32 ZOrder, bool bOutline,
@@ -90,8 +91,13 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UBorder> LetterboxFill = nullptr;
-	/** Brush last given to LetterboxFill (its blurred backdrop texture is rooted by ACELobbyArt). */
+	/** Brush last given to LetterboxFill. */
 	FSlateBrush LetterboxBrush;
+	/** The 800x600 backdrop and the mirrored copies that extend it to the window's edges. */
+	UPROPERTY()
+	TArray<TObjectPtr<UBorder>> BackdropTiles;
+	TArray<FSlateBrush> BackdropBrushes;
+	uint32 BackdropImageId = 0;
 	UPROPERTY()
 	TObjectPtr<UBorder> WorldNameImage = nullptr;
 	UPROPERTY()

@@ -382,6 +382,8 @@ void UACELoginWidget::EnsureDefaultLayout()
 	auto Place=[&](UWidget* W){ auto* S=Canvas->AddChildToCanvas(W); S->SetAnchors(FAnchors(0,0)); return S; };
 	auto Fill=FSlateChildSize(ESlateSizeRule::Fill);
 	// Retail character-select backdrop (0x06007075). Positions are set by LayoutLobby.
+	LobbyBackgroundSide=WidgetTree->ConstructWidget<UImage>(); LobbyBackgroundSide->SetVisibility(ESlateVisibility::Collapsed);
+	LobbyBackgroundSide->SetRenderOpacity(0); Place(LobbyBackgroundSide);
 	LobbyBackground=WidgetTree->ConstructWidget<UImage>(); LobbyBackground->SetVisibility(ESlateVisibility::HitTestInvisible);
 	LobbyBackground->SetRenderOpacity(0); Place(LobbyBackground);
 	LobbyBrand=Heading(TEXT("Asheron's Call"),40); LobbyBrand->SetVisibility(ESlateVisibility::HitTestInvisible);
@@ -844,13 +846,20 @@ void UACELoginWidget::LayoutLobby(const FVector2D& View)
 	{
 		LayoutView=L;
 		// The 800x600 backdrop covers the window; extra height is cropped from the top
-		// (only sky), extra width from both sides, so the logo always stays in view.
+		// (only sky), extra width from both sides, so the logo always stays in view. Past
+		// the crop limit (ultra-wide) it keeps to the right edge, like character select.
 		float S=FMath::Max(float(L.X/800.),FMath::Min(float(L.Y/600.),float(L.X/800.*1.25)));
 		S=FMath::Min(S,float(1.5*L.Y/600.));
 		LayoutBgScale=S;
-		const float BgX=float(L.X-800.f*S)*.5f, BgY=-FMath::Min(50.f,FMath::Max(0.f,float(600.f*S-L.Y)));
+		const float BgX=FMath::Max(float(L.X-800.f*S)*.5f,float(L.X-800.f*S)), BgY=-FMath::Min(50.f,FMath::Max(0.f,float(600.f*S-L.Y)));
 		auto SlotOf=[](UWidget* W){ return W?Cast<UCanvasPanelSlot>(W->Slot):nullptr; };
 		if (auto* Bg=SlotOf(LobbyBackground)) { Bg->SetPosition(FVector2D(BgX,BgY)); Bg->SetSize(FVector2D(800.f*S,600.f*S)); }
+		// Ultra-wide windows: a mirrored copy continues the art seamlessly to the left edge.
+		if (auto* Side=SlotOf(LobbyBackgroundSide))
+		{
+			Side->SetPosition(FVector2D(BgX-800.f*S,BgY)); Side->SetSize(FVector2D(800.f*S,600.f*S));
+			LobbyBackgroundSide->SetVisibility(BgX>0.f?ESlateVisibility::HitTestInvisible:ESlateVisibility::Collapsed);
+		}
 		if (auto* Sub=SlotOf(LobbySubtitle))
 		{
 			Sub->SetPosition(FVector2D(BgX+607.f*S,BgY+137.f*S)); Sub->SetAutoSize(true);
@@ -896,6 +905,11 @@ void UACELoginWidget::ApplyLobbyArt()
 	if (!Art) return;
 	bLobbyArtApplied=true;
 	if (LobbyBackground) { LobbyBackground->SetBrush(Art->Background); LobbyBackground->SetRenderOpacity(1); }
+	if (LobbyBackgroundSide)
+	{
+		FSlateBrush Mirrored=Art->Background; Mirrored.Mirroring=ESlateBrushMirrorType::Horizontal;
+		LobbyBackgroundSide->SetBrush(Mirrored); LobbyBackgroundSide->SetRenderOpacity(1);
+	}
 	if (LobbyBrand) LobbyBrand->SetVisibility(ESlateVisibility::Collapsed); // The backdrop carries the retail logo.
 	if (PlayWindow) PlayWindow->SetBrush(Art->Window);
 	if (SelectedAccountRow) SelectedAccountRow->SetBrush(Art->Row[2]);
@@ -1565,7 +1579,13 @@ void UACELoginWidget::SetConnectStep(float Base, float Cap, const FString& Text)
 	if (ConnectLabel && ConnectLabel->GetText().ToString()!=Text) ConnectLabel->SetText(FText::FromString(Text));
 }
 
-namespace { constexpr float ConnectMinPhase=.7f; } // Each vial is seen filling, without a noticeable delay.
+namespace
+{
+	// Each vial is seen filling without holding up character select: a fill takes about a
+	// quarter second, so a connection with no update adds roughly half a second in total.
+	constexpr float ConnectMinPhase=.2f;
+	constexpr float ConnectFillSpeed=16.f;
+}
 
 bool UACELoginWidget::IsConnectScreenHoldingCharacterSelect() const
 {
@@ -1591,10 +1611,10 @@ void UACELoginWidget::BeginUpdatePhase()
 void UACELoginWidget::TickUpdatePhase(float& Target, FString& Text)
 {
 	bUpdatePhaseFinished=false;
-	const float Checking=.35f*(1.f-FMath::Exp(-ConnectPhaseTime/.8f));
+	const float Checking=.35f*(1.f-FMath::Exp(-ConnectPhaseTime/.3f));
 	if (bConnectScreenPreview)
 	{
-		if (ConnectPhaseTime<1.2f) { Text=TEXT("Checking for updates..."); Target=Checking; }
+		if (ConnectPhaseTime<.4f) { Text=TEXT("Checking for updates..."); Target=Checking; }
 		else { Text=TEXT("Patching Done!"); Target=1; bUpdatePhaseFinished=true; }
 		return;
 	}
@@ -1626,21 +1646,21 @@ void UACELoginWidget::TickUpdatePhase(float& Target, FString& Text)
 
 void UACELoginWidget::TickConnectPreview(float Dt)
 {
-	// Walk the real sequence every 7 seconds: connect fills, then the update vial.
-	const float Previous=ConnectPreviewTime; ConnectPreviewTime=FMath::Fmod(ConnectPreviewTime+Dt,7.f);
+	// Walk the real sequence every 2.5 seconds: connect fills, then the update vial.
+	const float Previous=ConnectPreviewTime; ConnectPreviewTime=FMath::Fmod(ConnectPreviewTime+Dt,2.5f);
 	if (ConnectPreviewTime<Previous)
 	{
 		++ConnectPreviewPass; ConnectFill=UpdateVialFill=0; ConnectPhase=0; ConnectPhaseTime=0;
 		SetConnectStep(.05f,.45f,TEXT("Connecting to server..."));
 	}
-	else if (Previous<.4f && ConnectPreviewTime>=.4f) SetConnectStep(.45f,.9f,TEXT("Logging in..."));
-	else if (Previous<.8f && ConnectPreviewTime>=.8f) MarkConnected();
+	else if (Previous<.15f && ConnectPreviewTime>=.15f) SetConnectStep(.45f,.9f,TEXT("Logging in..."));
+	else if (Previous<.3f && ConnectPreviewTime>=.3f) MarkConnected();
 #if !UE_BUILD_SHIPPING
 	// -ACEConnectScreenPreviewShot: capture (with UI) on the second pass, once the DAT art is in.
 	if (ConnectPreviewPass==1 && FParse::Param(FCommandLine::Get(),TEXT("ACEConnectScreenPreviewShot")))
 	{
-		if (Previous<2.2f && ConnectPreviewTime>=2.2f) FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir()/TEXT("Screenshots/ConnectPreview_Checking.png"),true,false);
-		if (Previous<6.f && ConnectPreviewTime>=6.f) FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir()/TEXT("Screenshots/ConnectPreview_Done.png"),true,false);
+		if (Previous<.7f && ConnectPreviewTime>=.7f) FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir()/TEXT("Screenshots/ConnectPreview_Checking.png"),true,false);
+		if (Previous<2.2f && ConnectPreviewTime>=2.2f) FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir()/TEXT("Screenshots/ConnectPreview_Done.png"),true,false);
 	}
 #endif
 }
@@ -1659,13 +1679,13 @@ void UACELoginWidget::TickConnectScreen(float Dt)
 	}
 	else if (ConnectPhase>=1) Target=1; // Connected: fill straight to the top.
 	else // Creep toward the next stage while waiting so a slow server still looks alive.
-		Target=ConnectStepBase+(ConnectStepCap-ConnectStepBase)*.8f*(1.f-FMath::Exp(-ConnectStepTime/1.5f));
-	ConnectFill=FMath::FInterpTo(ConnectFill,Target,Dt,ConnectFailTime>=0?2.f:6.f);
+		Target=ConnectStepBase+(ConnectStepCap-ConnectStepBase)*.8f*(1.f-FMath::Exp(-ConnectStepTime/.6f));
+	ConnectFill=FMath::FInterpTo(ConnectFill,Target,Dt,ConnectFailTime>=0?2.f:ConnectFillSpeed);
 	// Retail order: the update vial stays empty until the connection vial is full.
 	if (ConnectPhase==1 && ConnectFailTime<0 && ConnectFill>.98f && ConnectPhaseTime>=ConnectMinPhase) BeginUpdatePhase();
 	float UpdateTarget=0; FString UpdateTextValue=TEXT("Update progress");
 	if (ConnectPhase>=2) TickUpdatePhase(UpdateTarget,UpdateTextValue);
-	UpdateVialFill=FMath::FInterpTo(UpdateVialFill,UpdateTarget,Dt,6.f);
+	UpdateVialFill=FMath::FInterpTo(UpdateVialFill,UpdateTarget,Dt,ConnectFillSpeed); // Downloads still follow real progress.
 	if (ConnectPhase==2 && ConnectFailTime<0 && bUpdatePhaseFinished && FMath::Abs(UpdateVialFill-UpdateTarget)<.02f && ConnectPhaseTime>=ConnectMinPhase)
 		ConnectPhase=3; // Character select may open now (once the character list is in).
 	if (ConnectUpdateLabel && ConnectUpdateLabel->GetText().ToString()!=UpdateTextValue) ConnectUpdateLabel->SetText(FText::FromString(UpdateTextValue));

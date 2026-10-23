@@ -207,9 +207,9 @@ FIntRect UACEUIElementManager::GetCanvasViewportRect(FVector2D ViewportSize) con
 FVector2D UACEUIElementManager::GetCanvasScale(FVector2D ViewportSize) const
 {
 	// Retail bitmaps and glyphs are physical pixels in the game HUD and character creation.
-	// Character select instead fits its whole 800x600 layout to the window with one uniform
-	// scale (centered by ApplyEdgeAnchoredLayout), as the launcher before it does, so the
-	// two screens read as one. UI textures are bilinear, so the art stays smooth.
+	// Character select instead scales its 800x600 layout uniformly to the window height (or
+	// width, when narrower than 4:3) and ApplyEdgeAnchoredLayout spreads it across the rest, so
+	// it reads like the launcher before it. UI textures are bilinear, so the art stays smooth.
 	for (const TSharedPtr<FACEUIElement>& Root : Roots)
 	{
 		if (Root.IsValid() && Root->ElementName == TEXT("CharacterManagementField"))
@@ -331,6 +331,20 @@ namespace
 	}
 }
 
+int32 UACEUIElementManager::CharacterSelectColumnShift(const FString& ElementName, int32 ExtraWidth)
+{
+	if (ElementName == TEXT("WorldName") || ElementName == TEXT("CharacterListBoxFrame")
+		|| ElementName == TEXT("DeleteCharacterButton") || ElementName == TEXT("RestoreCharacterButton"))
+	{
+		return 0;
+	}
+	if (ElementName == TEXT("CreditsButton") || ElementName == TEXT("ExitButton"))
+	{
+		return ExtraWidth;
+	}
+	return ExtraWidth / 2;
+}
+
 void UACEUIElementManager::ApplyEdgeAnchoredLayout(int32 ViewportWidth, int32 ViewportHeight)
 {
 	const int32 Vw = FMath::Max(ACEUI::ReferenceWidth, ViewportWidth);
@@ -357,12 +371,18 @@ void UACEUIElementManager::ApplyEdgeAnchoredLayout(int32 ViewportWidth, int32 Vi
         }
 		if (Root->ElementName == TEXT("CharacterManagementField"))
 		{
-			Root->Width = ACEUI::ReferenceWidth;
-			Root->Height = ACEUI::ReferenceHeight;
-			Root->EdgeAnchorX = FMath::RoundToInt(
-				(static_cast<float>(ViewportWidth) / CharS - static_cast<float>(ACEUI::ReferenceWidth)) * 0.5f);
-			Root->EdgeAnchorY = FMath::RoundToInt(
-				(static_cast<float>(ViewportHeight) / CharS - static_cast<float>(ACEUI::ReferenceHeight)) * 0.5f);
+			// The field covers the whole window (the binder paints its backdrop edge to edge).
+			// Wide windows spread the authored columns like a native widescreen layout: the
+			// world and character list stay on the left, CREDITS/EXIT follow the right edge with
+			// the backdrop's Asheron and logo, and Create Character/ENTER (and dialogs) center.
+			// Windows narrower than 4:3 center everything vertically instead.
+			const int32 ExtraW = FMath::Max(0, FMath::CeilToInt(static_cast<float>(ViewportWidth) / CharS - .01f) - ACEUI::ReferenceWidth);
+			const int32 ExtraH = FMath::Max(0, FMath::CeilToInt(static_cast<float>(ViewportHeight) / CharS - .01f) - ACEUI::ReferenceHeight);
+			const int32 OffsetY = (ExtraH + 1) / 2;
+			Root->Width = ACEUI::ReferenceWidth + ExtraW;
+			Root->Height = ACEUI::ReferenceHeight + 2 * OffsetY;
+			Root->EdgeAnchorX = 0;
+			Root->EdgeAnchorY = 0;
 			Root->UserDragX = 0;
 			Root->UserDragY = 0;
 			Root->RecomputeLayoutOffset();
@@ -373,10 +393,10 @@ void UACEUIElementManager::ApplyEdgeAnchoredLayout(int32 ViewportWidth, int32 Vi
 				{
 					continue;
 				}
-				// The character binder owns Delete/Restore, modal and credits visibility.
-				// Re-anchoring must not reopen a dismissed dialog every frame.
-				Child->EdgeAnchorX = 0;
-				Child->EdgeAnchorY = 0;
+				// Only offsets change here: the character binder owns Delete/Restore, modal and
+				// credits visibility, and re-anchoring must not reopen a dismissed dialog.
+				Child->EdgeAnchorX = CharacterSelectColumnShift(Child->ElementName, ExtraW);
+				Child->EdgeAnchorY = OffsetY;
 				Child->RecomputeLayoutOffset();
 			}
 			continue;

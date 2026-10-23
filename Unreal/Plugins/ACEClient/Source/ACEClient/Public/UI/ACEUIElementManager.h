@@ -37,6 +37,9 @@ public:
 	 * Gameplay: (1,1) — floaties edge-anchor instead of stretching.
 	 */
 	FVector2D GetCanvasScale(FVector2D ViewportSize) const;
+	/** Horizontal layout offset of a character-select column when the window is ExtraWidth
+	 *  layout pixels wider than 800: 0 for the left column, all of it for the right, half otherwise. */
+	static int32 CharacterSelectColumnShift(const FString& ElementName, int32 ExtraWidth);
 
 	/**
 	 * Reposition classic_gameplay floaty roots toward screen edges without scaling.
