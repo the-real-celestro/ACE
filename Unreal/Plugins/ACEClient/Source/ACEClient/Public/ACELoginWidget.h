@@ -220,6 +220,9 @@ protected:
 	UPROPERTY() TObjectPtr<UTextBlock> BrowserName;
 	UPROPERTY() TObjectPtr<UTextBlock> BrowserMeta;
 	UPROPERTY() TObjectPtr<UTextBlock> BrowserCount;
+	/** Add to My Servers, or Select this World when the directory entry is already saved. */
+	UPROPERTY() TObjectPtr<class UACELoginActionButton> BrowserImport;
+	UPROPERTY() TObjectPtr<UTextBlock> BrowserSavedNote;
 	/** Game Files check: one quiet row per DAT file. */
 	UPROPERTY() TObjectPtr<class UVerticalBox> FileRows;
 	/** Shown only on the Accounts tab (with the Launch ring on the home page). */

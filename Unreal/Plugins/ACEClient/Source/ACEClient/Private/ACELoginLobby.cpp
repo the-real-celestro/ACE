@@ -978,7 +978,8 @@ void UACELoginWidget::EnsureDefaultLayout()
 		auto* DescSlot=Detail->AddChildToVerticalBox(DescScroll); DescSlot->SetSize(Fill); DescSlot->SetPadding(FMargin(0,0,0,16));
 		AddLine(Detail,Rule(),16);
 		auto* Act=VBox(); AddLine(Detail,Act,0);
-		AddLine(Act,ActionButton(TEXT("Add to My Servers"),TEXT("import")),12);
+		BrowserSavedNote=Text(TEXT(""),BodyFont(13.f),Hex(0xa99878),true); BrowserSavedNote->SetVisibility(ESlateVisibility::Collapsed); AddLine(Act,BrowserSavedNote,10);
+		BrowserImport=ActionButton(TEXT("Add to My Servers"),TEXT("import")); AddLine(Act,BrowserImport,12);
 		auto* Links=HBox(); AddLine(Act,Links,0);
 		auto* Web=ActionButton(TEXT("Website"),TEXT("browserwebsite")); Web->LobbyStyle=LobbySmall; ButtonStyle(Web,false); AddH(Links,Web,FMargin(0,0,8,0));
 		auto* Disc=ActionButton(TEXT("Discord"),TEXT("browserdiscord")); Disc->LobbyStyle=LobbySmall; ButtonStyle(Disc,false); AddH(Links,Disc);
@@ -1302,24 +1303,31 @@ void UACELoginWidget::NativeTick(const FGeometry& Geometry, float Dt)
 			else if (!Directory.IsEmpty()) RunAction(TEXT("directoryselect"),Directory[0].Id);
 		}
 		if (At(20.f)) Shot(TEXT("Codex_Browser.png"));
-		if (At(20.5f)) RunAction(TEXT("plugins"));
-		if (At(21.5f)) Shot(TEXT("Codex_Plugins.png"));
-		if (At(22.5f)) { RunAction(TEXT("browser")); Pick(TEXT("Reefcull")); }
-		if (At(24.f)) Shot(TEXT("Codex_Browser_Reefcull.png"));
-		if (At(25.f))
+		if (At(20.5f))
+		{
+			// An unsaved directory entry: Add to My Servers stays available.
+			if (const auto* D=Directory.FindByPredicate([&](const FACELoginServer& E){ return !Profile.Servers.ContainsByPredicate([&](const FACELoginServer& V){ return V.Host.Equals(E.Host,ESearchCase::IgnoreCase) && V.Port==E.Port; }); }))
+				RunAction(TEXT("directoryselect"),D->Id);
+		}
+		if (At(21.5f)) Shot(TEXT("Codex_Browser_Unsaved.png"));
+		if (At(22.f)) RunAction(TEXT("plugins"));
+		if (At(23.f)) Shot(TEXT("Codex_Plugins.png"));
+		if (At(23.5f)) { Pick(TEXT("Reefcull")); RunAction(TEXT("browser")); }
+		if (At(25.f)) Shot(TEXT("Codex_Browser_Reefcull.png"));
+		if (At(26.f))
 		{
 			// Launch disabled with no account chosen (in memory only; nothing is saved).
 			RunAction(TEXT("accounts"));
 			Profile.SelectedAccountId.Reset(); RefreshAccountLists(); UpdateSelectedAccountInfo();
 		}
-		if (At(26.5f)) Shot(TEXT("Codex_NoAccount.png"));
-		if (At(27.5f))
+		if (At(27.5f)) Shot(TEXT("Codex_NoAccount.png"));
+		if (At(28.5f))
 		{
 			if (!LobbyShotServerId.IsEmpty()) SelectServer(LobbyShotServerId);
 			RunAction(TEXT("selectaccount"),LobbyShotAccountId);
 			bLoginEntriesDirty=false;
 		}
-		if (At(28.5f)) FPlatformMisc::RequestExit(false);
+		if (At(29.5f)) FPlatformMisc::RequestExit(false);
 	}
 #endif
 	if (UpdateProgressBox)
@@ -1925,6 +1933,21 @@ void UACELoginWidget::RefreshBrowser()
 	const auto* S=Directory.FindByPredicate([&](const auto& E){return E.Id==BrowserServerId;});
 	if (BrowserName) BrowserName->SetText(FText::FromString(S?S->Name:TEXT("No world selected")));
 	if (BrowserMeta) BrowserMeta->SetText(FText::FromString(S?FString::Printf(TEXT("%s  \u00B7  %s:%d"),S->bGDLE?TEXT("GDLE"):TEXT("ACE"),*S->Host,S->Port):FString()));
+	// Saved worlds offer "Select this World" instead of adding a duplicate; the active one needs neither.
+	const FACELoginServer* SavedAs=S?Profile.Servers.FindByPredicate([&](const auto& E){return E.Host.Equals(S->Host,ESearchCase::IgnoreCase) && E.Port==S->Port;}):nullptr;
+	const bool bActive=SavedAs && SavedAs->Id==Profile.SelectedServerId;
+	if (BrowserImport)
+	{
+		BrowserImport->SetVisibility(bActive?ESlateVisibility::Collapsed:ESlateVisibility::Visible);
+		BrowserImport->SetIsEnabled(S!=nullptr);
+		if (auto* Size=Cast<USizeBox>(BrowserImport->GetContent())) if (auto* Caption=Cast<UTextBlock>(Size->GetContent()))
+			Caption->SetText(FText::FromString(SavedAs?TEXT("Select this World"):TEXT("Add to My Servers")));
+	}
+	if (BrowserSavedNote)
+	{
+		BrowserSavedNote->SetText(FText::FromString(bActive?TEXT("\u2713  Already in your worlds \u00B7 this is your active World."):TEXT("\u2713  Already in your worlds.")));
+		BrowserSavedNote->SetVisibility(SavedAs?ESlateVisibility::HitTestInvisible:ESlateVisibility::Collapsed);
+	}
 	BrowserDetail->SetText(FText::FromString(S?(S->Description.IsEmpty()?FString(TEXT("No description provided.")):S->Description.Left(1200)):TEXT("Select a world on the left to see its description and community links.")));
 }
 
@@ -2150,7 +2173,7 @@ void UACELoginWidget::RunAction(const FString& Action, const FString& Value)
 			if (Profile.Servers.Num()>=128) { SetStatus(TEXT("Remove an unused server before adding another.")); return; }
 			FACELoginServer Copy=*S; Copy.Id=FGuid::NewGuid().ToString(); Profile.Servers.Add(Copy); SelectServer(Copy.Id);
 		}
-		Pages->SetActiveWidgetIndex(0); SetStatus(TEXT("Server added. Choose an account to launch."));
+		Pages->SetActiveWidgetIndex(0); SetStatus(Existing?FString::Printf(TEXT("%s is now your World. Choose an account to launch."),*Existing->Name):FString(TEXT("Server added. Choose an account to launch.")));
 	}
 	else if (Action==TEXT("website") || Action==TEXT("discord") || Action==TEXT("browserwebsite") || Action==TEXT("browserdiscord"))
 	{
