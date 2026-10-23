@@ -5,6 +5,7 @@
 #include "Misc/ScopeExit.h"
 #include "HAL/FileManager.h"
 #include "Mods/ACEUCMProfiles.h"
+#include "Mods/ACEPluginStyle.h"
 #include "Serialization/JsonSerializer.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "ACEDatSubsystem.h"
@@ -188,8 +189,18 @@ bool FACEUCMProfilePanelTest::RunTest(const FString&)
     for(const TCHAR* Page:{TEXT("Buffs"),TEXT("Buff others"),TEXT("Combat"),TEXT("Recovery"),TEXT("Route"),TEXT("Loot"),TEXT("Vendors"),TEXT("Monsters"),TEXT("Metas")})
     {
         const FString Text=CollectText(Host->MakeUCMPanel(Page));
-        TestTrue(*(FString(Page)+TEXT(" has New profile")),Text.Contains(TEXT("+ New\n")));
-        TestTrue(*(FString(Page)+TEXT(" has Delete profile")),Text.Contains(TEXT("Delete\n")));
+        // Codex: Character pages use the header Profile dropdown (switch/New/Delete) instead of a per-page row.
+        const bool HeaderOwnsProfile=FACEPluginStyle::IsCodex()&&(FString(Page)==TEXT("Buffs")||FString(Page)==TEXT("Buff others")||FString(Page)==TEXT("Combat")||FString(Page)==TEXT("Recovery"));
+        if(HeaderOwnsProfile)
+        {
+            TestFalse(*(FString(Page)+TEXT(" has one profile control")),Text.Contains(TEXT("+ New\n")));
+            TestTrue(*(FString(Page)+TEXT(" shows the header Profile dropdown")),Text.Contains(TEXT("Profile\n")));
+        }
+        else
+        {
+            TestTrue(*(FString(Page)+TEXT(" has New profile")),Text.Contains(TEXT("+ New\n")));
+            TestTrue(*(FString(Page)+TEXT(" has Delete profile")),Text.Contains(TEXT("Delete\n")));
+        }
         if(FString(Page)==TEXT("Route"))TestFalse(TEXT("Route has no duplicate import selector"),Text.Contains(TEXT("Navigation route\n")));
         if(FString(Page)==TEXT("Monsters"))TestTrue(TEXT("Monsters can add current target"),Text.Contains(TEXT("Add selected monster")));
         if(FString(Page)==TEXT("Buffs"))TestTrue(TEXT("Buffs includes protection choices"),Text.Contains(TEXT("Protections:"))&&Text.Contains(TEXT("Banes:")));

@@ -118,10 +118,10 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakePluginWindowControls(const FString&
             .OnCheckStateChanged_Lambda([H,Id](ECheckBoxState V){if(H.IsValid())H->SetPluginWindowPinned(Id,V==ECheckBoxState::Checked);})
             .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Hide the window frame and lock its position. Hold Quick-show pinned windows to move or unpin."))))
             [Text(TEXT("Pin / hide frame"))]];
-        Options->AddSlot().AutoWidth()[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(&Theme->Button).IsFocusable(false)
+        Options->AddSlot().AutoWidth()[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(Theme->Codex?&Theme->DockButton:&Theme->Button).IsFocusable(false)
             .IsEnabled_Lambda([H,Id]{return H.IsValid()&&H->HasPluginWindowOpacity(Id)&&!H->IsPluginOpacityGlobal();})
             .OnClicked_Lambda([H,Id]{if(H.IsValid())H->ResetPluginWindowOpacity(Id);return FReply::Handled();})
-            [Text(TEXT("Use plugin/default"))]];
+            [Text(TEXT("Use plugin default"))]];
         Body->AddSlot().AutoHeight().Padding(0,5)[Options];
     }
     return Body;

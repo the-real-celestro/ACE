@@ -139,9 +139,10 @@ namespace ACEPluginPanelPrivate
                     .IsChecked_Lambda([Get]{return Get()?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
                     .OnCheckStateChanged_Lambda([Set](ECheckBoxState S){Set(S==ECheckBoxState::Checked);})];
         }
-        TSharedRef<SWidget> Plate(const FString& Caption,TFunction<void()> Fn,FName WidgetTag=NAME_None,TAttribute<bool> CanClick=true)
+        TSharedRef<SWidget> Plate(const FString& Caption,TFunction<void()> Fn,FName WidgetTag=NAME_None,TAttribute<bool> CanClick=true,bool Primary=true)
         {
-            return SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::CompactButtonPadding)).ButtonStyle(&Retail->Button).IsFocusable(false).Tag(WidgetTag)
+            // Red plates are for primary actions (Open); secondary actions use the quiet hairline cell.
+            return SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::CompactButtonPadding)).ButtonStyle(Primary?&Retail->Button:&Retail->DockButton).IsFocusable(false).Tag(WidgetTag)
                 .IsEnabled(CanClick).OnClicked_Lambda([Fn]{Fn();return FReply::Handled();})
                 [SNew(SACEPluginText).Text(FText::FromString(Caption)).Font(FCoreStyle::GetDefaultFontStyle("Regular",13)).ColorAndOpacity(ACELobbyArt::CaptionText)];
         }
@@ -240,14 +241,14 @@ namespace ACEPluginPanelPrivate
             auto Footer=SNew(SHorizontalBox)
                 +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(2,0,12,0)
                     [CodexText(FText::FromString(ManagerNotice.IsEmpty()?TEXT("Drop plugin folders into ")+Folder:ManagerNotice),10,FACEPluginStyle::Muted(),true)]
-                +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,6,0)[Plate(TEXT("Open plugin folder"),[Folder]{IFileManager::Get().MakeDirectory(*Folder,true);FPlatformProcess::ExploreFolder(*Folder);})]
-                +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::CompactButtonPadding)).ButtonStyle(&Retail->Button).IsFocusable(false)
+                +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,6,0)[Plate(TEXT("Open plugin folder"),[Folder]{IFileManager::Get().MakeDirectory(*Folder,true);FPlatformProcess::ExploreFolder(*Folder);},NAME_None,true,false)]
+                +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::CompactButtonPadding)).ButtonStyle(&Retail->DockButton).IsFocusable(false)
                     .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Reload installed plugins. Running plugins will stop."))))
                     .OnClicked_Lambda([this](){Host->Discover();ManagerNotice=Host->Notice;Rebuild();return FReply::Handled();})
                     [SNew(SACEPluginText).Text(FText::FromString(TEXT("Refresh"))).Font(FCoreStyle::GetDefaultFontStyle("Regular",13)).ColorAndOpacity(ACELobbyArt::CaptionText)]];
             Body->AddSlot().FillHeight(1)
             [SNew(SHorizontalBox)
-                +SHorizontalBox::Slot().AutoWidth()[SNew(SBox).WidthOverride(292)[List]]
+                +SHorizontalBox::Slot().AutoWidth()[SNew(SBox).WidthOverride(340)[List]]
                 +SHorizontalBox::Slot().AutoWidth().Padding(12,0)[SNew(SBox).WidthOverride(1)[SNew(SImage).Image(FCoreStyle::Get().GetBrush("WhiteBrush")).ColorAndOpacity(FACEPluginStyle::Gold(.22f))]]
                 +SHorizontalBox::Slot().FillWidth(1)[SAssignNew(Detail,SBox)]];
             Body->AddSlot().AutoHeight().Padding(0,8,0,2)[SNew(SBox).HeightOverride(1)[SNew(SImage).Image(FCoreStyle::Get().GetBrush("WhiteBrush")).ColorAndOpacity(FACEPluginStyle::Gold(.22f))]];

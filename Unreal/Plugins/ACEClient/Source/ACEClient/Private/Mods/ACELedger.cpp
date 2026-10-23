@@ -189,7 +189,7 @@ namespace
         TSharedRef<SWidget> Label(const FString& Text)
         {return SNew(SACEPluginText).Text(FText::FromString(Text)).Font(FCoreStyle::GetDefaultFontStyle("Regular",12));}
         TSharedRef<SWidget> Button(const FString& Text,const FString& Tip,TFunction<void()> Action)
-        {return SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::CompactButtonPadding)).Tag(Text==TEXT("Reset run")?TEXT("LedgerReset"):TEXT("LedgerEdit")).IsFocusable(false).ButtonStyle(&Style->Button).ToolTip(FACEPluginStyle::Tooltip(FText::FromString(Tip))).OnClicked_Lambda([Action]{Action();return FReply::Handled();})[Label(Text)];}
+        {return SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::CompactButtonPadding)).Tag(Text==TEXT("Reset run")?TEXT("LedgerReset"):TEXT("LedgerEdit")).IsFocusable(false).ButtonStyle(Style->Codex?&Style->DockButton:&Style->Button).ToolTip(FACEPluginStyle::Tooltip(FText::FromString(Tip))).OnClicked_Lambda([Action]{Action();return FReply::Handled();})[Label(Text)];}
         void Rebuild()
         {
             if(!Host.IsValid())return;FACEPluginStyle::Use(Host.Get(),Id);Revision=Host->GetSupplyRevision();Locked=Host->IsPluginWindowChromeHidden(Id);Body->ClearChildren();UpdateHuntText();

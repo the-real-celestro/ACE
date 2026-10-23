@@ -9,11 +9,20 @@
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Views/SListView.h"
 #include "Styling/CoreStyle.h"
+#include "Brushes/SlateColorBrush.h"
+#include "Brushes/SlateNoResource.h"
 
 namespace
 {
     FLinearColor Color(EACEUCMLogLevel Level)
     {return Level==EACEUCMLogLevel::Error?FLinearColor(1,.35f,.3f):Level==EACEUCMLogLevel::Warning?FLinearColor(1,.73f,.28f):FLinearColor(.78f,.86f,.92f);}
+    /** Codex: the log list sits directly on the window (no recessed gray panel). */
+    const FTableViewStyle& QuietList()
+    {static FTableViewStyle S=[]{FTableViewStyle T=FCoreStyle::Get().GetWidgetStyle<FTableViewStyle>("ListView");T.SetBackgroundBrush(FSlateNoResource());return T;}();return S;}
+    const FTableRowStyle& QuietRow()
+    {static FTableRowStyle S=[]{FTableRowStyle T=FCoreStyle::Get().GetWidgetStyle<FTableRowStyle>("TableView.Row");
+        T.SetEvenRowBackgroundBrush(FSlateNoResource()).SetOddRowBackgroundBrush(FSlateNoResource())
+         .SetEvenRowBackgroundHoveredBrush(FSlateColorBrush(FLinearColor(1,1,1,.03f))).SetOddRowBackgroundHoveredBrush(FSlateColorBrush(FLinearColor(1,1,1,.03f)));return T;}();return S;}
     class SACEUCMLogPanel : public SCompoundWidget
     {
     public:
@@ -30,13 +39,13 @@ namespace
                 .IsChecked_Lambda([this]{return Follow?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
                 .OnCheckStateChanged_Lambda([this](ECheckBoxState V){Follow=V==ECheckBoxState::Checked;if(Follow){FollowLayoutPasses=3;List->ScrollToBottom();}})
                 [SNew(SACEPluginText).Text(FText::FromString(TEXT("Follow latest")))]];
-            Controls->AddSlot().FillWidth(1).HAlign(HAlign_Right)[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(&FACEPluginStyle::Current()->Button).IsFocusable(false)
+            Controls->AddSlot().FillWidth(1).HAlign(HAlign_Right)[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(FACEPluginStyle::IsCodex()?&FACEPluginStyle::Current()->DockButton:&FACEPluginStyle::Current()->Button).IsFocusable(false)
                 .Text(FText::FromString(TEXT("Copy log"))).OnClicked_Lambda([this]
                 {
                     FString Text;for(const auto& E:Rows){Text+=E->ToText();Text+=TEXT("\r\n\r\n");}
                     FPlatformApplicationMisc::ClipboardCopy(*Text);return FReply::Handled();
                 })];
-            Controls->AddSlot().AutoWidth().Padding(6,0,0,0)[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(&FACEPluginStyle::Current()->Button).IsFocusable(false)
+            Controls->AddSlot().AutoWidth().Padding(6,0,0,0)[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(FACEPluginStyle::IsCodex()?&FACEPluginStyle::Current()->DockButton:&FACEPluginStyle::Current()->Button).IsFocusable(false)
                 .Text(FText::FromString(TEXT("Clear"))).OnClicked_Lambda([this]{if(Host.IsValid())Host->ClearUCMLog();Refresh();return FReply::Handled();})];
             ChildSlot[SNew(SBorder).Padding(12).BorderImage(&FACEPluginStyle::Current()->Background)
                 [SNew(SVerticalBox)
@@ -49,9 +58,10 @@ namespace
                     })]
                 +SVerticalBox::Slot().FillHeight(1)[SAssignNew(List,SListView<TSharedPtr<FACEUCMLogEntry>>)
                     .ListItemsSource(&Rows).SelectionMode(ESelectionMode::None)
+                    .ListViewStyle(FACEPluginStyle::IsCodex()?&QuietList():&FCoreStyle::Get().GetWidgetStyle<FTableViewStyle>("ListView"))
                     .OnGenerateRow_Lambda([](TSharedPtr<FACEUCMLogEntry> E,const TSharedRef<STableViewBase>& Owner)
                     {
-                        return SNew(STableRow<TSharedPtr<FACEUCMLogEntry>>,Owner).Padding(FMargin(3,7))
+                        return SNew(STableRow<TSharedPtr<FACEUCMLogEntry>>,Owner).Padding(FMargin(3,7)).Style(FACEPluginStyle::IsCodex()?&QuietRow():&FCoreStyle::Get().GetWidgetStyle<FTableRowStyle>("TableView.Row"))
                             [SNew(SACEPluginText).AutoWrapText(true).Font(FACEPluginStyle::NativeFont("Regular",12))
                             .ColorAndOpacity(Color(E->Level)).Text_Lambda([E]{return FText::FromString(E->ToText());})];
                     })]

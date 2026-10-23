@@ -102,6 +102,8 @@ TSharedRef<FACEPluginStyle> FACEPluginStyle::Current()
 }
 FSlateFontInfo FACEPluginStyle::NativeFont(FName Typeface,int32 Size)
 {
+    // Codex maps requested sizes onto its own type scale in SACEPluginText; keep them distinct here.
+    if(IsCodex())return FCoreStyle::GetDefaultFontStyle(Typeface,Size);
     const int32 ConsistentSize=Size==13?12:Size>=14&&Size<=16?15:Size>=17&&Size<=20?18:Size;
     return FCoreStyle::GetDefaultFontStyle(Typeface,ConsistentSize);
 }
@@ -599,7 +601,9 @@ void SACEPluginText::Construct(const FArguments& A)
         auto Args=A;
         auto Compact=[](FSlateFontInfo F)
         {
-            if(F.TypefaceFontName!=FName(TEXT("Fancy"))&&F.Size>=11.f)F.Size=FMath::Max(9.f,FMath::RoundToFloat(F.Size*.8f));
+            // One Codex type scale: sublabel 9 (requested 11-12), label/value 10 (13-16),
+            // emphasis 11 (17-20), large 13 (21+). Captions ask for 9-10 directly; Fancy titles keep their size.
+            if(F.TypefaceFontName!=FName(TEXT("Fancy"))&&F.Size>=11.f)F.Size=F.Size<=12.f?9.f:F.Size<=16.f?10.f:F.Size<=20.f?11.f:13.f;
             return F;
         };
         if(A._Font.IsBound())Args._Font=TAttribute<FSlateFontInfo>::CreateLambda([Font=A._Font,Compact]{return Compact(Font.Get());});

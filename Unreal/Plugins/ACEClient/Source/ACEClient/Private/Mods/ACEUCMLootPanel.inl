@@ -18,7 +18,7 @@ bool LootNarrow=false,ShowLootFiles=false,LootHasSource=false;
 
 TSharedRef<SWidget> LootTool(const FString& Caption,TFunction<void()> Action)
 {
-    return SNew(SACEPluginButton).ButtonStyle(&Style()).IsFocusable(false).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding))
+    return SNew(SACEPluginButton).ButtonStyle(&QuietStyle()).IsFocusable(false).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding))
         .OnClicked_Lambda([Action](){Action();return FReply::Handled();})[SNew(SACEPluginText).Text(FText::FromString(Caption)).Font(FACEPluginStyle::NativeFont("Regular",14)).ColorAndOpacity(Ink)];
 }
 TSharedRef<SWidget> LootSelectRow(const FString& Caption,const FString& Detail,TAttribute<bool> Selected,TFunction<void()> Action)

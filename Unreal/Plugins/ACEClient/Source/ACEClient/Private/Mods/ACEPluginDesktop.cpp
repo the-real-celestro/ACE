@@ -66,7 +66,6 @@ namespace
             // Navy wash keeps small text legible over the art.
             FLinearColor Wash(FColor(4,9,22));Wash.A=.42f*A;
             Box(White,FVector2D(0,HH),FVector2D(S.X,S.Y-HH),Wash);
-            if(Art)Box(&Art->InnerShadow,FVector2D(0,HH),FVector2D(S.X,S.Y-HH),FLinearColor(1,1,1,.5f*A));
             TArray<FVector2D> Edge={FVector2D(.5,HH),FVector2D(.5,S.Y-.5),FVector2D(S.X-.5,S.Y-.5),FVector2D(S.X-.5,HH)};
             if(NoHeader)Edge.Add(FVector2D(.5,HH));
             if(!(Style&&Style->IsFrameHidden()))FSlateDrawElement::MakeLines(Out,Layer+1,G.ToPaintGeometry(),Edge,ESlateDrawEffect::None,FACEPluginStyle::Gold(.5f*A)*Mod,true,1.f);

@@ -105,7 +105,18 @@ void UACEPluginSubsystem::TickPluginPreview()
             if(PreviewDesktop->IsOpen(Other)!=Want)PreviewDesktop->Toggle(Other);
         }
     };
-    switch(PreviewStep)
+    // Every UCM page is captured in rail order (UCM_<Page>.png), each in a freshly built desktop.
+    static const TCHAR* const UCMPages[]={TEXT("Overview"),TEXT("Buffs"),TEXT("Buff others"),TEXT("Combat"),TEXT("Recovery"),TEXT("Route"),
+        TEXT("Loot"),TEXT("Vendors"),TEXT("Monsters"),TEXT("Metas"),TEXT("Import"),TEXT("Log")};
+    constexpr int32 PageFirst=4,PageEnd=PageFirst+UE_ARRAY_COUNT(UCMPages)*2;
+    if(PreviewStep>=PageFirst&&PreviewStep<PageEnd)
+    {
+        const FString PageName=UCMPages[(PreviewStep-PageFirst)/2];
+        if((PreviewStep-PageFirst)%2==0){GACEPluginPreviewUCMPage=PageName;Desktop();Only(TEXT("ucm"));PreviewNext=Now+3;}
+        else{Shot(*(TEXT("UCM_")+PageName.Replace(TEXT(" "),TEXT(""))+TEXT(".png")));PreviewNext=Now+1.5;}
+        ++PreviewStep;return;
+    }
+    switch(PreviewStep>=PageEnd?PreviewStep-PageEnd+7:PreviewStep)
     {
     case 0:
         // Wait for the DAT (fonts, retail art) and the lobby's art decode.
@@ -123,12 +134,9 @@ void UACEPluginSubsystem::TickPluginPreview()
         // Show the framed state. Preview mode is a non-shipping capture aid; the capture script restores settings.
         SetPluginWindowPinned(TEXT("ucm"),false);SetPluginWindowPinned(TEXT("huntledger"),false);
         PreviewNext=Now+2;break;
-    // Build the UCM window only once the manager has closed and the settings above have landed;
-    // the first window built in the same tick is laid out before the desktop knows its size.
-    case 3: GACEPluginPreviewUCMPage=TEXT("Buffs");Desktop();Only(TEXT("ucm"));PreviewNext=Now+4;break;
-    case 4: Shot(TEXT("UCM_Buffs.png"));PreviewNext=Now+1.5;break;
-    case 5: GACEPluginPreviewUCMPage=TEXT("Combat");Desktop();Only(TEXT("ucm"));PreviewNext=Now+4;break;
-    case 6: Shot(TEXT("UCM_Combat.png"));PreviewNext=Now+1.5;break;
+    // Warm-up: the first window built after the manager closes is laid out before the desktop
+    // knows its size, so build once here and capture pages from the second build onward.
+    case 3: GACEPluginPreviewUCMPage=TEXT("Overview");Desktop();Only(TEXT("ucm"));PreviewNext=Now+3;break;
     case 7: GACEPluginPreviewUCMPage.Reset();SavePluginWindowPosition(TEXT("huntledger"),FVector2D(1240,110));Only(TEXT("huntledger"));PreviewNext=Now+3;break;
     case 8: Shot(TEXT("HuntLedger.png"));PreviewNext=Now+1.5;break;
     case 9:
