@@ -3,6 +3,8 @@
 #include "HAL/FileManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
@@ -60,8 +62,19 @@ namespace ACELoginSettings
 		return Cache;
 	}
 
+	// Non-shipping plugin preview shots never touch the Keychain: no access prompt can stall
+	// an unattended run, and saved passwords are neither read nor overwritten.
+	static bool SkipKeychainForPreview()
+	{
+#if !UE_BUILD_SHIPPING
+		return FParse::Param(FCommandLine::Get(), TEXT("ACEPluginPreviewShot"));
+#else
+		return false;
+#endif
+	}
 	static bool SaveKeychainPasswords(const FACELoginSettings& Settings, const FString& Path)
 	{
+		if (SkipKeychainForPreview()) return true;
 		auto Json = MakeShared<FJsonObject>();
 		auto Accounts = MakeShared<FJsonObject>();
 		bool bAny = !Settings.Password.IsEmpty();
@@ -83,6 +96,7 @@ namespace ACELoginSettings
 
 	static void LoadKeychainPasswords(FACELoginSettings& Settings, const FString& Path)
 	{
+		if (SkipKeychainForPreview()) return;
 		FString Text; TSharedPtr<FJsonObject> Json;
 		const FString Key = KeychainKey(Path);
 		if (const FString* Cached = KeychainCache().Find(Key)) Text = *Cached;

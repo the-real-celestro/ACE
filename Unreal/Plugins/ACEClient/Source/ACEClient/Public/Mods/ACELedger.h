@@ -16,6 +16,8 @@ struct FACESupplyEntry
 namespace ACELedger
 {
     inline constexpr double HeaderHeight=24., SupplyEditorHeight=68., HuntEditorHeight=50.;
+    /** Title bar height for the active plugin theme (HeaderHeight in Original, 42 in Codex). */
+    double ChromeHeaderHeight();
     inline bool IsOwned(const FACEWorldObject& Item,int32 Player,const TMap<int32,FACEWorldObject>& Objects)
     {
         if(!Player||Item.Guid==Player)return false;

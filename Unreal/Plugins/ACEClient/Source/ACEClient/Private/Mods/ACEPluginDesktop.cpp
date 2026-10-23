@@ -20,6 +20,9 @@
 #include "Widgets/Text/STextBlock.h"
 #include "Brushes/SlateRoundedBoxBrush.h"
 #include "Styling/CoreStyle.h"
+#include "Widgets/SLeafWidget.h"
+#include "Widgets/SOverlay.h"
+#include "ACELobbyArt.h"
 
 namespace
 {
@@ -32,6 +35,55 @@ namespace
     {return SNew(SBox).WidthOverride(26).HeightOverride(26)[SNew(SACEPluginIcon).Id(Id)];}
     TSharedRef<STextBlock> Caption(const FString& Text, int32 Size = 12)
     { return SNew(SACEPluginText).Text(FText::FromString(Text)).Font(FCoreStyle::GetDefaultFontStyle("Regular",Size)); }
+
+    /** Codex window backdrop: retail title plaque (0x06004D26 header, 42px) over the lobby's tinted
+     *  window body, a navy wash and a 1px gold border. Opacity fades all of it; text is unaffected. */
+    class SCodexChrome : public SLeafWidget
+    {
+    public:
+        SLATE_BEGIN_ARGS(SCodexChrome) {}
+            SLATE_ARGUMENT(TSharedPtr<FACEPluginStyle>, Style)
+            SLATE_ATTRIBUTE(bool, HeaderHidden)
+        SLATE_END_ARGS()
+        void Construct(const FArguments& Args){Style=Args._Style;HeaderHidden=Args._HeaderHidden;SetVisibility(EVisibility::HitTestInvisible);}
+        virtual FVector2D ComputeDesiredSize(float) const override {return FVector2D::ZeroVector;}
+        virtual int32 OnPaint(const FPaintArgs&,const FGeometry& G,const FSlateRect&,FSlateWindowElementList& Out,int32 Layer,const FWidgetStyle& WidgetStyle,bool) const override
+        {
+            const FVector2D S=G.GetLocalSize();
+            const float A=Style?Style->GetBackgroundOpacity():1.f;
+            if(A<=0.f||S.X<8||S.Y<8)return Layer;
+            const bool NoHeader=HeaderHidden.Get(false);
+            const double HH=NoHeader?0.:FACEPluginStyle::HeaderHeight();
+            const FLinearColor Mod=WidgetStyle.GetColorAndOpacityTint();
+            const FSlateBrush* White=FCoreStyle::Get().GetBrush("WhiteBrush");
+            auto Box=[&](const FSlateBrush* Brush,FVector2D Pos,FVector2D Size,FLinearColor Color)
+            {if(Brush&&Size.X>0&&Size.Y>0)FSlateDrawElement::MakeBox(Out,Layer,G.ToPaintGeometry(Size,FSlateLayoutTransform(Pos)),Brush,ESlateDrawEffect::None,Color*Mod);};
+            const FACELobbyArt* Art=ACELobbyArt::Get();
+            const FLinearColor Fade(1,1,1,A);
+            if(const FSlateBrush* Body=Art?ACELobbyArt::TintedWindowBody(FACEPluginStyle::WindowTint()):nullptr)
+                Box(Body,FVector2D(0,HH),FVector2D(S.X,S.Y-HH),Fade);
+            else Box(White,FVector2D(0,HH),FVector2D(S.X,S.Y-HH),FLinearColor(.006f,.014f,.04f,.92f*A));
+            // Navy wash keeps small text legible over the art.
+            FLinearColor Wash(FColor(4,9,22));Wash.A=.42f*A;
+            Box(White,FVector2D(0,HH),FVector2D(S.X,S.Y-HH),Wash);
+            if(Art)Box(&Art->InnerShadow,FVector2D(0,HH),FVector2D(S.X,S.Y-HH),FLinearColor(1,1,1,.5f*A));
+            TArray<FVector2D> Edge={FVector2D(.5,HH),FVector2D(.5,S.Y-.5),FVector2D(S.X-.5,S.Y-.5),FVector2D(S.X-.5,HH)};
+            if(NoHeader)Edge.Add(FVector2D(.5,HH));
+            if(!(Style&&Style->IsFrameHidden()))FSlateDrawElement::MakeLines(Out,Layer+1,G.ToPaintGeometry(),Edge,ESlateDrawEffect::None,FACEPluginStyle::Gold(.5f*A)*Mod,true,1.f);
+            if(!NoHeader&&Art)
+            {
+                const double K=HH/FACELobbyArt::WindowHeaderH,L=80*K,R=60*K;
+                FSlateDrawElement::MakeBox(Out,Layer+1,G.ToPaintGeometry(FVector2D(L,HH),FSlateLayoutTransform()),&Art->WindowHeader[0],ESlateDrawEffect::None,Fade*Mod);
+                FSlateDrawElement::MakeBox(Out,Layer+1,G.ToPaintGeometry(FVector2D(FMath::Max(0.,S.X-L-R),HH),FSlateLayoutTransform(FVector2D(L,0))),&Art->WindowHeader[1],ESlateDrawEffect::None,Fade*Mod);
+                FSlateDrawElement::MakeBox(Out,Layer+1,G.ToPaintGeometry(FVector2D(R,HH),FSlateLayoutTransform(FVector2D(S.X-R,0))),&Art->WindowHeader[2],ESlateDrawEffect::None,Fade*Mod);
+            }
+            else if(!NoHeader)Box(White,FVector2D::ZeroVector,FVector2D(S.X,HH),FLinearColor(.12f,.07f,.03f,.95f*A));
+            return Layer+1;
+        }
+    private:
+        TSharedPtr<FACEPluginStyle> Style;
+        TAttribute<bool> HeaderHidden;
+    };
 
     class SPluginFrame : public SCompoundWidget
     {
@@ -50,6 +102,9 @@ namespace
             SLATE_ARGUMENT(TFunction<bool()>, CanManipulate)
             SLATE_ATTRIBUTE(bool, Minimized)
             SLATE_ARGUMENT(TFunction<void()>, ToggleMinimized)
+            /** Codex title plaque: icon on the ring and a caps subtitle under the title. */
+            SLATE_ARGUMENT(TSharedPtr<SWidget>, Icon)
+            SLATE_ATTRIBUTE(FString, Subtitle)
             SLATE_DEFAULT_SLOT(FArguments, Content)
         SLATE_END_ARGS()
         void Construct(const FArguments& Args)
@@ -65,6 +120,7 @@ namespace
             if(Frameless){ChildSlot[Args._Content.Widget];return;}
             auto Title = SNew(SHorizontalBox);
             const bool IsBar=bool(Args._ToggleMinimized);
+            if(!IsBar&&Retail->Codex){ConstructCodex(Args);return;}
             if(IsBar)
             {
                 Title->AddSlot().FillWidth(1).HAlign(HAlign_Center).VAlign(VAlign_Center)
@@ -88,7 +144,7 @@ namespace
                 .OnClicked_Lambda([Close=Args._Close](){Close();return FReply::Handled();})[Caption(TEXT("X"))]];
             ChildSlot[SNew(SBorder).BorderImage(&Retail->Frame).Padding(IsBar?0:3)
                 [SNew(SVerticalBox)
-                +SVerticalBox::Slot().AutoHeight()[SNew(SBox).HeightOverride(IsBar?18:ACELedger::HeaderHeight)
+                +SVerticalBox::Slot().AutoHeight()[SNew(SBox).HeightOverride(IsBar?18:ACELedger::ChromeHeaderHeight())
                     .Tag(Args._CompactWhenLocked?FName(TEXT("LedgerHeader")):FName(NAME_None))
                     .Visibility_Lambda([Lock=Locked]{return Lock.Get(false)?EVisibility::Collapsed:EVisibility::Visible;})
                     [SNew(SBorder).Tag(IsBar?TEXT("PluginBarHandle"):TEXT("PluginWindowHandle")).BorderImage(&Retail->TitleBackground)
@@ -107,6 +163,53 @@ namespace
                 +SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right)[SNew(SBorder).Padding(FMargin(12,2)).Visibility_Lambda([this]{return Resize&&(!CanManipulate||CanManipulate())?EVisibility::Visible:EVisibility::Collapsed;})
                     .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Drag to resize")))).Cursor(EMouseCursor::ResizeSouthEast)
                     .OnMouseButtonDown_Lambda([this](const FGeometry&,const FPointerEvent& E){if(E.GetEffectingButton()!=EKeys::LeftMouseButton||(CanManipulate&&!CanManipulate()))return FReply::Unhandled();Resizing=true;return FReply::Handled().CaptureMouse(SharedThis(this));})[Caption(TEXT("◢"))]]]];
+        }
+        FReply BeginDrag(const FPointerEvent& E)
+        {
+            if(E.GetEffectingButton()!=EKeys::LeftMouseButton)return FReply::Unhandled();
+            if(!Move||(CanManipulate&&!CanManipulate()))return FReply::Handled();
+            Dragging=true;return FReply::Handled().CaptureMouse(SharedThis(this));
+        }
+        void ConstructCodex(const FArguments& Args)
+        {
+            auto Glyph=[](SACELobbyGlyph::EKind Kind){return SNew(SACELobbyGlyph).Kind(Kind).Size(11.f).Color(FACEPluginStyle::Cream());};
+            // The plaque's left piece carries the silver ring; the fancy gold title starts just after it,
+            // with the caps subtitle on the same line.
+            auto Title=SNew(SHorizontalBox)
+                +SHorizontalBox::Slot().AutoWidth()[SNew(SBox).WidthOverride(FMath::RoundToFloat(56*FACEPluginStyle::HeaderHeight()/42.))]
+                +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0,4,0,0)[SNew(SACEPluginText).Text_Lambda([T=Args._Title]{return FText::FromString(T.Get());})
+                    .Font(FCoreStyle::GetDefaultFontStyle("Fancy",18)).ColorAndOpacity(FACEPluginStyle::Gold())]
+                // Always present so the title buttons stay right-aligned even without a subtitle.
+                +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(10,4,6,0)[SNew(SBox)[SNew(SACEPluginText).Text_Lambda([T=Args._Subtitle]{return FText::FromString(T.Get().ToUpper());})
+                    .Visibility_Lambda([T=Args._Subtitle]{return T.Get().IsEmpty()?EVisibility::Collapsed:EVisibility::Visible;})
+                    .Font(FCoreStyle::GetDefaultFontStyle("Regular",9)).ColorAndOpacity(FACEPluginStyle::Muted())]];
+            if(Host.IsValid())Title->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,4,0)
+                [SNew(SBox).WidthOverride(21).HeightOverride(21)[SNew(SACEPluginButton).Cursor(EMouseCursor::Default).ContentPadding(FMargin(0)).Tag(TEXT("PluginFramePin"))
+                .IsFocusable(false).ButtonStyle(&Retail->DockButton)
+                .ToolTip(FACEPluginStyle::Tooltip(TAttribute<FText>::CreateLambda([H=Host,Window=Id]{return FText::FromString(H.IsValid()&&H->IsPluginWindowPinned(Window)?TEXT("Unpin"):TEXT("Pin and hide frame. Hold Quick-show pinned windows to move or unpin."));})))
+                .OnClicked_Lambda([H=Host,Window=Id]{if(H.IsValid())H->SetPluginWindowPinned(Window,!H->IsPluginWindowPinned(Window));return FReply::Handled();})
+                [Glyph(SACELobbyGlyph::EKind::Lock)]]];
+            if(Args._Close)Title->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,12,0)
+                [SNew(SBox).WidthOverride(21).HeightOverride(21)[SNew(SACEPluginButton).Cursor(EMouseCursor::Default).ContentPadding(FMargin(0)).IsFocusable(false).ButtonStyle(&Retail->DockButton)
+                .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Hide window (plugin keeps running)"))))
+                .OnClicked_Lambda([Close=Args._Close](){Close();return FReply::Handled();})[Glyph(SACELobbyGlyph::EKind::Cross)]]];
+            ChildSlot[SNew(SOverlay)
+                +SOverlay::Slot()[SNew(SCodexChrome).Style(Retail).HeaderHidden(Locked)]
+                +SOverlay::Slot()[SNew(SVerticalBox)
+                +SVerticalBox::Slot().AutoHeight()[SNew(SBox).HeightOverride(FACEPluginStyle::HeaderHeight())
+                    .Tag(Args._CompactWhenLocked?FName(TEXT("LedgerHeader")):FName(NAME_None))
+                    .Visibility_Lambda([Lock=Locked]{return Lock.Get(false)?EVisibility::Collapsed:EVisibility::Visible;})
+                    [SNew(SBorder).Tag(TEXT("PluginWindowHandle")).BorderImage(FCoreStyle::Get().GetBrush("NoBrush")).Padding(0)
+                    .ToolTip(FACEPluginStyle::Tooltip(TAttribute<FText>::CreateLambda([this](){return FText::FromString(CanManipulate&&!CanManipulate()?TEXT("Unlock the UI or hold Quick-show pinned windows to move"):TEXT("Drag to move"));})))
+                    .Cursor_Lambda([this](){return CanManipulate&&!CanManipulate()?EMouseCursor::Default:EMouseCursor::CardinalCross;})
+                    .OnMouseButtonDown_Lambda([this](const FGeometry&,const FPointerEvent& E){return BeginDrag(E);})[Title]]]
+                +SVerticalBox::Slot().FillHeight(1)[SNew(SBox).Padding(FMargin(8,6,8,0))
+                    .Tag(Args._CompactWhenLocked?FName(TEXT("LedgerContent")):FName(NAME_None))[Args._Content.Widget]]
+                +SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right)[SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("NoBrush")).Padding(FMargin(8,2,4,4))
+                    .Visibility_Lambda([this]{return Resize&&(!CanManipulate||CanManipulate())?EVisibility::Visible:EVisibility::Collapsed;})
+                    .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Drag to resize")))).Cursor(EMouseCursor::ResizeSouthEast)
+                    .OnMouseButtonDown_Lambda([this](const FGeometry&,const FPointerEvent& E){if(E.GetEffectingButton()!=EKeys::LeftMouseButton||(CanManipulate&&!CanManipulate()))return FReply::Unhandled();Resizing=true;return FReply::Handled().CaptureMouse(SharedThis(this));})
+                    [SNew(SACELobbyGlyph).Kind(SACELobbyGlyph::EKind::Grip).Size(10.f).Color(FACEPluginStyle::Gold(.7f))]]]];
         }
         virtual void Tick(const FGeometry& G,double Time,float Delta) override
         {
@@ -212,7 +315,7 @@ FVector2D SACEPluginDesktop::DisplaySize(const FWindow& W) const
         Size.Y=(Size.X-6)*.25+84+(Host->CanManipulatePluginWindow(W.Id)?24:0)
             +(Host->GetGameInstance()->GetSubsystem<UACEActionDeckSubsystem>()->IsConfigOpen()?300:0);
     if(!W.PluginBar&&!W.MapOverlay&&W.Id!=TEXT("waypoint.arrow")&&Host.IsValid()&&Host->IsPluginWindowChromeHidden(W.Id))
-        Size.Y=FMath::Max(1.,Size.Y-ACELedger::HeaderHeight);
+        Size.Y=FMath::Max(1.,Size.Y-ACELedger::ChromeHeaderHeight());
     return Size;
 }
 void SACEPluginDesktop::Layout(FWindow& W)
@@ -220,7 +323,7 @@ void SACEPluginDesktop::Layout(FWindow& W)
     const FVector2D Display=DisplaySize(W);
     const bool HiddenHeader=!W.PluginBar&&!W.MapOverlay&&W.Id!=TEXT("waypoint.arrow")&&Host.IsValid()&&Host->IsPluginWindowChromeHidden(W.Id);
     const bool LockedLedger=HiddenHeader&&!W.LedgerId.IsEmpty();
-    const double HeaderOffset=HiddenHeader?ACELedger::HeaderHeight:0.;
+    const double HeaderOffset=HiddenHeader?ACELedger::ChromeHeaderHeight():0.;
     // Saved placement describes the expanded window. Remove the header above
     // the content, and clamp against that same footprint in both lock states.
     // Otherwise both collapsing the header and bottom-edge clamping move rows.
@@ -341,11 +444,17 @@ void SACEPluginDesktop::Toggle(const FString& Id)
     if(Id==TEXT("ucmmicro"))W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(270,360));
     if(Id==TEXT("actiondeck"))W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(530,203));
     if(Id==TEXT("ucm.log"))W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(700,440));
-    if(Manager)W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(740,600));
+    if(Manager)W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FACEPluginStyle::IsCodex()?FVector2D(880,640):FVector2D(740,600));
     if(Arrow)W.Size=FVector2D(290,225);
     if(Dungeon)W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(420,420));
     W.Widget=SNew(SPluginFrame).Host(Host.Get()).WindowId(Id).Title_Lambda([Id,Manager,Arrow,Plugin](){return Manager?TEXT("Plugin Manager"):Id==TEXT("ucm.log")?TEXT("UCM Log"):Arrow?TEXT("Waypoint · drag when unlocked"):Id==TEXT("waypoint.map")?TEXT("Waypoint Map"):Plugin->DisplayTitle();})
         .Frameless(Arrow||Dungeon)
+        .Icon(Plugin?StaticCastSharedRef<SWidget>(SNew(SACEPluginBadge).Plugin(Plugin)):DockIcon(Manager?TEXT("plugin.options"):Id))
+        .Subtitle_Lambda([H=Host,Manager,Plugin,Ledger]()
+        {
+            if(Manager&&H.IsValid())return FString::Printf(TEXT("%d installed"),H->Plugins.Num());
+            return Plugin&&!Ledger&&!Plugin->Version.IsEmpty()?TEXT("Version ")+Plugin->Version:FString();
+        })
         .CompactWhenLocked(Ledger)
         .Locked_Lambda([H=Host,Id]{return H.IsValid()&&H->IsPluginWindowChromeHidden(Id);})
         .CanManipulate([H=Host,Id]{return H.IsValid()&&H->CanManipulatePluginWindow(Id);})
@@ -366,7 +475,8 @@ void SACEPluginDesktop::Refresh()
     Layout(Windows.FindChecked(BarId));
     const bool Horizontal=Host->IsPluginBarHorizontal();
     FString Next=(Horizontal?FString(TEXT("horizontal|")):FString(TEXT("vertical|")))+FString::FromInt(Host->GetPluginOrderRevision())+TEXT("|");TSet<FString> Enabled;
-    for(auto P:Host->Plugins)if(P->Enabled){Next+=P->Id+TEXT("|");Enabled.Add(P->Id);}
+    for(auto P:Host->Plugins)if(P->Enabled){Next+=P->Id+(Host->IsPluginOnBar(P->Id)?TEXT("|"):TEXT("~|"));Enabled.Add(P->Id);}
+    Next+=FACEPluginStyle::ThemeName();
     if(Host->Plugins.ContainsByPredicate([](const auto& P){return P->Id==TEXT("ucm");}))Enabled.Add(TEXT("ucm.log"));
     for(const TCHAR* Id:{TEXT("ucm.log"),TEXT("waypoint.map")})
         if((Enabled.Contains(Id)||(FString(Id)==TEXT("waypoint.map")&&Enabled.Contains(TEXT("waypoint"))))
@@ -396,10 +506,12 @@ void SACEPluginDesktop::Refresh()
         const bool Manager=Id==TEXT("__manager");
         if(!Manager&&!(P&&P->Enabled)&&!(Id==TEXT("ucm.log")&&Enabled.Contains(TEXT("ucm")))
             &&!(Id==TEXT("waypoint.map")&&Enabled.Contains(TEXT("waypoint"))))continue;
+        // "Show on plugin bar" (Plugin Manager) hides an enabled plugin's button only.
+        if(!Manager&&!Host->IsPluginOnBar(Id.StartsWith(TEXT("waypoint."))?FString(TEXT("waypoint")):Id==TEXT("ucm.log")?FString(TEXT("ucm")):Id))continue;
         auto Icon=P?StaticCastSharedRef<SWidget>(SNew(SACEPluginBadge).Plugin(P)):DockIcon(Manager?TEXT("plugin.options"):Id);
         Buttons->AddSlot().AutoSize().Padding(1)[SNew(SACEPluginOrderTarget).Host(Host.Get()).Id(Id).LockId(BarId).Horizontal(Horizontal)
             .Tag(FName(*(TEXT("PluginBarOrder.")+Id)))
-            [SNew(SBox).WidthOverride(32).HeightOverride(32)
+            [SNew(SOverlay)+SOverlay::Slot()[SNew(SBox).WidthOverride(32).HeightOverride(32)
             [SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::IconButtonPadding)).Tag(Manager?FName(TEXT("PluginOptions")):FName(*(TEXT("PluginBarButton.")+Id)))
                 .ButtonStyle(&DockButtonStyle()).IsFocusable(false).AllowDragDrop(true)
                 .OnSlateButtonDragDetected_Lambda([H=Host,Id](const FGeometry&,const FPointerEvent&){return ACEPluginOrder::BeginDrag(H.Get(),Id,BarId);})
@@ -414,7 +526,11 @@ void SACEPluginDesktop::Refresh()
                     else if(P)Tip+=TEXT("\nClick to show/hide\n")+P->Status;
                     return FText::FromString(Tip+TEXT("\nDrag to reorder while unlocked. Hold Quick-show if pinned."));
                 })))
-                .OnClicked_Lambda([this,Id,Manager](){if(Manager)Host->TogglePanel();else Toggle(Id);return FReply::Handled();})[Icon]]]];
+                .OnClicked_Lambda([this,Id,Manager](){if(Manager)Host->TogglePanel();else Toggle(Id);return FReply::Handled();})[Icon]]]
+            // Codex: a 2px gold underline marks windows that are open.
+            +SOverlay::Slot().VAlign(VAlign_Bottom).HAlign(HAlign_Center)[SNew(SBox).WidthOverride(18).HeightOverride(2)
+                .Visibility_Lambda([this,Id,Manager]{return FACEPluginStyle::IsCodex()&&(Manager?Host.IsValid()&&Host->IsManagerOpen():IsOpen(Id))?EVisibility::HitTestInvisible:EVisibility::Collapsed;})
+                [SNew(SImage).Image(FCoreStyle::Get().GetBrush("WhiteBrush")).ColorAndOpacity(FACEPluginStyle::Gold())]]]];
     }
     auto& Bar=Windows.FindChecked(BarId);
     Bar.Size=Horizontal?FVector2D(4+34*Buttons->NumSlots(),52):FVector2D(38,18+34*Buttons->NumSlots());

@@ -225,10 +225,20 @@ public:
     bool IsPluginBarHorizontal() const;
     void SetPluginBarHorizontal(bool Horizontal);
     TArray<FString> PluginDisplayOrder() const;
+    /** Plugin UI theme ("codex" default, or "original"); switching rebuilds open plugin windows. */
+    FString GetPluginTheme() const;
+    void SetPluginTheme(const FString& Theme);
+    /** Codex window bodies follow the world selected in the lobby. */
+    bool IsMatchWorldColor() const;
+    void SetMatchWorldColor(bool bMatch);
+    /** Per-plugin "Show on plugin bar". */
+    bool IsPluginOnBar(const FString& Id) const;
+    void SetPluginOnBar(const FString& Id, bool bShow);
     bool MovePluginInOrder(const FString& Id, const FString& Target, bool After);
     uint32 GetPluginOrderRevision() const { return PluginOrderRevision; }
     bool IsPluginBarUnlocked() const;
     void TogglePanel();
+    bool IsManagerOpen() const { return DesktopPanel.IsValid(); }
     TSharedRef<SWidget> MakeUCMPanel(const FString& InitialPage=FString(), bool bShowTitle=true);
     TSharedRef<SWidget> MakeUCMMicroPanel();
     TSharedRef<SWidget> MakeItemToolsPanel(bool bShowTitle=true);
@@ -409,6 +419,14 @@ private:
     TSharedPtr<class SACEPluginDesktop> DesktopPanel;
     TSharedPtr<class SACEPluginDesktop> DesktopDock;
     void UpdateDesktopDock();
+    void ApplyPluginTheme();
+    void RebuildPluginWindows();
+    FTSTicker::FDelegateHandle ThemeRebuildTicker;
+    /** Non-shipping -ACEPluginPreviewShot: open the manager, UCM and Hunt Ledger at the lobby and screenshot them. */
+    void TickPluginPreview();
+    int32 PreviewStep=-1;
+    double PreviewNext=0;
+    TSharedPtr<class SACEPluginDesktop> PreviewDesktop;
     void RemoveDesktopDock();
     FString MovementOwner;
     FString FastCastOwner;

@@ -68,6 +68,10 @@ namespace ACELobbyArt
 	const FSlateBrush* TintedRingHot(int32 Index);
 	/** The shared art, or null until the DAT has loaded and decoding has succeeded. */
 	const FACELobbyArt* Get();
+	/** The world last selected in the lobby: its palette index and display name (plugin "Match world color"). */
+	void SetWorld(int32 Tint, const FString& Name);
+	int32 WorldTint();
+	const FString& WorldName();
 	/** Decodes the art once the DAT is ready (cheap no-op afterwards). Returns Get(). */
 	const FACELobbyArt* Load(UACEDatSubsystem* Dat);
 	/**

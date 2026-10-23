@@ -373,6 +373,11 @@ const FSlateBrush* ACELobbyArt::TintedRingHot(int32 Index) { return Tinted(GTint
 
 const FACELobbyArt* ACELobbyArt::Get() { return GArt; }
 
+namespace { int32 GWorldTint = 0; FString GWorldName; }
+void ACELobbyArt::SetWorld(int32 Tint, const FString& Name) { GWorldTint = FMath::Max(0, Tint); GWorldName = Name; }
+int32 ACELobbyArt::WorldTint() { return GWorldTint; }
+const FString& ACELobbyArt::WorldName() { return GWorldName; }
+
 UTexture2D* ACELobbyArt::KeyedOverBlack(UACEDatSubsystem* Dat, uint32 ImageId)
 {
 	if (!ImageId || !Dat || !Dat->IsDatReady() || !Dat->GetTextureResolver()) return nullptr;

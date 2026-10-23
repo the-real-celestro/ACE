@@ -105,10 +105,12 @@ FVector2D UACEPluginSubsystem::LedgerSize(const FString& Id) const
 }
 double UACEPluginSubsystem::LedgerChromeHeight(const FString& Id,bool Hidden) const
 {
-    if(Id!=TEXT("supplyledger"))return Hidden?0:ACELedger::HuntEditorHeight;
+    // Codex title bars are taller (42px) and its red plates need a little more room.
+    const double Extra=ACELedger::ChromeHeaderHeight()-ACELedger::HeaderHeight,Plate=Extra>0?8.:0.;
+    if(Id!=TEXT("supplyledger"))return Hidden?0:ACELedger::HuntEditorHeight+Extra+Plate;
     if(Hidden&&!LedgerSupplies.IsEmpty())return 0;
     // Empty pinned ledgers retain their add control, but not the title bar.
-    return ACELedger::SupplyEditorHeight-(Hidden?ACELedger::HeaderHeight:0)+(SupplyNotice.IsEmpty()?0:28);
+    return ACELedger::SupplyEditorHeight+Extra+Plate-(Hidden?ACELedger::ChromeHeaderHeight():0)+(SupplyNotice.IsEmpty()?0:28);
 }
 
 namespace
@@ -235,6 +237,7 @@ namespace
                     auto R=SNew(SHorizontalBox);R->AddSlot().FillWidth(1)[Label(Caption)];
                     for(bool Lum:{false,true})R->AddSlot().FillWidth(1).HAlign(HAlign_Right)[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",12))
                         .Tag(Lum&&Metric>=0?FName(*FString::Printf(TEXT("HuntLuminance%d"),Metric)):NAME_None)
+                        .ColorAndOpacity(Metric<0&&Style->Codex?FSlateColor(FACEPluginStyle::Gold()):FSlateColor::UseForeground())
                         .Text_Lambda([this,Metric,Lum]
                         {
                             if(Metric<0){static const FText XP=FText::FromString(TEXT("XP")),Luminance=FText::FromString(TEXT("Luminance"));return Lum?Luminance:XP;}
@@ -259,7 +262,7 @@ namespace
                     +TEXT(" Next level estimates the remaining time using your average XP rate since login or Reset.")
                     +TEXT(" Time since last reset shows hours:minutes:seconds since login or Reset.")
                     +(Locked?TEXT("\nUse the game UI lock or hold Quick-show pinned windows to move and edit this HUD."):TEXT("")))));
-                if(!Locked)Body->AddSlot().AutoHeight()[Button(TEXT("Reset run"),TEXT("Clear totals and begin a new estimate now"),[H=Host]{if(H.IsValid())H->ResetHuntLedger();})];
+                if(!Locked)Body->AddSlot().AutoHeight().HAlign(Style->Codex?HAlign_Right:HAlign_Fill)[Button(TEXT("Reset run"),TEXT("Clear totals and begin a new estimate now"),[H=Host]{if(H.IsValid())H->ResetHuntLedger();})];
             }
         }
     };

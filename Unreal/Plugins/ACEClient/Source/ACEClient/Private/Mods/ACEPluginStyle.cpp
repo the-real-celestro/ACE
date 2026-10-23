@@ -15,8 +15,25 @@
 #include "Rendering/DrawElements.h"
 #include "Widgets/SToolTip.h"
 #include "Widgets/Layout/SBox.h"
+#include "ACELobbyArt.h"
 
-namespace { TWeakPtr<FACEPluginStyle> CurrentStyle; }
+namespace
+{
+    TWeakPtr<FACEPluginStyle> CurrentStyle;
+    FString GTheme=TEXT("codex");
+    bool GMatchWorld=true;
+}
+void FACEPluginStyle::SetTheme(const FString& Name){GTheme=Name.Equals(TEXT("original"),ESearchCase::IgnoreCase)?TEXT("original"):TEXT("codex");}
+const FString& FACEPluginStyle::ThemeName(){return GTheme;}
+bool FACEPluginStyle::IsCodex(){return GTheme!=TEXT("original");}
+void FACEPluginStyle::SetMatchWorldColor(bool bMatch){GMatchWorld=bMatch;}
+bool FACEPluginStyle::MatchWorldColor(){return GMatchWorld;}
+int32 FACEPluginStyle::WindowTint(){return GMatchWorld?ACELobbyArt::WorldTint():0;}
+double FACEPluginStyle::HeaderHeight(){return IsCodex()?42.:24.;}
+FLinearColor FACEPluginStyle::Gold(float Alpha){FLinearColor C(FColor(242,169,51));C.A=Alpha;return C;}
+FLinearColor FACEPluginStyle::Cream(){return FLinearColor(FColor(239,227,196));}
+FLinearColor FACEPluginStyle::Muted(){return FLinearColor(FColor(191,174,136));}
+double ACELedger::ChromeHeaderHeight(){return FACEPluginStyle::HeaderHeight();}
 namespace
 {
     class SACEPluginTooltip : public SToolTip, public FGCObject
@@ -232,11 +249,162 @@ void FACEPluginStyle::InitializeArtwork()
         .SetSelectorFocusedBrush(SelectedGreen).SetTextColor(Ivory).SetSelectedTextColor(FLinearColor::White);
     Spin=FCoreStyle::Get().GetWidgetStyle<FSpinBoxStyle>("SpinBox");Spin.SetBackgroundBrush(Well).SetHoveredBackgroundBrush(Well)
         .SetActiveFillBrush(Well).SetInactiveFillBrush(Well).SetForegroundColor(Ivory);
+    RailItem=Tab;QuietRow=Tab;QuietRowSelected=Tab;Switch=Check;
+    Codex=FACEPluginStyle::IsCodex();
+    if(Codex)InitializeCodex();
     if(Resolver&&Resolver->ResolveFont(0x40000000,Font))Atlas=Resolver->ResolveFontAtlas(Font.ForegroundSurfaceDataID,TintAtlas);
     OriginalFrame=Frame;OriginalBackground=Background;OriginalTitle=TitleBackground;
     OriginalSectionFrame=SectionFrame;OriginalSectionHeader=SectionHeader;
     const float Previous=BackgroundOpacity;BackgroundOpacity=-1;
     if(Previous>=0)SetWindowAppearance(Previous,HideFrame);
+}
+namespace
+{
+    /** Anti-aliased procedural pixels for the Codex controls (drawn at 2x, displayed at half size). */
+    FLinearColor Over(const FLinearColor& Dst,const FLinearColor& Src,float Coverage)
+    {
+        const float A=FMath::Clamp(Src.A*Coverage,0.f,1.f);if(A<=0)return Dst;
+        const float OutA=A+Dst.A*(1-A);
+        auto Mix=[&](float S,float T){return OutA>0?(S*A+T*Dst.A*(1-A))/OutA:0.f;};
+        return FLinearColor(Mix(Src.R,Dst.R),Mix(Src.G,Dst.G),Mix(Src.B,Dst.B),OutA);
+    }
+    float Edge(float Distance){return FMath::Clamp(.5f-Distance,0.f,1.f);}
+    float RoundRectDistance(float X,float Y,float W,float H,float R)
+    {
+        const float QX=FMath::Abs(X-W*.5f)-(W*.5f-R),QY=FMath::Abs(Y-H*.5f)-(H*.5f-R);
+        return FMath::Sqrt(FMath::Square(FMath::Max(QX,0.f))+FMath::Square(FMath::Max(QY,0.f)))+FMath::Min(FMath::Max(QX,QY),0.f)-R;
+    }
+    float SegmentDistance(FVector2f P,FVector2f A,FVector2f B)
+    {
+        const FVector2f AB=B-A;const float T=FMath::Clamp(FVector2f::DotProduct(P-A,AB)/AB.SizeSquared(),0.f,1.f);
+        return (P-(A+AB*T)).Size();
+    }
+    // Lobby palette (srgb bytes) converted once.
+    FLinearColor Lin(uint8 R,uint8 G,uint8 B,float A=1.f){FLinearColor C(FColor(R,G,B));C.A=A;return C;}
+}
+void FACEPluginStyle::InitializeCodex()
+{
+    const FLinearColor GoldC=Gold(),Navy=Lin(6,13,30,.92f),NavyDeep=Lin(4,9,22,.96f),Red=Lin(150,28,18),RedHot=Lin(178,40,24);
+    auto Texture=[this](int32 W,int32 H,TFunctionRef<FLinearColor(float,float)> Pixel,FVector2D Display)
+    {
+        TArray<FColor> Pixels;Pixels.SetNumUninitialized(W*H);
+        for(int32 Y=0;Y<H;++Y)for(int32 X=0;X<W;++X)Pixels[Y*W+X]=Pixel(X+.5f,Y+.5f).ToFColor(true);
+        FSlateBrush B;B.DrawAs=ESlateBrushDrawType::Image;B.ImageSize=Display;
+        if(auto* T=FACEDatTextureResolver::CreateTransientRgbaUi(W,H,Pixels)){ButtonTextures.Add(T);B.SetResourceObject(T);}
+        else B.DrawAs=ESlateBrushDrawType::NoDrawType;
+        return B;
+    };
+    // Window chrome: SPluginFrame paints the retail body art, wash and border itself in Codex.
+    Frame=FSlateRoundedBoxBrush(FLinearColor(FColor(4,9,22,199)),2.f,Gold(.55f),1.f);
+    Background=FSlateColorBrush(FLinearColor::Transparent);
+    TitleBackground=FSlateColorBrush(FLinearColor::Transparent);
+    SectionFrame=FSlateRoundedBoxBrush(FLinearColor(0.f,0.f,0.f,.16f),2.f,Gold(.24f),1.f);
+    SectionHeader=FSlateColorBrush(FLinearColor::Transparent);
+    // Red retail plates (0x06004C9E/9F/A0) shared with the lobby.
+    UACEDatSubsystem* Dat=Resolver?Resolver->GetDatSubsystem():nullptr;
+    const FACELobbyArt* Art=Dat?ACELobbyArt::Load(Dat):ACELobbyArt::Get();
+    if(Art)
+    {
+        FSlateBrush Disabled=Art->SmallButton[0];Disabled.TintColor=FLinearColor(.42f,.4f,.4f,.75f);
+        Button.SetNormal(Art->SmallButton[0]).SetHovered(Art->SmallButton[1]).SetPressed(Art->SmallButton[2]).SetDisabled(Disabled);
+    }
+    Button.SetNormalForeground(ACELobbyArt::CaptionText).SetHoveredForeground(ACELobbyArt::Highlight).SetPressedForeground(ACELobbyArt::CaptionText)
+        .SetNormalPadding(FMargin(0)).SetPressedPadding(FMargin(0));
+    // 21px hairline icon buttons (title bar, plugin bar, grips).
+    DockButton=Button;
+    DockButton.SetNormal(FSlateRoundedBoxBrush(FLinearColor(0,0,0,0),2.f,Gold(.3f),1.f))
+        .SetHovered(FSlateRoundedBoxBrush(Gold(.08f),2.f,Gold(.7f),1.f))
+        .SetPressed(FSlateRoundedBoxBrush(Gold(.16f),2.f,Gold(.95f),1.f))
+        .SetDisabled(FSlateRoundedBoxBrush(FLinearColor(0,0,0,0),2.f,Gold(.15f),1.f))
+        .SetNormalForeground(Cream()).SetHoveredForeground(GoldC).SetPressedForeground(GoldC);
+    // Segmented choices: hairline navy cells, red when selected (SetAppearPressed).
+    Tab=DockButton;
+    Tab.SetNormal(FSlateRoundedBoxBrush(Navy,2.f,Gold(.35f),1.f))
+        .SetHovered(FSlateRoundedBoxBrush(Lin(10,20,42,.95f),2.f,Gold(.65f),1.f))
+        .SetPressed(FSlateRoundedBoxBrush(Red,2.f,Gold(.85f),1.f));
+    // Vertical rail: flat, a soft wash when selected (the 2px bar is painted by SACEPluginTab).
+    RailItem=DockButton;
+    RailItem.SetNormal(FSlateColorBrush(FLinearColor::Transparent)).SetHovered(FSlateColorBrush(Gold(.06f)))
+        .SetPressed(FSlateColorBrush(Gold(.11f))).SetDisabled(FSlateColorBrush(FLinearColor::Transparent));
+    // Slim list rows: thin gold hairline; brighter on hover and when selected.
+    QuietRow=DockButton;
+    QuietRow.SetNormal(FSlateRoundedBoxBrush(FLinearColor(0,0,0,.18f),2.f,Gold(.24f),1.f))
+        .SetHovered(FSlateRoundedBoxBrush(FLinearColor(.02f,.03f,.06f,.35f),2.f,Gold(.45f),1.f))
+        .SetPressed(FSlateRoundedBoxBrush(FLinearColor(.02f,.03f,.06f,.35f),2.f,Gold(.6f),1.f));
+    QuietRowSelected=QuietRow;
+    QuietRowSelected.SetNormal(FSlateRoundedBoxBrush(Gold(.09f),2.f,Gold(.6f),1.f)).SetHovered(FSlateRoundedBoxBrush(Gold(.12f),2.f,Gold(.75f),1.f));
+    // Fields and dropdowns: navy well with a gold hairline and a gold triangle.
+    const FSlateRoundedBoxBrush Field(NavyDeep,2.f,Gold(.6f),1.f),FieldHot(NavyDeep,2.f,Gold(.9f),1.f);
+    MenuItem=Tab;
+    MenuItem.SetNormal(Field).SetHovered(FieldHot).SetPressed(FieldHot).SetDisabled(FSlateRoundedBoxBrush(NavyDeep,2.f,Gold(.25f),1.f));
+    Edit.SetBackgroundImageNormal(Field).SetBackgroundImageHovered(FieldHot).SetBackgroundImageFocused(FieldHot).SetBackgroundImageReadOnly(Field)
+        .SetForegroundColor(Cream()).SetPadding(FMargin(8,5));
+    const FSlateBrush Arrow=Texture(18,10,[&](float X,float Y)
+    {
+        // Downward triangle, 2x supersampled edge.
+        const float D=FMath::Max(Y-9.f,FMath::Abs(X-9.f)-(9.f-Y));
+        return Over(FLinearColor::Transparent,GoldC,Edge(D));
+    },FVector2D(9,5));
+    Combo.SetButtonStyle(MenuItem).SetContentPadding(FMargin(8,4)).SetMenuBorderBrush(FSlateRoundedBoxBrush(Lin(5,11,26,.98f),2.f,Gold(.6f),1.f))
+        .SetMenuBorderPadding(FMargin(2)).SetDownArrowImage(Arrow).SetDownArrowPadding(FMargin(8,0,2,0));
+    ComboBox.SetComboButtonStyle(Combo).SetContentPadding(FMargin(8,4));
+    const FSlateColorBrush RowIdle(FLinearColor::Transparent),RowHot(Gold(.14f));
+    ComboRow.SetEvenRowBackgroundBrush(RowIdle).SetOddRowBackgroundBrush(RowIdle)
+        .SetEvenRowBackgroundHoveredBrush(RowHot).SetOddRowBackgroundHoveredBrush(RowHot)
+        .SetActiveBrush(RowHot).SetActiveHoveredBrush(RowHot).SetInactiveBrush(RowHot).SetInactiveHoveredBrush(RowHot)
+        .SetSelectorFocusedBrush(RowHot).SetTextColor(Cream()).SetSelectedTextColor(GoldC);
+    Spin.SetBackgroundBrush(Field).SetHoveredBackgroundBrush(FieldHot).SetActiveFillBrush(FSlateColorBrush(Gold(.25f)))
+        .SetInactiveFillBrush(FSlateColorBrush(Gold(.12f))).SetForegroundColor(Cream());
+    // 15px checkbox: navy box, gold hairline, gold check.
+    auto Box=[&](bool Checked,bool Hot)
+    {
+        return Texture(30,30,[&](float X,float Y)
+        {
+            const float D=RoundRectDistance(X,Y,30,30,4);
+            FLinearColor C=Over(FLinearColor::Transparent,NavyDeep,Edge(D+1.f));
+            C=Over(C,Gold(Hot?.95f:.6f),Edge(FMath::Abs(D+1.f)-1.f));
+            if(Checked)
+            {
+                const FVector2f P(X,Y);
+                const float S=FMath::Min(SegmentDistance(P,FVector2f(8,15.5f),FVector2f(13,20.5f)),SegmentDistance(P,FVector2f(13,20.5f),FVector2f(22.5f,9.5f)));
+                C=Over(C,GoldC,Edge(S-1.6f));
+            }
+            return C;
+        },FVector2D(15,15));
+    };
+    Check.SetUncheckedImage(Box(false,false)).SetUncheckedHoveredImage(Box(false,true)).SetUncheckedPressedImage(Box(false,true))
+        .SetCheckedImage(Box(true,false)).SetCheckedHoveredImage(Box(true,true)).SetCheckedPressedImage(Box(true,true))
+        .SetForegroundColor(Cream()).SetHoveredForegroundColor(Cream()).SetPadding(FMargin(8,0,0,0));
+    // 32x16 toggle: navy pill with a muted knob, red with a gold knob when on.
+    auto Pill=[&](bool On,bool Hot)
+    {
+        return Texture(64,32,[&](float X,float Y)
+        {
+            const float D=RoundRectDistance(X,Y,64,32,16);
+            FLinearColor C=Over(FLinearColor::Transparent,On?(Hot?RedHot:Red):NavyDeep,Edge(D+1.f));
+            C=Over(C,Gold(On?.85f:(Hot?.8f:.45f)),Edge(FMath::Abs(D+1.f)-1.f));
+            const FVector2f Knob(On?48.f:16.f,16.f);
+            const float K=(FVector2f(X,Y)-Knob).Size()-10.f;
+            C=Over(C,On?GoldC:Muted(),Edge(K));
+            return C;
+        },FVector2D(32,16));
+    };
+    Switch=Check;
+    Switch.SetUncheckedImage(Pill(false,false)).SetUncheckedHoveredImage(Pill(false,true)).SetUncheckedPressedImage(Pill(false,true))
+        .SetCheckedImage(Pill(true,false)).SetCheckedHoveredImage(Pill(true,true)).SetCheckedPressedImage(Pill(true,true)).SetPadding(FMargin(0));
+    // Slider: 3px track (the fill is painted by SACEPluginSlider) and an 11px gold diamond.
+    auto Diamond=[&](bool Hot)
+    {
+        return Texture(26,26,[&](float X,float Y)
+        {
+            const float D=(FMath::Abs(X-13.f)+FMath::Abs(Y-13.f)-11.f)*.7071f;
+            FLinearColor C=Over(FLinearColor::Transparent,Lin(60,38,10),Edge(D));
+            return Over(C,Hot?ACELobbyArt::Highlight:GoldC,Edge(D+1.6f));
+        },FVector2D(13,13));
+    };
+    const FSlateColorBrush Track(Gold(.28f));
+    Slider.SetNormalBarImage(Track).SetHoveredBarImage(Track).SetDisabledBarImage(FSlateColorBrush(Gold(.12f)))
+        .SetNormalThumbImage(Diamond(false)).SetHoveredThumbImage(Diamond(true)).SetDisabledThumbImage(Diamond(false)).SetBarThickness(3.f);
 }
 bool FACEPluginStyle::SetWindowAppearance(float Opacity,bool Frameless)
 {
@@ -261,12 +429,14 @@ bool FACEPluginStyle::SetWindowAppearance(float Opacity,bool Frameless)
     Fade(SectionHeader,OriginalSectionHeader,Opacity);
     return true;
 }
-TSharedPtr<FACEPluginFont> FACEPluginStyle::Typeface(int32 Size)
+TSharedPtr<FACEPluginFont> FACEPluginStyle::Typeface(int32 Size,bool Fancy)
 {
     // Resolve the nearest authored size instead of enlarging the smallest atlas.
-    const int32 Pixels=FMath::Clamp(FMath::RoundToInt(Size*1.333333f/2)*2,12,24);
-    auto& Face=Fonts.FindOrAdd(Pixels);if(!Face)Face=MakeShared<FACEPluginFont>();
-    if(!Face->Atlas&&Resolver&&Resolver->ResolveFont(ACEUIFontStyles::FontIdForStyleName(FString::Printf(TEXT("basefont%d"),Pixels)),Face->Font))
+    int32 Pixels=FMath::Clamp(FMath::RoundToInt(Size*1.333333f/2)*2,12,24);
+    // Fancy (title) faces exist at 24/30/36/48px.
+    if(Fancy){const float Want=Size*1.333333f;Pixels=Want<27?24:Want<33?30:Want<42?36:48;}
+    auto& Face=Fonts.FindOrAdd(Fancy?1000+Pixels:Pixels);if(!Face)Face=MakeShared<FACEPluginFont>();
+    if(!Face->Atlas&&Resolver&&Resolver->ResolveFont(ACEUIFontStyles::FontIdForStyleName((Fancy?FString::Printf(TEXT("fancyfont%d"),Pixels):FString::Printf(TEXT("basefont%d"),Pixels))),Face->Font))
         Face->Atlas=Resolver->ResolveFontAtlas(Face->Font.ForegroundSurfaceDataID,Face->Tint);
     return Face;
 }
@@ -308,11 +478,19 @@ void SACEPluginButton::Construct(const FArguments& A)
 {
     auto Args=A;ContentStyle=A._ButtonStyle;
     const auto Padding=A._ContentPadding;
+    if(FlatRail){SButton::Construct(Args);return;}
     Args.HAlign(HAlign_Center).VAlign(VAlign_Center);
     // Evaluate the style here as DAT artwork may load after the widget is built.
     Args.ContentPadding_Lambda([this,Padding]
     {
         const auto P=Padding.Get();
+        // Codex red plates carry a soft 7px shadow inside their artwork; pad the caption
+        // like the lobby buttons instead of by the full 9-slice margin.
+        if(FACEPluginStyle::IsCodex()&&ButtonBorderWidth(*ContentStyle)>8.f)
+        {
+            const float Base=FMath::Max(FMath::Max(P.Left,P.Right),FMath::Max(P.Top,P.Bottom));
+            return FMargin(FMath::Max(14.f,Base+8.f),FMath::Max(6.f,Base+1.f));
+        }
         return FMargin(FMath::Max(ButtonInteriorPadding(*ContentStyle),FMath::Max(FMath::Max(P.Left,P.Right),FMath::Max(P.Top,P.Bottom))));
     });
     SButton::Construct(Args);
@@ -321,8 +499,11 @@ void SACEPluginButton::Construct(const FArguments& A)
 FVector2D SACEPluginButton::ComputeDesiredSize(float LayoutScaleMultiplier) const
 {
     auto Size=SButton::ComputeDesiredSize(LayoutScaleMultiplier);
+    if(FlatRail)return Size;
     // A thick bevel needs a usable interior even for a single '+' or '-' glyph.
     // Thin frame controls and borderless inventory icons stay compact.
+    if(ContentStyle&&FACEPluginStyle::IsCodex()&&ButtonBorderWidth(*ContentStyle)>8.f)
+    {Size.X=FMath::Max(Size.X,40.);Size.Y=FMath::Max(Size.Y,30.);return Size;}
     if(ContentStyle&&ButtonBorderWidth(*ContentStyle)>1.f)
     {
         const float Minimum=16.f+2.f*ButtonInteriorPadding(*ContentStyle);
@@ -339,14 +520,23 @@ void SACEPluginComboButton::Construct(const FArguments& A)
 }
 void SACEPluginTab::Construct(const FArguments& A)
 {
-    Retail=FACEPluginStyle::Current();Selected=A._Selected;
+    Retail=FACEPluginStyle::Current();Selected=A._Selected;Rail=A._Rail&&Retail->Codex;Dot=A._Dot;
     TSharedRef<SWidget> Content=A._Content.Widget;
     if(Content==SNullWidget::NullWidget)
-        Content=SNew(SACEPluginText).Text(A._Text).Justification(ETextJustify::Center)
-            .Font_Lambda([Size=A._FontSize]{return FCoreStyle::GetDefaultFontStyle("Regular",FMath::Clamp(Size.Get(15),10,36));})
-            .ColorAndOpacity(FLinearColor(1.f,.98f,.92f));
-    SACEPluginButton::Construct(SButton::FArguments().ButtonStyle(&Retail->Tab).IsFocusable(false)
-        .ContentPadding(A._ContentPadding).HAlign(HAlign_Center).VAlign(VAlign_Center).OnClicked(A._OnClicked)[Content]);
+    {
+        if(Rail)
+            Content=SNew(SHorizontalBox)
+                +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[SNew(SACEPluginText).Text_Lambda([T=A._Text]{return FText::FromString(T.Get().ToString().ToUpper());})
+                    .Font([]{FSlateFontInfo F=FCoreStyle::GetDefaultFontStyle("Bold",10);F.LetterSpacing=140;return F;}())
+                    .ColorAndOpacity_Lambda([this]{return IsSelected()?FSlateColor(FACEPluginStyle::Gold()):FSlateColor(FACEPluginStyle::Cream());})];
+        else
+            Content=SNew(SACEPluginText).Text(A._Text).Justification(ETextJustify::Center)
+                .Font_Lambda([Size=A._FontSize]{return FCoreStyle::GetDefaultFontStyle("Regular",FMath::Clamp(Size.Get(15),10,36));})
+                .ColorAndOpacity(Retail->Codex?FACEPluginStyle::Cream():FLinearColor(1.f,.98f,.92f));
+    }
+    FlatRail=Rail;
+    SACEPluginButton::Construct(SButton::FArguments().ButtonStyle(Rail?&Retail->RailItem:&Retail->Tab).IsFocusable(false)
+        .ContentPadding(Rail?TAttribute<FMargin>(FMargin(26,5,10,5)):A._ContentPadding).HAlign(Rail?HAlign_Fill:HAlign_Center).VAlign(VAlign_Center).OnClicked(A._OnClicked)[Content]);
     // Slate tracks this attribute and repaints retained tabs when selection
     // changes, without polling, reconstructing controls or shifting their size.
     SetAppearPressed(Selected);
@@ -354,19 +544,68 @@ void SACEPluginTab::Construct(const FArguments& A)
 int32 SACEPluginTab::OnPaint(const FPaintArgs& A,const FGeometry& G,const FSlateRect& Clip,FSlateWindowElementList& Out,int32 Layer,const FWidgetStyle& WidgetStyle,bool Enabled) const
 {
     const int32 Top=SButton::OnPaint(A,G,Clip,Out,Layer,WidgetStyle,Enabled);
-    if(!IsSelected())return Top;
     const auto Size=G.GetLocalSize();
+    const auto Effect=ShouldBeEnabled(Enabled)?ESlateDrawEffect::None:ESlateDrawEffect::DisabledEffect;
+    const FSlateBrush* White=FCoreStyle::Get().GetBrush("WhiteBrush");
+    if(Rail)
+    {
+        // Codex rail: small diamond, 2px gold bar on the left when selected, optional status dot.
+        const FLinearColor Tint=WidgetStyle.GetColorAndOpacityTint();
+        const bool On=IsSelected();
+        const FVector2D C(14,Size.Y*.5);const float R=On?3.5f:3.f;
+        const TArray<FVector2D> Diamond={C+FVector2D(0,-R),C+FVector2D(R,0),C+FVector2D(0,R),C+FVector2D(-R,0),C+FVector2D(0,-R)};
+        FSlateDrawElement::MakeLines(Out,Top+1,G.ToPaintGeometry(),Diamond,Effect,FACEPluginStyle::Gold(On?1.f:.45f)*Tint,true,1.5f);
+        if(On)FSlateDrawElement::MakeBox(Out,Top+1,G.ToPaintGeometry(FVector2D(2,Size.Y),FSlateLayoutTransform()),White,Effect,FACEPluginStyle::Gold()*Tint);
+        const FLinearColor DotColor=Dot.Get(FLinearColor::Transparent);
+        if(DotColor.A>0)
+        {
+            static const FSlateRoundedBoxBrush Round(FLinearColor::White,3.f);
+            FSlateDrawElement::MakeBox(Out,Top+1,G.ToPaintGeometry(FVector2D(6,6),FSlateLayoutTransform(FVector2D(Size.X-14,Size.Y*.5-3))),&Round,Effect,DotColor*Tint);
+        }
+        return Top+1;
+    }
+    if(!IsSelected()||Retail->Codex)return Top;
     // Keep an unmistakable shape cue even with untinted retail bitmap fonts,
     // a hovered sibling, transparent window backgrounds or hidden window chrome.
     FSlateDrawElement::MakeBox(Out,Top+1,G.ToPaintGeometry(FVector2D(FMath::Max(0.,Size.X-4),3),FSlateLayoutTransform(FVector2D(2,Size.Y-3))),
-        FCoreStyle::Get().GetBrush("WhiteBrush"),ShouldBeEnabled(Enabled)?ESlateDrawEffect::None:ESlateDrawEffect::DisabledEffect,
-        FLinearColor(1,.78f,.3f)*WidgetStyle.GetColorAndOpacityTint());
+        White,Effect,FLinearColor(1,.78f,.3f)*WidgetStyle.GetColorAndOpacityTint());
     return Top+1;
+}
+int32 SACEPluginSlider::OnPaint(const FPaintArgs& A,const FGeometry& G,const FSlateRect& Clip,FSlateWindowElementList& Out,int32 Layer,const FWidgetStyle& WidgetStyle,bool Enabled) const
+{
+    if(FACEPluginStyle::IsCodex()&&Style&&Orientation==Orient_Horizontal)
+    {
+        // Gold fill from the start of the track to the thumb (the track itself is the style's bar).
+        const FVector2D Size=G.GetLocalSize(),Thumb=Style->NormalThumbImage.ImageSize;
+        const float Fraction=FMath::Clamp(GetNormalizedValue(),0.f,1.f);
+        const double Half=Thumb.X*.5,X=Half+(Size.X-Thumb.X)*Fraction,Bar=Style->BarThickness;
+        // Drawn first: the translucent track then lays a faint sheen over it and the thumb stays on top.
+        FSlateDrawElement::MakeBox(Out,Layer,G.ToPaintGeometry(FVector2D(FMath::Max(0.,X-Half),Bar),FSlateLayoutTransform(FVector2D(Half,(Size.Y-Bar)*.5))),
+            FCoreStyle::Get().GetBrush("WhiteBrush"),ShouldBeEnabled(Enabled)?ESlateDrawEffect::None:ESlateDrawEffect::DisabledEffect,
+            FACEPluginStyle::Gold(.9f)*WidgetStyle.GetColorAndOpacityTint());
+        const int32 Base=SSlider::OnPaint(A,G,Clip,Out,Layer,WidgetStyle,Enabled);
+        return Base;
+    }
+    return SSlider::OnPaint(A,G,Clip,Out,Layer,WidgetStyle,Enabled);
 }
 void SACEPluginText::Construct(const FArguments& A)
 {
     Retail=FACEPluginStyle::Current();Wrap=A._AutoWrapText;WrapAt=A._WrapTextAt;Justification=A._Justification;
-    STextBlock::Construct(A);
+    if(!Retail->Codex){STextBlock::Construct(A);}
+    else
+    {
+        // Codex sets body copy in compact Roboto (labels ~10pt, page copy ~12pt); classic plugin
+        // pages ask for 13-22pt DAT sizes, so scale those down. Fancy titles keep their size.
+        auto Args=A;
+        auto Compact=[](FSlateFontInfo F)
+        {
+            if(F.TypefaceFontName!=FName(TEXT("Fancy"))&&F.Size>=11.f)F.Size=FMath::Max(9.f,FMath::RoundToFloat(F.Size*.8f));
+            return F;
+        };
+        if(A._Font.IsBound())Args._Font=TAttribute<FSlateFontInfo>::CreateLambda([Font=A._Font,Compact]{return Compact(Font.Get());});
+        else if(A._Font.IsSet())Args._Font=Compact(A._Font.Get());
+        STextBlock::Construct(Args);
+    }
     // Match the bitmap path when a label uses characters absent from the DAT.
     // Never turn a narrow plugin title, setting or button into stacked fragments.
     SetWrappingPolicy(ETextWrappingPolicy::DefaultWrapping);
@@ -401,8 +640,13 @@ bool SACEPluginText::CanDrawNative() const
     // Bound font attributes are evaluated after Construct, and can change while
     // a Lua control keeps its Slate identity. Refresh both glyphs and wrapping.
     const int32 Size=GetFont().Size;
-    if(!Face||FaceSize!=Size||!Face->Atlas)
-    {Face=Retail->Typeface(Size);FaceSize=Size;CachedWidth=-1;CheckedGlyphs.Reset();NativeGlyphs=true;}
+    // Codex titles request the DAT "fancy" face through the font's typeface name.
+    const bool Fancy=GetFont().TypefaceFontName==FName(TEXT("Fancy"));
+    // Codex body text is set in the lobby's sans (Roboto); only Fancy titles use DAT glyphs.
+    if(Retail->Codex&&!Fancy)return false;
+    const int32 Key=Fancy?1000+Size:Size;
+    if(!Face||FaceSize!=Key||!Face->Atlas)
+    {Face=Retail->Typeface(Size,Fancy);FaceSize=Key;CachedWidth=-1;CheckedGlyphs.Reset();NativeGlyphs=true;}
     if(!Face->Atlas)return false;
     const FString Text=GetText().ToString();
     if(Text!=CheckedGlyphs)

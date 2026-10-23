@@ -212,6 +212,9 @@ bool FACEPluginHostTest::RunTest(const FString&)
         TestFalse(TEXT("Initial plugin panel starts before DAT artwork is ready"),Dat->IsDatReady());
         const auto FirstPlugin=H->Plugins[0];const bool WasEnabled=FirstPlugin->Enabled;FirstPlugin->Enabled=true;
         ON_SCOPE_EXIT{FirstPlugin->Enabled=WasEnabled;};
+        // This test covers the Original theme's DAT checkbox artwork; Codex draws its own switches.
+        const FString PreviousTheme=FACEPluginStyle::ThemeName();FACEPluginStyle::SetTheme(TEXT("original"));
+        ON_SCOPE_EXIT{FACEPluginStyle::SetTheme(PreviousTheme);};
         auto Panel=H->MakePanel();auto Style=H->WindowPluginStyles.FindChecked(TEXT("__manager"));
         TestTrue(TEXT("Unloaded checkbox artwork has distinct checked/unchecked fallbacks"),
             Style->Check.CheckedImage.GetResourceName()!=Style->Check.UncheckedImage.GetResourceName()

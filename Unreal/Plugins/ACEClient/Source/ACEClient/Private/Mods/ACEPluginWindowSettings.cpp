@@ -94,7 +94,7 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakePluginWindowControls(const FString&
     auto Text=[](const TCHAR* Caption){return SNew(SACEPluginText).Text(FText::FromString(Caption)).Font(FCoreStyle::GetDefaultFontStyle("Regular",14));};
     auto Body=SNew(SVerticalBox);auto Row=SNew(SHorizontalBox);
     Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,12,0)[Text(TEXT("Background opacity"))];
-    Row->AddSlot().FillWidth(1).VAlign(VAlign_Center)[SNew(SSlider)
+    Row->AddSlot().FillWidth(1).VAlign(VAlign_Center)[SNew(SACEPluginSlider)
         .Tag(FName(*(TEXT("PluginOpacity.")+Id))).Style(&Theme->Slider).MinValue(0).MaxValue(100).StepSize(1).MouseUsesStep(true).PreventThrottling(true)
         .IsEnabled_Lambda([H,Id]{return H.IsValid()&&(Id.IsEmpty()||!H->IsPluginOpacityGlobal());})
         .Value_Lambda([H,Id]{return H.IsValid()?H->GetPluginWindowOpacity(Id)*100.f:100.f;})

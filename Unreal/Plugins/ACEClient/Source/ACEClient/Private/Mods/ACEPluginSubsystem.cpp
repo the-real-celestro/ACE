@@ -265,6 +265,7 @@ void UACEPluginSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnVitalsUpdated.AddDynamic(this,&UACEPluginSubsystem::ObserveLedgerVitals);
     Settings = Read(UserDirectory() / TEXT("settings.json"));
     if (!Settings) Settings = MakeShared<FJsonObject>();
+    ApplyPluginTheme();
     UCMLog.Load(UserDirectory()/TEXT("ucm-log.json"));
     Discover();
     Ticker = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this, &UACEPluginSubsystem::Tick), .5f);
@@ -1373,6 +1374,7 @@ bool UACEPluginSubsystem::InventoryInteractionPending() const
 bool UACEPluginSubsystem::Tick(float)
 {
     ACE_PROFILE_SCOPE(Plugins);
+    TickPluginPreview();
     TickLocalServices();
     if(FPlatformTime::Seconds()>=NextUCMLogSave){NextUCMLogSave=FPlatformTime::Seconds()+10;FlushUCMLog();}
     UpdateWorldRendering();

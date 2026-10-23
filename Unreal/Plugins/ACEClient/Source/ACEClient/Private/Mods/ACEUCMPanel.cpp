@@ -42,6 +42,16 @@ namespace ACEUCMPanelPrivate
     const FSlateBrush* White(){return FCoreStyle::Get().GetBrush("WhiteBrush");}
     const FButtonStyle& Style() {return FACEPluginStyle::Current()->Button;}
     const FSliderStyle& SliderStyle() {return FACEPluginStyle::Current()->Slider;}
+    /** Invisible checkbox chrome so a whole Codex row (label + drawn switch) acts as the toggle. */
+    const FCheckBoxStyle& RowCheck()
+    {
+        static FCheckBoxStyle Quiet=[]{FCheckBoxStyle S;const FSlateBrush* None=FCoreStyle::Get().GetBrush("NoBrush");
+            S.SetCheckBoxType(ESlateCheckBoxType::CheckBox);
+            S.SetUncheckedImage(*None).SetUncheckedHoveredImage(*None).SetUncheckedPressedImage(*None)
+             .SetCheckedImage(*None).SetCheckedHoveredImage(*None).SetCheckedPressedImage(*None)
+             .SetUndeterminedImage(*None).SetUndeterminedHoveredImage(*None).SetUndeterminedPressedImage(*None).SetPadding(FMargin(0));return S;}();
+        return Quiet;
+    }
     TSharedRef<STextBlock> Text(const FString& S,int Size=16,FLinearColor Color=Ink,bool Wrap=true)
     {return SNew(SACEPluginText).Text(FText::FromString(S)).Font(FACEPluginStyle::NativeFont("Regular",Size)).ColorAndOpacity(Color).AutoWrapText(Wrap);}
     TSharedRef<STextBlock> LiveText(TFunction<FString()> Value)
@@ -85,12 +95,7 @@ namespace ACEUCMPanelPrivate
             EditorOnly=Page==TEXT("Standalone loot");if(EditorOnly)Page=TEXT("Loot");
             if(Page==TEXT("Salvage groups")){Page=TEXT("Loot");EditingSalvage=true;}
             if(Page==TEXT("Loot editor")){Page=TEXT("Loot");ShowLootFilters=true;LootDraft=MakeShared<FJsonObject>();LootDraft->SetStringField(TEXT("action"),TEXT("keep"));LootDraft->SetStringField(TEXT("name_mode"),TEXT("prefix"));}
-            ChildSlot[SNew(SBorder).BorderImage(&FACEPluginStyle::Current()->Background).Padding(14)
-                [SNew(SVerticalBox)
-                +SVerticalBox::Slot().AutoHeight()[SNew(SBox).IsEnabled_Lambda([this](){return ImportQueue.IsEmpty();})[Header()]]
-                +SVerticalBox::Slot().AutoHeight().Padding(0,12)[SNew(SBox).IsEnabled_Lambda([this](){return ImportQueue.IsEmpty();})[Tabs()]]
-                +SVerticalBox::Slot().FillHeight(1)[SAssignNew(BodyScroll,SScrollBox).IsEnabled_Lambda([this](){return ImportQueue.IsEmpty();})+SScrollBox::Slot()[SAssignNew(Body,SVerticalBox)]]
-                +SVerticalBox::Slot().AutoHeight().Padding(0,8)[SNew(SBox).MaxDesiredHeight(100)
+            auto Notice=SNew(SBox).MaxDesiredHeight(100)
                     .Visibility_Lambda([this](){return !ImportLog.IsEmpty()||(Host.IsValid()&&!Host->Notice.IsEmpty())?EVisibility::Visible:EVisibility::Collapsed;})
                     [SNew(SHorizontalBox)+SHorizontalBox::Slot().FillWidth(1)[SNew(SScrollBox)+SScrollBox::Slot()
                         [SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",14)).ColorAndOpacity(Muted).AutoWrapText(true)
@@ -98,7 +103,30 @@ namespace ACEUCMPanelPrivate
                     +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Top).Padding(6,0)[SNew(SVerticalBox)
                         +SVerticalBox::Slot().AutoHeight()[Button(TEXT("Clear"),[this](){ImportLog.Empty();Host->Notice.Empty();})]
                         +SVerticalBox::Slot().AutoHeight()[SNew(SBox).Visibility_Lambda([this](){return ImportQueue.IsEmpty()?EVisibility::Collapsed:EVisibility::Visible;})
-                            [Button(TEXT("Cancel"),[this](){ImportQueue.Empty();ImportPreviousProfile.Reset();ImportPreviousLinks.Reset();LogImport(TEXT("Import cancelled. Completed imports are available."));Rebuild();})]]]]]]];
+                            [Button(TEXT("Cancel"),[this](){ImportQueue.Empty();ImportPreviousProfile.Reset();ImportPreviousLinks.Reset();LogImport(TEXT("Import cancelled. Completed imports are available."));Rebuild();})]]]];
+            auto Enabled=[this](){return ImportQueue.IsEmpty();};
+            SAssignNew(BodyScroll,SScrollBox).IsEnabled_Lambda(Enabled)+SScrollBox::Slot()[SAssignNew(Body,SVerticalBox)];
+            if(FACEPluginStyle::IsCodex()&&!EditorOnly)
+            {
+                // Codex: status strip, slim rail on the left, page on the right.
+                ChildSlot[SNew(SBorder).BorderImage(&FACEPluginStyle::Current()->Background).Padding(FMargin(2,0,2,2))
+                    [SNew(SVerticalBox)
+                    +SVerticalBox::Slot().AutoHeight()[SNew(SBox).IsEnabled_Lambda(Enabled)[Header()]]
+                    +SVerticalBox::Slot().FillHeight(1).Padding(0,8,0,0)[SNew(SHorizontalBox)
+                        +SHorizontalBox::Slot().AutoWidth()[SNew(SBox).WidthOverride(168).IsEnabled_Lambda(Enabled)[Tabs()]]
+                        +SHorizontalBox::Slot().AutoWidth()[SNew(SBox).WidthOverride(1)[SNew(SImage).Image(FCoreStyle::Get().GetBrush("WhiteBrush")).ColorAndOpacity(FACEPluginStyle::Gold(.22f))]]
+                        +SHorizontalBox::Slot().FillWidth(1).Padding(16,4,4,0)[BodyScroll.ToSharedRef()]]
+                    +SVerticalBox::Slot().AutoHeight().Padding(0,8,0,0)[Notice]
+                    +SVerticalBox::Slot().AutoHeight().Padding(0,6,0,0)[SNew(SBox).HeightOverride(1)[SNew(SImage).Image(FCoreStyle::Get().GetBrush("WhiteBrush")).ColorAndOpacity(FACEPluginStyle::Gold(.22f))]]
+                    +SVerticalBox::Slot().AutoHeight().Padding(4,5,4,0)[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",10)).ColorAndOpacity(FACEPluginStyle::Muted())
+                        .Text_Lambda([this](){return FText::FromString(FooterText());})]]];
+            }
+            else ChildSlot[SNew(SBorder).BorderImage(&FACEPluginStyle::Current()->Background).Padding(14)
+                [SNew(SVerticalBox)
+                +SVerticalBox::Slot().AutoHeight()[SNew(SBox).IsEnabled_Lambda(Enabled)[Header()]]
+                +SVerticalBox::Slot().AutoHeight().Padding(0,12)[SNew(SBox).IsEnabled_Lambda(Enabled)[Tabs()]]
+                +SVerticalBox::Slot().FillHeight(1)[BodyScroll.ToSharedRef()]
+                +SVerticalBox::Slot().AutoHeight().Padding(0,8)[Notice]]];
             Rebuild();
         }
         virtual void Tick(const FGeometry& Geometry,const double Time,const float Delta) override
@@ -115,6 +143,7 @@ namespace ACEUCMPanelPrivate
         TWeakPtr<FJsonObject> RenderedProfile;
         TSharedPtr<SVerticalBox> Body,SectionBody;TSharedPtr<SEditableTextBox> MonsterName,NewStateName;
         TMap<FString,bool> CollapsedSections;
+        int32 HeadingCount=0;
         TArray<TSharedPtr<FSlateBrush>> Brushes;
         bool ShowTitle=true,EditorOnly=false;FString BuffSearch;
         FString Page=TEXT("Overview"),Search,TransitionWhen=TEXT("elapsed"),TransitionTarget;
@@ -146,6 +175,32 @@ namespace ACEUCMPanelPrivate
                 ||(Page==TEXT("Metas")&&Title!=TEXT("Activity states")&&Title!=TEXT("Imported Virindi meta"));
             const bool Collapsed=CollapsedSections.Contains(Key)?CollapsedSections[Key]:DefaultCollapsed;
             const auto Theme=FACEPluginStyle::Current();
+            if(Theme->Codex&&!EditorOnly)
+            {
+                if(HeadingCount++==0)
+                {
+                    // The first heading is the page title; its settings follow uncollapsed.
+                    SectionBody.Reset();
+                    Body->AddSlot().AutoHeight().Padding(0,0,0,2)[SNew(SACEPluginText).Text(FText::FromString(Title))
+                        .Font(FCoreStyle::GetDefaultFontStyle("Fancy",27)).ColorAndOpacity(FACEPluginStyle::Gold())];
+                    if(!Description.IsEmpty())Body->AddSlot().AutoHeight().Padding(0,0,0,6)[Text(Description,12,FACEPluginStyle::Muted())];
+                    SectionBody=SNew(SVerticalBox);
+                    Body->AddSlot().AutoHeight().Padding(0,8,0,4)[SNew(SBox).Tag(FName(*Key))[SectionBody.ToSharedRef()]];
+                    return;
+                }
+                SectionBody=SNew(SVerticalBox);
+                Body->AddSlot().AutoHeight().Padding(0,6,0,8)[SNew(SExpandableArea).Tag(FName(*Key)).InitiallyCollapsed(Collapsed)
+                    .BorderImage(FCoreStyle::Get().GetBrush("NoBrush")).BodyBorderImage(FCoreStyle::Get().GetBrush("NoBrush"))
+                    .HeaderPadding(FMargin(0,3)).Padding(FMargin(0))
+                    .OnAreaExpansionChanged_Lambda([this,Key](bool Expanded){CollapsedSections.Add(Key,!Expanded);})
+                    .HeaderContent()[SNew(SHorizontalBox)
+                        +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,10,0)[SNew(SACEPluginText).Text(FText::FromString(Title.ToUpper()))
+                            .Font(FCoreStyle::GetDefaultFontStyle("Regular",10)).ColorAndOpacity(FACEPluginStyle::Gold())]
+                        +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[SNew(SBox).HeightOverride(1)[SNew(SImage).Image(FCoreStyle::Get().GetBrush("WhiteBrush")).ColorAndOpacity(FACEPluginStyle::Gold(.3f))]]]
+                    .BodyContent()[SNew(SBox).Padding(0,8,0,0)[SectionBody.ToSharedRef()]]];
+                if(!Description.IsEmpty())Add(Text(Description,12,FACEPluginStyle::Muted()));
+                return;
+            }
             SectionBody=SNew(SVerticalBox);
             Body->AddSlot().AutoHeight().Padding(0,0,0,12)[SNew(SBorder).BorderImage(&Theme->SectionFrame).ForegroundColor(Ink).Padding(8)
                 [SNew(SExpandableArea).Tag(FName(*Key)).InitiallyCollapsed(Collapsed)
@@ -157,7 +212,7 @@ namespace ACEUCMPanelPrivate
             if(!Description.IsEmpty())Add(Text(Description,15,Muted));
         }
         TSharedRef<SWidget> Tile(TSharedRef<SWidget> W)
-        {return SNew(SBorder).BorderImage(&FACEPluginStyle::Current()->SectionFrame).Padding(8)[W];}
+        {if(FACEPluginStyle::IsCodex()&&!EditorOnly)return W;return SNew(SBorder).BorderImage(&FACEPluginStyle::Current()->SectionFrame).Padding(8)[W];}
         TMap<FString,FString> SectionNewNames;
         FString CreatingSection,DeletingSection,DeletingName,MonsterSearch,MonsterFilter;
         void ResetProfileEditors(){LootDraft.Reset();ConditionDraft.Reset();StateIndex=0;ExpandedMonster=INDEX_NONE;}
@@ -239,8 +294,62 @@ namespace ACEUCMPanelPrivate
             Add(Toggle(TEXT("idle_peace"),TEXT("Peace mode when idle"),TEXT("Enter peace mode when no nearby monsters need attention.")));
             Add(Toggle(TEXT("suspend_world_rendering"),TEXT("Suspend 3D view while UCM runs"),TEXT("Desktop only. Keeps UCM, networking and the interface active.")));
         }
+        FString FooterText() const
+        {
+            const FString Section=Page==TEXT("Buffs")||Page==TEXT("Buff others")||Page==TEXT("Combat")||Page==TEXT("Recovery")?TEXT("Character")
+                :Page==TEXT("Route")?TEXT("Routes"):Page==TEXT("Loot")||Page==TEXT("Vendors")||Page==TEXT("Monsters")||Page==TEXT("Metas")?Page:FString();
+            if(!Section.IsEmpty())return TEXT("Changes save to this shared ")+Section+TEXT(" profile.");
+            return Page==TEXT("Overview")?TEXT("Changes save automatically."):FString();
+        }
+        TSharedRef<SWidget> CodexHeader()
+        {
+            auto Strip=SNew(SHorizontalBox)
+                +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4,0,8,0)[SNew(SACEPluginText).Text(FText::FromString(TEXT("\u2022"))).Font(FCoreStyle::GetDefaultFontStyle("Bold",16))
+                    .ColorAndOpacity_Lambda([P=Plugin](){return FSlateColor(P->Running?FLinearColor(.25f,.75f,.3f):FLinearColor(.3f,.3f,.3f));})]
+                +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,10,0)[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Bold",11)).ColorAndOpacity(FACEPluginStyle::Cream())
+                    .Text_Lambda([P=Plugin](){return FText::FromString(P->Running?TEXT("RUNNING"):TEXT("STOPPED"));})]
+                +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(0,0,12,0)[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",11)).ColorAndOpacity(FACEPluginStyle::Muted())
+                    .OverflowPolicy(ETextOverflowPolicy::Ellipsis).Text_Lambda([this](){return FText::FromString(TEXT("Current status: ")+Host->UCMCurrentStatus());})]
+                +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,8,0)[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",11)).ColorAndOpacity(FACEPluginStyle::Muted()).Text(FText::FromString(TEXT("Profile")))]
+                +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,10,0)[SNew(SBox).WidthOverride(200)[ProfileChoice(TEXT("Character"))]]
+                +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(&Style()).IsFocusable(false)
+                    .OnClicked_Lambda([this](){if(Plugin->Running)Host->Stop(Plugin->Id,TEXT("Stopped"),true);else Host->Start(Plugin->Id);return FReply::Handled();})
+                    [SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",13)).ColorAndOpacity(FLinearColor(1.f,.86f,.6f))
+                        .Text_Lambda([P=Plugin](){return FText::FromString(P->Running?TEXT("Stop"):P->CanResumeMeta?TEXT("Resume"):TEXT("Start"));})]];
+            return SNew(SVerticalBox)
+                +SVerticalBox::Slot().AutoHeight().Padding(4,4,4,6)[Strip]
+                +SVerticalBox::Slot().AutoHeight()[SNew(SBox).HeightOverride(1)[SNew(SImage).Image(FCoreStyle::Get().GetBrush("WhiteBrush")).ColorAndOpacity(FACEPluginStyle::Gold(.22f))]];
+        }
+        TSharedRef<SWidget> CodexTabs()
+        {
+            auto Rail=SNew(SVerticalBox);
+            auto Group=[&Rail](const TCHAR* Caption){Rail->AddSlot().AutoHeight().Padding(8,Rail->NumSlots()?12:2,0,4)
+                [SNew(SACEPluginText).Text(FText::FromString(Caption)).Font(FCoreStyle::GetDefaultFontStyle("Regular",9)).ColorAndOpacity(FACEPluginStyle::Muted())];};
+            // Same twelve pages, same order as the classic tab grid; the dot shows whether that activity is on.
+            struct FEntry{const TCHAR* Name;const TCHAR* Group;const TCHAR* Key;bool Default;};
+            const FEntry Entries[]={{TEXT("Overview"),TEXT("RUN"),nullptr,false},{TEXT("Buffs"),TEXT("CHARACTER"),TEXT("buffing"),true},{TEXT("Buff others"),nullptr,nullptr,false},
+                {TEXT("Combat"),nullptr,TEXT("combat"),false},{TEXT("Recovery"),nullptr,TEXT("recovery"),true},{TEXT("Route"),TEXT("WORLD"),TEXT("navigation"),false},
+                {TEXT("Loot"),nullptr,TEXT("looting"),false},{TEXT("Vendors"),nullptr,TEXT("vendor_restock"),false},{TEXT("Monsters"),nullptr,nullptr,false},
+                {TEXT("Metas"),TEXT("AUTOMATION"),TEXT("meta_enabled"),false},{TEXT("Import"),nullptr,nullptr,false},{TEXT("Log"),nullptr,nullptr,false}};
+            for(const FEntry& E:Entries)
+            {
+                if(E.Group)Group(E.Group);
+                const FString Name=E.Name;const TCHAR* Key=E.Key;const bool Default=E.Default;
+                Rail->AddSlot().AutoHeight()[SNew(SACEPluginTab).Rail(true).Tag(TEXT("UCMTab")).Text(FText::FromString(Name))
+                    .Selected_Lambda([this,Name](){return Page==Name||(Name==TEXT("Import")&&(Page==TEXT("Files")||Page.StartsWith(TEXT("Import "))||Page==TEXT("Legacy loot")));})
+                    .Dot_Lambda([this,Key,Default]()->FLinearColor
+                    {
+                        if(!Key)return FLinearColor::Transparent;
+                        const bool On=FCString::Strcmp(Key,TEXT("combat"))==0?Str(P(),Key,TEXT("off"))!=TEXT("off"):Bool(P(),Key,Default);
+                        return On?FLinearColor(.25f,.7f,.3f):FLinearColor::Transparent;
+                    })
+                    .OnClicked_Lambda([this,Name](){Page=Name;BodyScroll->ScrollToStart();Rebuild();return FReply::Handled();})];
+            }
+            return SNew(SScrollBox).ScrollBarVisibility(EVisibility::Collapsed)+SScrollBox::Slot()[Rail];
+        }
         TSharedRef<SWidget> Header()
         {
+            if(FACEPluginStyle::IsCodex()&&!EditorOnly)return CodexHeader();
             if(EditorOnly)return SNew(SVerticalBox)
                 +SVerticalBox::Slot().AutoHeight()[SNew(SBox).Visibility(ShowTitle?EVisibility::Visible:EVisibility::Collapsed)[Text(TEXT("Loot Profile Editor"),28)]]
                 +SVerticalBox::Slot().AutoHeight().Padding(0,4,0,0)[Text(TEXT("Edits UCM's active loot profile. Opening or closing this window does not toggle looting."),14,Muted)];
@@ -256,6 +365,7 @@ namespace ACEUCMPanelPrivate
         }
         TSharedRef<SWidget> Tabs()
         {
+            if(FACEPluginStyle::IsCodex()&&!EditorOnly)return CodexTabs();
             auto Row=SNew(SUniformWrapPanel).SlotPadding(FMargin(2)).MinDesiredSlotWidth(92).MinDesiredSlotHeight(38).MaxDesiredSlotHeight(38).HAlign(HAlign_Fill).EvenRowDistribution(true);
             const TArray<FString> Names=EditorOnly?TArray<FString>{TEXT("Vendors"),TEXT("Loot rules"),TEXT("Import")}
                 :TArray<FString>{TEXT("Overview"),TEXT("Buffs"),TEXT("Buff others"),TEXT("Combat"),TEXT("Recovery"),TEXT("Route"),TEXT("Loot"),TEXT("Vendors"),TEXT("Monsters"),TEXT("Metas"),TEXT("Import"),TEXT("Log")};
@@ -272,12 +382,34 @@ namespace ACEUCMPanelPrivate
         }
         TSharedRef<SWidget> CombatToggle(const FString& Caption=TEXT("Combat (automatic skill and equipment selection)"))
         {
+            if(FACEPluginStyle::IsCodex()&&!EditorOnly)
+                return SNew(SCheckBox).Style(&RowCheck())
+                    .IsChecked_Lambda([this](){return Str(P(),TEXT("combat"),TEXT("off"))!=TEXT("off")?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
+                    .OnCheckStateChanged_Lambda([this](ECheckBoxState State){P()->SetStringField(TEXT("combat"),State==ECheckBoxState::Checked?TEXT("auto"):TEXT("off"));P()->SetBoolField(TEXT("manual_combat"),false);Save();})
+                    [SNew(SHorizontalBox)
+                        +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(0,2,12,2)[Text(Caption,13,FACEPluginStyle::Cream())]
+                        +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(SImage)
+                            .Image_Lambda([this]()->const FSlateBrush*{const auto& Sw=FACEPluginStyle::Current()->Switch;return Str(P(),TEXT("combat"),TEXT("off"))!=TEXT("off")?&Sw.CheckedImage:&Sw.UncheckedImage;})]];
             return SNew(SCheckBox).Style(&FACEPluginStyle::Current()->Check).IsChecked_Lambda([this](){return Str(P(),TEXT("combat"),TEXT("off"))!=TEXT("off")?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
                 .OnCheckStateChanged_Lambda([this](ECheckBoxState State){P()->SetStringField(TEXT("combat"),State==ECheckBoxState::Checked?TEXT("auto"):TEXT("off"));P()->SetBoolField(TEXT("manual_combat"),false);Save();})
                 [Text(Caption,16)];
         }
         TSharedRef<SWidget> Toggle(const TCHAR* Key,const FString& Caption,const FString& Help,bool Default=false,bool WrapText=true)
         {
+            if(FACEPluginStyle::IsCodex()&&!EditorOnly)
+            {
+                // Label and help on the left, switch on the right; the whole row toggles.
+                return SNew(SCheckBox).Style(&RowCheck())
+                    .IsChecked_Lambda([this,Key,Default](){return Bool(P(),Key,Default)?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
+                    .OnCheckStateChanged_Lambda([this,Key](ECheckBoxState State){P()->SetBoolField(Key,State==ECheckBoxState::Checked);Save();})
+                    .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(Help)))
+                    [SNew(SHorizontalBox)
+                        +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(0,2,12,2)[SNew(SVerticalBox)
+                            +SVerticalBox::Slot().AutoHeight()[Text(Caption,13,FACEPluginStyle::Cream(),WrapText)]
+                            +SVerticalBox::Slot().AutoHeight()[SNew(SBox).Visibility(Help.IsEmpty()||!WrapText?EVisibility::Collapsed:EVisibility::Visible)[Text(Help,11,FACEPluginStyle::Muted(),true)]]]
+                        +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(SImage)
+                            .Image_Lambda([this,Key,Default]()->const FSlateBrush*{const auto& Sw=FACEPluginStyle::Current()->Switch;return Bool(P(),Key,Default)?&Sw.CheckedImage:&Sw.UncheckedImage;})]];
+            }
             return SNew(SCheckBox).Style(&FACEPluginStyle::Current()->Check).IsChecked_Lambda([this,Key,Default](){return Bool(P(),Key,Default)?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
                 .OnCheckStateChanged_Lambda([this,Key](ECheckBoxState State){P()->SetBoolField(Key,State==ECheckBoxState::Checked);Save();})
                 .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(Help)))
@@ -290,6 +422,19 @@ namespace ACEUCMPanelPrivate
             V->AddSlot().AutoHeight()[SNew(SHorizontalBox)+SHorizontalBox::Slot().FillWidth(1)[Text(Caption,18)]
                 +SHorizontalBox::Slot().AutoWidth()[SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Bold",18)).ColorAndOpacity(Color)
                     .Text_Lambda([this,Key,Default,Unit](){return FText::FromString(FString::Printf(TEXT("%.0f%s"),Num(P(),Key,Default),*Unit));})]];
+            if(FACEPluginStyle::IsCodex()&&!EditorOnly)
+            {
+                auto Row=SNew(SHorizontalBox)
+                    +SHorizontalBox::Slot().FillWidth(.45f).VAlign(VAlign_Center).Padding(0,0,10,0)[Text(Caption,13,FACEPluginStyle::Cream())]
+                    +SHorizontalBox::Slot().FillWidth(.55f).VAlign(VAlign_Center)[SNew(SACEPluginSlider).Tag(FName(Key)).Style(&SliderStyle()).MinValue(Min).MaxValue(Max).StepSize(1).MouseUsesStep(true)
+                        .SliderHandleColor(FLinearColor::White).SliderBarColor(FLinearColor::White)
+                        .Value_Lambda([this,Key,Default](){return float(Num(P(),Key,Default));})
+                        .OnValueChanged_Lambda([this,Key](float N){P()->SetNumberField(Key,FMath::RoundToInt(N));})
+                        .OnMouseCaptureEnd_Lambda([this](){Save();}).OnControllerCaptureEnd_Lambda([this](){Save();})]
+                    +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(10,0,0,0)[SNew(SBox).MinDesiredWidth(56)[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",12)).ColorAndOpacity(FACEPluginStyle::Cream()).Justification(ETextJustify::Right)
+                        .Text_Lambda([this,Key,Default,Unit](){return FText::FromString(FString::Printf(TEXT("%.0f%s"),Num(P(),Key,Default),*Unit));})]];
+                Add(Row);return;
+            }
             V->AddSlot().AutoHeight().Padding(0,5)[SNew(SSlider).Tag(FName(Key)).Style(&SliderStyle()).MinValue(Min).MaxValue(Max).StepSize(1).MouseUsesStep(true).SliderHandleColor(FLinearColor::White).SliderBarColor(FLinearColor::White)
                 .Value_Lambda([this,Key,Default](){return float(Num(P(),Key,Default));})
                 .OnValueChanged_Lambda([this,Key](float N){P()->SetNumberField(Key,FMath::RoundToInt(N));})
@@ -570,7 +715,7 @@ namespace ACEUCMPanelPrivate
         {
             if(!Host.IsValid())return;FACEPluginStyle::Use(Host.Get(),EditorOnly?TEXT("looteditor"):TEXT("ucm"));
             RenderedProfile=P();
-            SectionBody.Reset();Body->ClearChildren();Brushes.Empty();
+            SectionBody.Reset();Body->ClearChildren();Brushes.Empty();HeadingCount=0;
             if(Page==TEXT("Log"))
             {
                 Add(Button(TEXT("Open floating UCM Log (desktop)"),[this](){Host->TogglePluginWindow(TEXT("ucm.log"));}));
@@ -935,7 +1080,9 @@ namespace ACEUCMPanelPrivate
         {auto Route=P()->GetArrayField(TEXT("route"));if(!Direction)Route.RemoveAt(I);else if(Route.IsValidIndex(I+Direction))Route.Swap(I,I+Direction);P()->SetArrayField(TEXT("route"),Route);Save(true);Rebuild();}
     };
 }
-TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMPanel(const FString& InitialPage,bool bShowTitle){return SNew(ACEUCMPanelPrivate::SUCMPanel).Host(this).InitialPage(InitialPage).ShowTitle(bShowTitle);}
+extern FString GACEPluginPreviewUCMPage;
+TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMPanel(const FString& InitialPage,bool bShowTitle)
+{return SNew(ACEUCMPanelPrivate::SUCMPanel).Host(this).InitialPage(InitialPage.IsEmpty()?GACEPluginPreviewUCMPage:InitialPage).ShowTitle(bShowTitle);}
 
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"

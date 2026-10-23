@@ -5,6 +5,7 @@
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SComboButton.h"
+#include "Widgets/Input/SSlider.h"
 #include "Dat/ACEDatFileTypes.h"
 #include "Dat/ACEDatTextLayout.h"
 
@@ -33,6 +34,21 @@ public:
     // Lua's explicit font sizes continue to use their requested values.
     static FSlateFontInfo NativeFont(FName Typeface,int32 Size=15);
     static constexpr float ButtonPadding=6.f, CompactButtonPadding=4.f, IconButtonPadding=2.f, ChromeButtonPadding=1.f;
+    /** Plugin UI theme: "codex" (default) or "original" (the retail red/brown look). */
+    static void SetTheme(const FString& Name);
+    static const FString& ThemeName();
+    static bool IsCodex();
+    /** Codex window bodies follow the world selected in the lobby when on; otherwise retail blue. */
+    static void SetMatchWorldColor(bool bMatch);
+    static bool MatchWorldColor();
+    /** Lobby palette index for Codex window bodies. */
+    static int32 WindowTint();
+    /** Window title bar height for the active theme (Codex 42, Original 24). */
+    static double HeaderHeight();
+    // Codex colors (the lobby palette).
+    static FLinearColor Gold(float Alpha=1.f);
+    static FLinearColor Cream();
+    static FLinearColor Muted();
     virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
     virtual FString GetReferencerName() const override {return TEXT("ACEPluginStyle");}
     const FSlateBrush* Image(uint32 Id);
@@ -41,10 +57,14 @@ public:
     void Refresh();
     bool HasDatArtwork() const {return DatArtworkLoaded;}
     bool SetWindowAppearance(float Opacity,bool Frameless);
-    TSharedPtr<FACEPluginFont> Typeface(int32 Size);
-    FButtonStyle Button,DockButton,Tab,MenuItem;
+    TSharedPtr<FACEPluginFont> Typeface(int32 Size,bool Fancy=false);
+    /** Rebuild every brush for the current theme in place; live widgets keep their brush addresses. */
+    void Reinitialize(){InitializeArtwork();}
+    float GetBackgroundOpacity() const {return BackgroundOpacity<0?1.f:BackgroundOpacity;}
+    bool IsFrameHidden() const {return HideFrame;}
+    FButtonStyle Button,DockButton,Tab,MenuItem,RailItem,QuietRow,QuietRowSelected;
     FSliderStyle Slider;
-    FCheckBoxStyle Check;
+    FCheckBoxStyle Check,Switch;
     FEditableTextBoxStyle Edit;
     FComboButtonStyle Combo;
     FComboBoxStyle ComboBox;
@@ -54,8 +74,11 @@ public:
     FACEDatFont Font;
     TObjectPtr<UTexture2D> Atlas=nullptr;
     bool TintAtlas=false;
+    /** Theme these brushes were built for. */
+    bool Codex=false;
 private:
     void InitializeArtwork();
+    void InitializeCodex();
     TObjectPtr<UACEUIResourceResolver> Resolver=nullptr;
     TMap<uint32,TSharedPtr<FSlateBrush>> Images;
     TMap<FString,TSharedPtr<FSlateBrush>> ItemImages;
@@ -74,6 +97,9 @@ public:
     using FArguments=SButton::FArguments;
     void Construct(const FArguments& Args);
     virtual FVector2D ComputeDesiredSize(float LayoutScaleMultiplier) const override;
+protected:
+    /** Flat Codex rail entries keep left-aligned labels and their natural height. */
+    bool FlatRail=false;
 private:
     const FButtonStyle* ContentStyle=nullptr;
 };
@@ -90,8 +116,12 @@ public:
 class SACEPluginTab : public SACEPluginButton
 {
 public:
-    SLATE_BEGIN_ARGS(SACEPluginTab):_Selected(false),_FontSize(15),_ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)){}
+    SLATE_BEGIN_ARGS(SACEPluginTab):_Selected(false),_Rail(false),_FontSize(15),_ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)){}
         SLATE_ATTRIBUTE(bool,Selected)
+        /** Codex vertical navigation item: left-aligned caps, diamond, 2px selected bar and wash. */
+        SLATE_ARGUMENT(bool,Rail)
+        /** Optional status dot color (rail items); transparent hides it. */
+        SLATE_ATTRIBUTE(FLinearColor,Dot)
         SLATE_ATTRIBUTE(FText,Text)
         SLATE_ATTRIBUTE(int32,FontSize)
         SLATE_ARGUMENT(FMargin,ContentPadding)
@@ -104,6 +134,17 @@ public:
 private:
     TSharedPtr<FACEPluginStyle> Retail;
     TAttribute<bool> Selected;
+    TAttribute<FLinearColor> Dot;
+    bool Rail=false;
+};
+
+/** Slider that also paints the filled part of the track in Codex (gold up to the thumb). */
+class SACEPluginSlider : public SSlider
+{
+public:
+    using FArguments=SSlider::FArguments;
+    void Construct(const FArguments& Args){SSlider::Construct(Args);}
+    virtual int32 OnPaint(const FPaintArgs&,const FGeometry&,const FSlateRect&,FSlateWindowElementList&,int32,const FWidgetStyle&,bool) const override;
 };
 
 /** Native DAT bitmap text with cached word-boundary wrapping; no generated text textures. */

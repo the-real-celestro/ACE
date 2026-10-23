@@ -1456,6 +1456,8 @@ void UACELoginWidget::ApplyPageTint()
 	const FACELoginServer* S=Profile.SelectedServer();
 	PageTint=S?TintFor(S->Id):0;
 	GLobbyTint=PageTint;
+	// In-game plugin windows can follow the selected world's colour ("Match world color").
+	ACELobbyArt::SetWorld(PageTint,S?S->Name:FString());
 	if (LobbyBackground)
 		if (const FSlateBrush* Bg=ACELobbyArt::TintedBackground(PageTint)) { LobbyBackground->SetBrush(*Bg); LobbyBackground->SetRenderOpacity(1); }
 	if (LobbyWash)

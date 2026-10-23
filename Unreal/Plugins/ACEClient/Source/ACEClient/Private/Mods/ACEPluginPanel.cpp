@@ -29,6 +29,10 @@
 #include "Widgets/Input/SSpinBox.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Brushes/SlateRoundedBoxBrush.h"
+#include "Widgets/SOverlay.h"
+#include "Widgets/Images/SImage.h"
+#include "Widgets/Layout/SWrapBox.h"
+#include "ACELobbyArt.h"
 
 namespace
 {
@@ -99,6 +103,232 @@ namespace ACEPluginPanelPrivate
         bool Scrollable=true;
         TSharedPtr<SScrollBox> Scroll;
         SVerticalBox::FSlot* CompanionSlot=nullptr;
+        // Codex manager (master-detail): selected plugin, list filter and the detail pane.
+        FString ManagerSelected, ManagerFilter;
+        TSharedPtr<SBox> Detail;
+        TSharedPtr<FACEClientPlugin> FindPlugin(const FString& PluginId) const
+        {
+            if(Host.IsValid())for(const auto& P:Host->Plugins)if(P->Id==PluginId)return P;
+            return nullptr;
+        }
+        static FString ShortDescription(const TSharedPtr<FACEClientPlugin>& P)
+        {
+            if(P->Id==TEXT("ucm"))return TEXT("Combat, buffs, recovery, routes and looting.");
+            if(P->Id==TEXT("ucmmicro"))return TEXT("Quick toggles for UCM activities.");
+            if(P->Id==TEXT("looteditor"))return TEXT("Create and edit loot profiles.");
+            if(P->Id==TEXT("waypoint"))return TEXT("Direction arrow, world map and dungeon map.");
+            return P->Description;
+        }
+        static TSharedRef<SWidget> CodexText(const TAttribute<FText>& Text,int32 Size,FLinearColor Color,bool Wrap=false)
+        {return SNew(SACEPluginText).Text(Text).Font(FCoreStyle::GetDefaultFontStyle("Regular",Size)).ColorAndOpacity(Color).AutoWrapText(Wrap);}
+        static TSharedRef<SWidget> CodexCaption(const FString& Caption)
+        {
+            return SNew(SHorizontalBox)
+                +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,10,0)[CodexText(FText::FromString(Caption.ToUpper()),10,FACEPluginStyle::Gold())]
+                +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[SNew(SBox).HeightOverride(1)[SNew(SACELobbyDecor).Kind(SACELobbyDecor::EKind::Rule).Color(FACEPluginStyle::Gold(.45f))]];
+        }
+        /** Label (and optional hint) on the left, a 32x16 switch on the right. */
+        TSharedRef<SWidget> SwitchRow(const FString& Caption,const TAttribute<FText>& Hint,TFunction<bool()> Get,TFunction<void(bool)> Set,FName WidgetTag=NAME_None)
+        {
+            return SNew(SHorizontalBox)
+                +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(0,0,12,0)
+                [SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight()[CodexText(FText::FromString(Caption),13,FACEPluginStyle::Cream())]
+                    +SVerticalBox::Slot().AutoHeight().Padding(0,1,0,0)[SNew(SBox).Visibility_Lambda([Hint]{return Hint.Get().IsEmpty()?EVisibility::Collapsed:EVisibility::Visible;})
+                        [CodexText(Hint,11,FACEPluginStyle::Muted(),true)]]]
+                +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(SCheckBox).Tag(WidgetTag).Style(&Retail->Switch)
+                    .IsChecked_Lambda([Get]{return Get()?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
+                    .OnCheckStateChanged_Lambda([Set](ECheckBoxState S){Set(S==ECheckBoxState::Checked);})];
+        }
+        TSharedRef<SWidget> Plate(const FString& Caption,TFunction<void()> Fn,FName WidgetTag=NAME_None,TAttribute<bool> CanClick=true)
+        {
+            return SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::CompactButtonPadding)).ButtonStyle(&Retail->Button).IsFocusable(false).Tag(WidgetTag)
+                .IsEnabled(CanClick).OnClicked_Lambda([Fn]{Fn();return FReply::Handled();})
+                [SNew(SACEPluginText).Text(FText::FromString(Caption)).Font(FCoreStyle::GetDefaultFontStyle("Regular",13)).ColorAndOpacity(ACELobbyArt::CaptionText)];
+        }
+        TSharedRef<SWidget> ThemeCard(const FString& Theme,const FString& Caption,const FString& Hint)
+        {
+            const bool Codex=Theme==TEXT("codex");
+            // Miniature of each theme: title strip, a body with a hairline row and a red plate.
+            auto Mini=SNew(SBorder).Padding(0).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+                .BorderBackgroundColor(Codex?FLinearColor(FColor(10,22,48)):FLinearColor(.02f,.012f,.005f))
+                [SNew(SVerticalBox)
+                    +SVerticalBox::Slot().AutoHeight()[SNew(SBox).HeightOverride(12)[SNew(SImage).Image(FCoreStyle::Get().GetBrush("WhiteBrush"))
+                        .ColorAndOpacity(Codex?FLinearColor(FColor(58,36,16)):FLinearColor(.06f,.035f,.012f))]]
+                    +SVerticalBox::Slot().AutoHeight().Padding(8,6,8,0)[SNew(SBox).HeightOverride(8)[SNew(SImage).Image(&Retail->QuietRow.Normal)]]
+                    +SVerticalBox::Slot().AutoHeight().Padding(8,4,8,0)[SNew(SBox).HeightOverride(8)[SNew(SImage).Image(&Retail->QuietRow.Normal)]]
+                    +SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right).Padding(8,6,8,6)[SNew(SBox).WidthOverride(34).HeightOverride(10)
+                        [SNew(SImage).Image(FCoreStyle::Get().GetBrush("WhiteBrush")).ColorAndOpacity(FLinearColor(FColor(150,28,18)))]]];
+            return SNew(SButton).ButtonStyle(&Retail->QuietRow).ContentPadding(FMargin(8)).IsFocusable(false).Tag(FName(*(TEXT("PluginTheme.")+Theme)))
+                .OnClicked_Lambda([this,Theme]{if(Host.IsValid())Host->SetPluginTheme(Theme);return FReply::Handled();})
+                [SNew(SVerticalBox)
+                    +SVerticalBox::Slot().AutoHeight()[SNew(SOverlay)
+                        +SOverlay::Slot()[SNew(SBox).WidthOverride(124).HeightOverride(62)[Mini]]
+                        +SOverlay::Slot().HAlign(HAlign_Right).VAlign(VAlign_Top).Padding(0,16,4,0)[SNew(SACELobbyGlyph).Kind(SACELobbyGlyph::EKind::Check).Size(12.f)
+                            .Color(FACEPluginStyle::Gold()).Visibility_Lambda([Theme]{return FACEPluginStyle::ThemeName()==Theme?EVisibility::HitTestInvisible:EVisibility::Collapsed;})]]
+                    +SVerticalBox::Slot().AutoHeight().Padding(0,6,0,0)[SNew(SACEPluginText).Text(FText::FromString(Caption)).Font(FCoreStyle::GetDefaultFontStyle("Regular",13))
+                        .ColorAndOpacity_Lambda([Theme]{return FACEPluginStyle::ThemeName()==Theme?FSlateColor(FACEPluginStyle::Gold()):FSlateColor(FACEPluginStyle::Cream());})]
+                    +SVerticalBox::Slot().AutoHeight()[CodexText(FText::FromString(Hint),10,FACEPluginStyle::Muted())]];
+        }
+        void BuildCodexManager()
+        {
+            SetScrolling(false);
+            const auto Order=Host->PluginDisplayOrder();
+            if(!FindPlugin(ManagerSelected)){ManagerSelected.Reset();for(const auto& PluginId:Order)if(FindPlugin(PluginId)){ManagerSelected=PluginId;break;}}
+            auto SearchBox=SNew(SEditableTextBox).Style(&Retail->Edit).Font(FCoreStyle::GetDefaultFontStyle("Regular",12))
+                .HintText(FText::FromString(TEXT("Search plugins"))).Text(FText::FromString(ManagerFilter))
+                .OnTextChanged_Lambda([this](const FText& T){ManagerFilter=T.ToString();});
+            auto List=SNew(SVerticalBox)
+                +SVerticalBox::Slot().AutoHeight().Padding(0,0,0,8)[SNew(SOverlay)+SOverlay::Slot()[SearchBox]
+                    +SOverlay::Slot().HAlign(HAlign_Right).VAlign(VAlign_Center).Padding(0,0,8,0)
+                    [SNew(SACELobbyGlyph).Kind(SACELobbyGlyph::EKind::Magnifier).Size(12.f).Color(FACEPluginStyle::Gold(.8f)).Visibility(EVisibility::HitTestInvisible)]]
+                +SVerticalBox::Slot().AutoHeight().Padding(2,0,0,6)[CodexText(TAttribute<FText>::CreateLambda([this]
+                    {return FText::FromString(FString::Printf(TEXT("INSTALLED · %d"),Host.IsValid()?Host->Plugins.Num():0));}),10,FACEPluginStyle::Muted())]
+                +SVerticalBox::Slot().FillHeight(1)[SNew(SScrollBox).ScrollBarStyle(&ScrollStyle())
+                    +SScrollBox::Slot()[SAssignNew(PluginRows,SVerticalBox)]];
+            for(auto P:Host->Plugins)
+            {
+                const FString PluginId=P->Id;
+                const auto Hover=MakeShared<TWeakPtr<SWidget>>();
+                auto Row=SNew(SHorizontalBox)
+                    +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4,0,4,0)
+                    [SNew(SACEPluginButton).ContentPadding(FMargin(0)).Tag(FName(*(TEXT("PluginOrderGrip.")+PluginId))).ButtonStyle(&Retail->RailItem)
+                        .IsFocusable(false).AllowDragDrop(true).Cursor(EMouseCursor::GrabHand)
+                        .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Drag to reorder plugins in the manager and icon bar. Unlock or hold Quick-show first."))))
+                        .OnSlateButtonDragDetected_Lambda([H=Host,PluginId](const FGeometry&,const FPointerEvent&){return ACEPluginOrder::BeginDrag(H.Get(),PluginId,TEXT("__manager"));})
+                        [SNew(SBox).WidthOverride(12).HeightOverride(22).HAlign(HAlign_Center).VAlign(VAlign_Center)
+                            [SNew(SACELobbyGlyph).Kind(SACELobbyGlyph::EKind::Grip).Size(10.f).Color(FACEPluginStyle::Gold(.55f))]]]
+                    +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,8,0)[SNew(SBox).WidthOverride(28).HeightOverride(28)[SNew(SACEPluginBadge).Plugin(P)]]
+                    +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(0,0,6,0)
+                    [SNew(SVerticalBox)
+                        +SVerticalBox::Slot().AutoHeight()[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",13))
+                            .ColorAndOpacity_Lambda([this,PluginId]{return ManagerSelected==PluginId?FSlateColor(FACEPluginStyle::Gold()):FSlateColor(FACEPluginStyle::Cream());})
+                            .Text_Lambda([P]{return FText::FromString(P->DisplayTitle());})]
+                        +SVerticalBox::Slot().AutoHeight()[CodexText(TAttribute<FText>::CreateLambda([P]
+                            {return FText::FromString(!P->Enabled?TEXT("Disabled"):P->Running?TEXT("Running"):TEXT("Enabled"));}),10,FACEPluginStyle::Muted())]]
+                    // Row state reads like the mockup ("• On"), but stays a real checkbox so it can toggle.
+                    +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,6,0)[SNew(SCheckBox).Tag(FName(*(TEXT("PluginEnabled.")+PluginId))).Style(&StatusCheck())
+                        .ToolTip(FACEPluginStyle::Tooltip(TAttribute<FText>::CreateLambda([P]{return FText::FromString(P->Enabled?TEXT("Enabled. Click to disable."):TEXT("Disabled. Click to enable."));})))
+                        .IsChecked_Lambda([P]{return P->Enabled?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
+                        .OnCheckStateChanged_Lambda([this,PluginId](ECheckBoxState S){Host->SetEnabled(PluginId,S==ECheckBoxState::Checked);})
+                        [SNew(SHorizontalBox)
+                            +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,4,0)[SNew(SACEPluginText).Text(FText::FromString(TEXT("\u2022"))).Font(FCoreStyle::GetDefaultFontStyle("Bold",14))
+                                .ColorAndOpacity_Lambda([P]{return FSlateColor(P->Enabled?(P->Running?FLinearColor(.25f,.75f,.3f):FLinearColor(.2f,.5f,.25f)):FLinearColor(.25f,.25f,.25f));})]
+                            +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(SBox).WidthOverride(22)[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",10)).ColorAndOpacity(FACEPluginStyle::Muted())
+                                .Text_Lambda([P]{return FText::FromString(P->Enabled?TEXT("On"):TEXT("Off"));})]]]]
+                    +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,6,0)
+                    [SNew(SACEPluginButton).ContentPadding(FMargin(6,1)).Tag(FName(*(TEXT("PluginOpen.")+PluginId))).ButtonStyle(&Retail->DockButton).IsFocusable(false)
+                        .Visibility_Lambda([Hover]{auto W=Hover->Pin();return W&&W->IsHovered()?EVisibility::Visible:EVisibility::Hidden;})
+                        .IsEnabled_Lambda([P]{return P->Enabled;}).ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Open"))))
+                        .OnClicked_Lambda([this,PluginId]{Open(PluginId);return FReply::Handled();})
+                        [SNew(SACEPluginText).Text(FText::FromString(TEXT("Open"))).Font(FCoreStyle::GetDefaultFontStyle("Regular",10))]];
+                TSharedPtr<SBorder> RowBorder;
+                RowsById.Add(PluginId,SNew(SACEPluginOrderTarget).Host(Host.Get()).Id(PluginId).LockId(TEXT("__manager")).Tag(FName(*(TEXT("PluginManagerOrder.")+PluginId)))
+                    [SNew(SBox).Visibility_Lambda([this,P]{return ManagerFilter.IsEmpty()||P->DisplayTitle().Contains(ManagerFilter)||P->Id.Contains(ManagerFilter)?EVisibility::Visible:EVisibility::Collapsed;})
+                    [SNew(SOverlay)
+                        +SOverlay::Slot()[SAssignNew(RowBorder,SBorder).Padding(FMargin(2,6,4,6))
+                            .BorderImage_Lambda([this,PluginId]()->const FSlateBrush*{return ManagerSelected==PluginId?&Retail->QuietRowSelected.Normal:&Retail->QuietRow.Normal;})
+                            .OnMouseButtonDown_Lambda([this,PluginId](const FGeometry&,const FPointerEvent& E)
+                            {if(E.GetEffectingButton()!=EKeys::LeftMouseButton)return FReply::Unhandled();ManagerSelected=PluginId;RebuildDetail();return FReply::Handled();})
+                            [Row]]
+                        +SOverlay::Slot().HAlign(HAlign_Left)[SNew(SBox).WidthOverride(3)
+                            .Visibility_Lambda([this,PluginId]{return ManagerSelected==PluginId?EVisibility::HitTestInvisible:EVisibility::Collapsed;})
+                            [SNew(SImage).Image(FCoreStyle::Get().GetBrush("WhiteBrush")).ColorAndOpacity(FACEPluginStyle::Gold())]]]]);
+                *Hover=RowBorder;
+            }
+            OrderRows();
+            const FString Folder=FPaths::ConvertRelativePathToFull(Host->UserDirectory()/TEXT("Installed"));
+            auto Footer=SNew(SHorizontalBox)
+                +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(2,0,12,0)
+                    [CodexText(FText::FromString(ManagerNotice.IsEmpty()?TEXT("Drop plugin folders into ")+Folder:ManagerNotice),10,FACEPluginStyle::Muted(),true)]
+                +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,6,0)[Plate(TEXT("Open plugin folder"),[Folder]{IFileManager::Get().MakeDirectory(*Folder,true);FPlatformProcess::ExploreFolder(*Folder);})]
+                +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::CompactButtonPadding)).ButtonStyle(&Retail->Button).IsFocusable(false)
+                    .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Reload installed plugins. Running plugins will stop."))))
+                    .OnClicked_Lambda([this](){Host->Discover();ManagerNotice=Host->Notice;Rebuild();return FReply::Handled();})
+                    [SNew(SACEPluginText).Text(FText::FromString(TEXT("Refresh"))).Font(FCoreStyle::GetDefaultFontStyle("Regular",13)).ColorAndOpacity(ACELobbyArt::CaptionText)]];
+            Body->AddSlot().FillHeight(1)
+            [SNew(SHorizontalBox)
+                +SHorizontalBox::Slot().AutoWidth()[SNew(SBox).WidthOverride(292)[List]]
+                +SHorizontalBox::Slot().AutoWidth().Padding(12,0)[SNew(SBox).WidthOverride(1)[SNew(SImage).Image(FCoreStyle::Get().GetBrush("WhiteBrush")).ColorAndOpacity(FACEPluginStyle::Gold(.22f))]]
+                +SHorizontalBox::Slot().FillWidth(1)[SAssignNew(Detail,SBox)]];
+            Body->AddSlot().AutoHeight().Padding(0,8,0,2)[SNew(SBox).HeightOverride(1)[SNew(SImage).Image(FCoreStyle::Get().GetBrush("WhiteBrush")).ColorAndOpacity(FACEPluginStyle::Gold(.22f))]];
+            Body->AddSlot().AutoHeight().Padding(0,6,0,4)[Footer];
+            RebuildDetail();
+        }
+        TSharedRef<SWidget> Card(TSharedRef<SWidget> Content)
+        {return SNew(SBorder).BorderImage(&Retail->SectionFrame).Padding(FMargin(16,14))[Content];}
+        static const FCheckBoxStyle& StatusCheck()
+        {
+            static FCheckBoxStyle Style=[]{FCheckBoxStyle S;const FSlateBrush* None=FCoreStyle::Get().GetBrush("NoBrush");
+                S.SetCheckBoxType(ESlateCheckBoxType::CheckBox);
+                S.SetUncheckedImage(*None).SetUncheckedHoveredImage(*None).SetUncheckedPressedImage(*None)
+                 .SetCheckedImage(*None).SetCheckedHoveredImage(*None).SetCheckedPressedImage(*None)
+                 .SetUndeterminedImage(*None).SetUndeterminedHoveredImage(*None).SetUndeterminedPressedImage(*None).SetPadding(FMargin(0));return S;}();
+            return Style;
+        }
+        static const FScrollBarStyle& ScrollStyle(){static const FScrollBarStyle Style=ACELobbyArt::QuietScrollBar(6.f);return Style;}
+        void RebuildDetail()
+        {
+            if(!Detail||!Host.IsValid())return;
+            auto Pane=SNew(SVerticalBox);
+            if(auto P=FindPlugin(ManagerSelected))
+            {
+                const FString PluginId=P->Id;
+                const FACELobbyArt* Art=ACELobbyArt::Get();
+                auto Top=SNew(SVerticalBox);
+                Top->AddSlot().AutoHeight()[SNew(SHorizontalBox)
+                    +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,12,0)[SNew(SOverlay)
+                        +SOverlay::Slot()[SNew(SBox).WidthOverride(56).HeightOverride(56)[SNew(SImage).Image(Art?&Art->Ring[0]:FCoreStyle::Get().GetBrush("NoBrush"))]]
+                        +SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center)[SNew(SBox).WidthOverride(28).HeightOverride(28)[SNew(SACEPluginBadge).Plugin(P)]]]
+                    +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)
+                    [SNew(SVerticalBox)
+                        +SVerticalBox::Slot().AutoHeight()[SNew(SACEPluginText).Text_Lambda([P]{return FText::FromString(P->DisplayTitle());})
+                            .Font(FCoreStyle::GetDefaultFontStyle("Fancy",24)).ColorAndOpacity(FACEPluginStyle::Gold())]
+                        +SVerticalBox::Slot().AutoHeight()[CodexText(TAttribute<FText>::CreateLambda([P]
+                            {return FText::FromString((P->Version.IsEmpty()?FString():TEXT("Version ")+P->Version+TEXT(" · "))+(P->Enabled?(P->Running?TEXT("Running"):TEXT("Enabled")):TEXT("Disabled")));}),11,FACEPluginStyle::Muted())]]
+                    +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,6,0)[CodexText(FText::FromString(TEXT("Enabled")),12,FACEPluginStyle::Cream())]
+                    +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,14,0)[SNew(SCheckBox).Style(&Retail->Switch).Tag(FName(*(TEXT("PluginDetailEnabled.")+PluginId)))
+                        .IsChecked_Lambda([P]{return P->Enabled?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
+                        .OnCheckStateChanged_Lambda([this,PluginId](ECheckBoxState S){Host->SetEnabled(PluginId,S==ECheckBoxState::Checked);})]
+                    +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(SBox).MinDesiredWidth(116).HeightOverride(42)[Plate(TEXT("Open"),[this,PluginId]{Open(PluginId);},FName(*(TEXT("PluginDetailOpen.")+PluginId)),
+                        TAttribute<bool>::CreateLambda([P]{return P->Enabled;}))]]];
+                Top->AddSlot().AutoHeight().Padding(0,10,0,0)[CodexText(FText::FromString(ShortDescription(P)),13,FACEPluginStyle::Cream(),true)];
+                Top->AddSlot().AutoHeight().Padding(0,14,0,6)[CodexCaption(TEXT("Game actions"))];
+                auto Chips=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(6,6));
+                TArray<FString> Actions=P->Permissions;
+                if(P->LocalService)Actions={P->Permissions.Contains(TEXT("local_tools"))?TEXT("Local tools (outside the Lua sandbox)"):TEXT("Local appearance only")};
+                if(Actions.IsEmpty())Actions.Add(TEXT("No game actions"));
+                for(const FString& Action:Actions)Chips->AddSlot()[SNew(SBorder).BorderImage(&Retail->QuietRow.Normal).Padding(FMargin(8,3))
+                    [CodexText(FText::FromString(Action.Replace(TEXT("_"),TEXT(" "))),11,FACEPluginStyle::Cream())]];
+                Top->AddSlot().AutoHeight()[Chips];
+                Top->AddSlot().AutoHeight().Padding(0,14,0,6)[CodexCaption(TEXT("Window"))];
+                Top->AddSlot().AutoHeight()[Host->MakePluginWindowControls(PluginId)];
+                Top->AddSlot().AutoHeight().Padding(0,6,0,0)[SwitchRow(TEXT("Show on plugin bar"),FText::FromString(TEXT("Hide this plugin's button without disabling it.")),
+                    [this,PluginId]{return Host.IsValid()&&Host->IsPluginOnBar(PluginId);},[this,PluginId](bool V){if(Host.IsValid())Host->SetPluginOnBar(PluginId,V);},
+                    FName(*(TEXT("PluginOnBar.")+PluginId)))];
+                Pane->AddSlot().AutoHeight()[Card(Top)];
+            }
+            else Pane->AddSlot().AutoHeight()[CodexText(FText::FromString(TEXT("No plugins installed.")),14,FACEPluginStyle::Cream())];
+            auto Look=SNew(SVerticalBox);
+            Look->AddSlot().AutoHeight().Padding(0,0,0,10)[CodexCaption(TEXT("Appearance · all plugins"))];
+            Look->AddSlot().AutoHeight()[SNew(SHorizontalBox)
+                +SHorizontalBox::Slot().AutoWidth().Padding(0,0,10,0)[ThemeCard(TEXT("codex"),TEXT("Codex"),TEXT("Lobby art, slim gold"))]
+                +SHorizontalBox::Slot().AutoWidth()[ThemeCard(TEXT("original"),TEXT("Original"),TEXT("Classic red and brown"))]];
+            Look->AddSlot().AutoHeight().Padding(0,10,0,0)[SwitchRow(TEXT("Match world color"),TAttribute<FText>::CreateLambda([]
+                {
+                    const FString World=ACELobbyArt::WorldName();
+                    const FString Tint=ACELobbyArt::Tint(ACELobbyArt::WorldTint()).Name;
+                    return FText::FromString(World.IsEmpty()?TEXT("Window backgrounds follow the world chosen at login."):TEXT("Following ")+World+TEXT(" · ")+Tint);
+                }),[this]{return Host.IsValid()&&Host->IsMatchWorldColor();},[this](bool V){if(Host.IsValid())Host->SetMatchWorldColor(V);},TEXT("PluginMatchWorld"))];
+            Look->AddSlot().AutoHeight().Padding(0,8,0,0)[SwitchRow(TEXT("Show plugin bar"),FText::GetEmpty(),[this]{return Host.IsValid()&&Host->IsPluginBarVisible();},
+                [this](bool V){if(Host.IsValid())Host->SetPluginBarVisible(V);})];
+            Look->AddSlot().AutoHeight().Padding(0,8,0,0)[SwitchRow(TEXT("Horizontal plugin bar"),FText::GetEmpty(),[this]{return Host.IsValid()&&Host->IsPluginBarHorizontal();},
+                [this](bool V){if(Host.IsValid())Host->SetPluginBarHorizontal(V);},TEXT("PluginBarHorizontal"))];
+            Look->AddSlot().AutoHeight().HAlign(HAlign_Left).Padding(0,6,0,0)[SNew(SBox).Visibility_Lambda([this]{return Host.IsValid()&&Host->IsPluginBarMinimized()?EVisibility::Visible:EVisibility::Collapsed;})
+                [Plate(TEXT("Expand bar"),[this]{Host->SetPluginBarVisible(true);Host->SetPluginBarMinimized(false);})]];
+            Look->AddSlot().AutoHeight().Padding(0,10,0,0)[Host->MakePluginWindowControls(FString())];
+            Pane->AddSlot().AutoHeight().Padding(0,12,0,0)[Card(Look)];
+            Detail->SetContent(SNew(SScrollBox).ScrollBarStyle(&ScrollStyle())+SScrollBox::Slot().Padding(0,0,8,0)[Pane]);
+        }
         TSharedPtr<FACEClientPlugin> DisplayedPlugin() const
         {
             if(Host.IsValid())for(const auto& P:Host->Plugins)if(P->Id==Id)return P;
@@ -119,7 +349,7 @@ namespace ACEPluginPanelPrivate
             // Reattach existing cards; preserve their controls and the manager's scroll position.
             PluginRows->ClearChildren();
             for(const auto& PluginId:Host->PluginDisplayOrder())if(auto* Row=RowsById.Find(PluginId))
-                PluginRows->AddSlot().AutoHeight().Padding(5)[*Row];
+                PluginRows->AddSlot().AutoHeight().Padding(Retail&&Retail->Codex?FMargin(0,0,0,4):FMargin(5))[*Row];
         }
         void Add(TSharedRef<SWidget> W) { (SettingsBody?SettingsBody:Body)->AddSlot().AutoHeight().Padding(5)[W]; }
         void Save(const TSharedPtr<FACEClientPlugin>& P)
@@ -152,6 +382,7 @@ namespace ACEPluginPanelPrivate
             // scrolling or scrollbar. Keep the manager's normal scrolling.
             auto Display=DisplayedPlugin();SetScrolling(!Display||Display->ScrollPanel());
             Retail=FACEPluginStyle::Use(Host.Get(),Id.IsEmpty()?TEXT("__manager"):Id);ArtworkReady=Retail->HasDatArtwork();
+            if (!PluginOnly && Id.IsEmpty() && Retail->Codex){BuildCodexManager();return;}
             if (!PluginOnly && Id.IsEmpty())
             {
                 auto Header=SNew(SHorizontalBox);
