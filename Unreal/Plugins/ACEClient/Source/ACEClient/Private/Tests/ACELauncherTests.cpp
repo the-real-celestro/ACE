@@ -169,7 +169,7 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
     TestEqual(TEXT("Every saved account is offered on each server"),W->AccountList->GetNumItems(),2);
     W->RunAction(TEXT("accounts"));
     TestEqual(TEXT("Account management has its own page"),W->Pages->GetActiveWidgetIndex(),6);
-    TestEqual(TEXT("Account manager lists the same saved accounts"),W->ManagedAccountList->GetChildrenCount(),2);
+    TestTrue(TEXT("Manage Account edits the selected account"),W->AccountBox->GetText().ToString()==TEXT("Adventurer"));
     W->RunAction(TEXT("play"));
     TestTrue(TEXT("Selected GDLE type stored"),W->Profile.SelectedServer()->bGDLE);
     W->RunAction(TEXT("selectserver"),HomeId);
@@ -185,11 +185,6 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
         auto* Item=PlayItem(1);
         TestTrue(TEXT("Play rows display alias with username"),Item&&Item->Title==TEXT("Coldeve crafter (Adventurer)"));
         TestTrue(TEXT("Play rows distinguish duplicate usernames by stable ID"),Item&&Item->Id==SecondAccountId);
-        auto* Button=Cast<UACELoginActionButton>(W->ManagedAccountList->GetChildAt(1));
-        auto* Size=Button?Cast<USizeBox>(Button->GetContent()):nullptr;
-        auto* Title=Size?Cast<UTextBlock>(Size->GetContent()):nullptr;
-        TestTrue(TEXT("Accounts rows display alias with username"),Title&&Title->GetText().ToString()==TEXT("Coldeve crafter (Adventurer)"));
-        TestTrue(TEXT("Accounts rows distinguish duplicate usernames by stable ID"),Button&&Button->Value==SecondAccountId);
     }
     // Favourites pin to their own list, persist, and leave credentials alone.
     W->RunAction(TEXT("togglefavorite"),SecondAccountId);
@@ -225,8 +220,11 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
     auto DragAccount=[&](const FString& Source,const FString& Target,bool After)
     {
         const FString PreviousFirst=W->Profile.Accounts[0].Id;
-        auto Grip=FindTag(W->ManagedAccountList->TakeWidget(),FName(*(TEXT("AccountOrderGrip.")+Source)));
-        auto Row=FindTag(W->ManagedAccountList->TakeWidget(),FName(*(TEXT("AccountOrderRow.")+Target)));
+        // The same wrapper the Play page's list rows use.
+        const auto SourceRow=ACEMakeAccountOrderRow(W,Source,Source,SNullWidget::NullWidget);
+        const auto TargetRow=ACEMakeAccountOrderRow(W,Target,Target,SNullWidget::NullWidget);
+        auto Grip=FindTag(SourceRow,FName(*(TEXT("AccountOrderGrip.")+Source)));
+        auto Row=FindTag(TargetRow,FName(*(TEXT("AccountOrderRow.")+Target)));
         if (!TestTrue(TEXT("Account rows expose a grip and full-width drop target"),Grip&&Row)) return;
         const FVector2D Position(10,After?35:5);
         const FPointerEvent Mouse(0,Position,Position,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState());
@@ -255,14 +253,25 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
     TestTrue(TEXT("Saved order retains both duplicate identities and selection"),Ordered.Accounts.Num()==2
         && Ordered.Accounts[0].Id==SecondAccountId && Ordered.Accounts[1].Id==FirstAccountId && Ordered.SelectedAccountId==SecondAccountId);
     TestTrue(TEXT("Drag does not save unfinished alias edits"),Ordered.Accounts[0].Alias==TEXT("Coldeve crafter"));
-    TestEqual(TEXT("Accounts tab shows the saved order"),CastChecked<UACELoginActionButton>(W->ManagedAccountList->GetChildAt(0))->Value,SecondAccountId);
     TestTrue(TEXT("Custom sort on Play shows the saved order"),W->AccountList->GetNumItems()>0&&CastChecked<UACELobbyAccountItem>(W->AccountList->GetListItems()[0])->Id==SecondAccountId);
     W->AccountAliasBox->SetText(FText::FromString(TEXT("Coldeve crafter")));
     // Restore upward without disturbing selection or any credentials.
     DragAccount(FirstAccountId,SecondAccountId,false);
     TestEqual(TEXT("Moving up restores the first account"),W->Profile.Accounts[0].Id,FirstAccountId);
     W->RunAction(TEXT("play"));
-    TestFalse(TEXT("An old drag cannot reorder from another page"),W->MoveAccountInOrder(FirstAccountId,SecondAccountId,true));
+    // Under A-Z a drag adopts the order on screen, then switches to Custom.
+    W->RunAction(TEXT("sortaz"));
+    TestTrue(TEXT("Play list drag works under A-Z"),W->MoveAccountInOrder(SecondAccountId,FirstAccountId,true));
+    TestEqual(TEXT("Dragging switches the list to Custom"),W->Profile.AccountSort,FString(TEXT("custom")));
+    TestEqual(TEXT("A-Z drag keeps the dropped position"),W->Profile.Accounts[0].Id,FirstAccountId);
+    W->NativeTick(W->GetCachedGeometry(),0);
+    W->RunAction(TEXT("togglefavorite"),SecondAccountId);
+    TestFalse(TEXT("Accounts cannot be dragged between Favorites and All accounts"),W->MoveAccountInOrder(FirstAccountId,SecondAccountId,false));
+    W->RunAction(TEXT("togglefavorite"),SecondAccountId);
+    W->AccountSearchBox->SetText(FText::FromString(TEXT("co"))); W->OnAccountSearchChanged(W->AccountSearchBox->GetText());
+    TestFalse(TEXT("Reordering is off while a search filter is active"),W->CanReorderAccounts()||W->MoveAccountInOrder(SecondAccountId,FirstAccountId,false));
+    W->RunAction(TEXT("clearsearch"));
+    W->RunAction(TEXT("selectaccount"),SecondAccountId);
     W->RunAction(TEXT("removeaccount")); W->RunAction(TEXT("cancelremove"));
     TestEqual(TEXT("Cancelled removal keeps accounts"),W->Profile.Accounts.Num(),2);
     W->Profile.Servers[0].Description.Reset(); W->SelectServer(HomeId);

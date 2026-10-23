@@ -38,6 +38,7 @@
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
 #include "Components/WidgetSwitcher.h"
+#include "Components/WidgetSwitcherSlot.h"
 #include "Components/WrapBox.h"
 #include "Brushes/SlateRoundedBoxBrush.h"
 #include "Brushes/SlateNoResource.h"
@@ -458,7 +459,7 @@ void UACELoginWidget::EnsureDefaultLayout()
 		auto* B=ActionButton(Sort.Key,Sort.Value); SortButtons.Add(B);
 		auto* SortSlot=AllRow->AddChildToHorizontalBox(B); SortSlot->SetPadding(FMargin(4,0,0,0)); SortSlot->SetVerticalAlignment(VAlign_Center);
 	}
-	SortButtons[2]->SetToolTipText(FText::FromString(TEXT("Your own order. Drag accounts on the Accounts tab to change it.")));
+	SortButtons[2]->SetToolTipText(FText::FromString(TEXT("Your own order. Drag an account by its grip to change it.")));
 	auto* ListArea=WidgetTree->ConstructWidget<UOverlay>();
 	auto* ListAreaSlot=Panel->AddChildToVerticalBox(ListArea); ListAreaSlot->SetSize(Fill);
 	AccountList=WidgetTree->ConstructWidget<UACELobbyAccountListView>(UACELobbyAccountListView::StaticClass(),TEXT("AccountList"));
@@ -661,25 +662,18 @@ void UACELoginWidget::EnsureDefaultLayout()
 	Row(Updates,{{TEXT("Release notes"),TEXT("updatenotes")},{TEXT("Back to play"),TEXT("play")}});
 	auto* PluginPanel=WidgetTree->ConstructWidget<UACEPluginPanel>();
 	Pages->AddChild(Frame(PluginPanel,FMargin(18)));
-	UVerticalBox* Accounts; Pages->AddChild(Card(Accounts,false));
-	AddLine(Accounts,Label(TEXT("Manage accounts"),30));
-	AddLine(Accounts,Label(TEXT("Drag the grip beside an account to reorder. Use New account to add another login, even with the same username."),18,true));
-	// The reorderable list sits beside the edit form and takes the full height of the page
-	// body (about eight rows at the 1440x900 design size, scrolling past that). Stacked
-	// above the form in a Fill slot it was left only the few pixels the retail-styled
-	// fields and plates did not use, which collapsed it to a single thin strip.
-	auto* AccountsBody=WidgetTree->ConstructWidget<UHorizontalBox>();
-	auto* AccountsBodySlot=Accounts->AddChildToVerticalBox(AccountsBody); AccountsBodySlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); AccountsBodySlot->SetPadding(FMargin(0,4,0,0));
-	ManagedAccountList=WidgetTree->ConstructWidget<UScrollBox>(); ManagedAccountList->SetScrollbarThickness(FVector2D(16,16));
-	ManagedAccountList->SetScrollbarPadding(FMargin(6,0,0,0)); ManagedAccountList->SetAlwaysShowScrollbar(false);
-	auto* ManagedMin=WidgetTree->ConstructWidget<USizeBox>(); ManagedMin->SetMinDesiredHeight(200); ManagedMin->SetContent(ManagedAccountList);
-	auto* ManagedSlot=AccountsBody->AddChildToHorizontalBox(Frame(ManagedMin,FMargin(10,10,8,10)));
-	ManagedSlot->SetPadding(FMargin(0,0,20,0)); ManagedSlot->SetVerticalAlignment(VAlign_Fill);
-	{ FSlateChildSize ListShare(ESlateSizeRule::Fill); ListShare.Value=.46f; ManagedSlot->SetSize(ListShare); }
-	auto* AccountForm=WidgetTree->ConstructWidget<UVerticalBox>();
-	{ auto* FormSlot=AccountsBody->AddChildToHorizontalBox(AccountForm); FSlateChildSize FormShare(ESlateSizeRule::Fill); FormShare.Value=.54f; FormSlot->SetSize(FormShare); FormSlot->SetVerticalAlignment(VAlign_Top); }
-	AccountAliasBox=Field(AccountForm,TEXT("Alias (optional)"),TEXT("AccountAliasBox"));
+	// Manage Account edits whichever account is selected in the left list; ordering
+	// happens only there, by dragging. The card hugs its form instead of filling the
+	// page so no empty frame sits beneath the buttons.
+	UVerticalBox* Accounts; auto* AccountsCard=Card(Accounts,false);
+	if (auto* CardSlot=Cast<UWidgetSwitcherSlot>(Pages->AddChild(AccountsCard))) CardSlot->SetVerticalAlignment(VAlign_Top);
+	AddLine(Accounts,Label(TEXT("Manage Account"),30));
+	AddLine(Accounts,Label(TEXT("Edit the selected account. Use New account to add another login, even with the same username."),18,true));
+	auto* AccountForm=Accounts;
 	auto* Credentials=WidgetTree->ConstructWidget<UHorizontalBox>(); AddLine(AccountForm,Credentials,0);
+	auto* AliasColumn=WidgetTree->ConstructWidget<UVerticalBox>(); auto* AliasSlot=Credentials->AddChildToHorizontalBox(AliasColumn);
+	AliasSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); AliasSlot->SetPadding(FMargin(0,0,16,0));
+	AccountAliasBox=Field(AliasColumn,TEXT("Alias (optional)"),TEXT("AccountAliasBox"));
 	auto* UserColumn=WidgetTree->ConstructWidget<UVerticalBox>(); auto* UserSlot=Credentials->AddChildToHorizontalBox(UserColumn);
 	UserSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); UserSlot->SetPadding(FMargin(0,0,16,0));
 	auto* PasswordColumn=WidgetTree->ConstructWidget<UVerticalBox>(); Credentials->AddChildToHorizontalBox(PasswordColumn)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
@@ -841,7 +835,12 @@ void UACELoginWidget::NativeTick(const FGeometry& Geometry, float Dt)
 		if (At(15.f)) RunAction(TEXT("plugins"),FString());
 		if (At(16.f)) Shot(TEXT("Lobby_Plugins.png"));
 		if (At(17.f)) { RunAction(TEXT("play"),FString()); RunAction(TEXT("selectaccount"),LobbyShotAccountId); }
-		if (At(18.f)) FPlatformMisc::RequestExit(false);
+		// Preview only: show where a drop would land; nothing is moved or saved.
+		if (At(17.5f) && AccountList && AccountList->GetNumItems()>1)
+			if (auto* Target=Cast<UACELobbyAccountItem>(AccountList->GetListItems()[1])) ACESetAccountDropPreview(Target->Id);
+		if (At(18.5f)) Shot(TEXT("Lobby_LeftListDrag.png"));
+		if (At(19.f)) ACESetAccountDropPreview(FString());
+		if (At(19.5f)) FPlatformMisc::RequestExit(false);
 	}
 #endif
 	if (UpdateProgressBox)
@@ -962,13 +961,6 @@ void UACELoginWidget::ApplyLobbyArt()
 	}
 	WidgetTree->ForEachWidget([](UWidget* Widget){ if (auto* B=Cast<UACELoginActionButton>(Widget)) ButtonStyle(B,B->bLobbyAccent); });
 	for (auto* List:{AccountList.Get(),FavoriteList.Get()}) if (List) List->ApplyArt();
-	if (ManagedAccountList)
-	{
-		FScrollBarStyle Bar=ManagedAccountList->GetWidgetBarStyle();
-		Bar.SetVerticalBackgroundImage(Art->Track).SetNormalThumbImage(Art->Thumb[0]).SetHoveredThumbImage(Art->Thumb[1]).SetDraggedThumbImage(Art->Thumb[1])
-			.SetVerticalTopSlotImage(FSlateNoResource()).SetVerticalBottomSlotImage(FSlateNoResource()).SetThickness(16.f);
-		ManagedAccountList->SetWidgetBarStyle(Bar);
-	}
 	for (const auto& Frame:LobbyFrames) if (const TSharedPtr<SWidget> Pinned=Frame.Pin()) Pinned->Invalidate(EInvalidateWidgetReason::Paint);
 	StyledPage=INDEX_NONE;
 }
@@ -1126,27 +1118,6 @@ void UACELoginWidget::SelectServer(const FString& Id)
 void UACELoginWidget::RefreshAccounts()
 {
 	bAccountOrderDirty=false;
-	if (ManagedAccountList)
-	{
-		UScrollBox* List=ManagedAccountList;
-		const float ScrollOffset=List->GetScrollOffset();
-		List->ClearChildren();
-		for (const auto& A:Profile.Accounts)
-		{
-			auto* Button=ActionButton(A.DisplayName(),TEXT("selectaccount"),A.Id,A.Id==Profile.SelectedAccountId);
-			Button->bAccountDragHandle=true;
-			Button->SetToolTipText(FText::FromString(A.DisplayName()));
-			if (auto* Size=Cast<USizeBox>(Button->GetContent()))
-			{
-				Size->SetMinDesiredHeight(30);
-				if (auto* ContentSlot=Cast<UButtonSlot>(Size->Slot)) ContentSlot->SetHorizontalAlignment(HAlign_Fill); // Names read from the left, like the sidebar list.
-				if (auto* Caption=Cast<UTextBlock>(Size->GetContent())) Caption->SetJustification(ETextJustify::Left);
-			}
-			auto* RowSlot=Cast<UScrollBoxSlot>(List->AddChild(Button)); RowSlot->SetPadding(FMargin(0,0,0,5)); RowSlot->SetHorizontalAlignment(HAlign_Fill);
-		}
-		if (!List->GetChildrenCount()) List->AddChild(Label(TEXT("No saved accounts yet. Enter a username and password, then Save account."),16,true));
-		List->SetScrollOffset(ScrollOffset);
-	}
 	RefreshAccountLists();
 }
 
@@ -1242,23 +1213,47 @@ void UACELoginWidget::MoveAccountSelection(int32 Delta)
 
 bool UACELoginWidget::CanReorderAccounts() const
 {
-	return Pages && Pages->GetActiveWidgetIndex()==6 && PendingRemoval.IsEmpty();
+	// The left account list is always on screen; drags are off while a search filter
+	// hides rows (the drop position would be ambiguous) or a removal awaits confirmation.
+	return Pages && PendingRemoval.IsEmpty() && !IsConnectScreenVisible()
+		&& (!AccountSearchBox || AccountSearchBox->GetText().ToString().TrimStartAndEnd().IsEmpty());
+}
+
+bool UACELoginWidget::CanMoveAccount(const FString& Id, const FString& TargetId) const
+{
+	if (!CanReorderAccounts() || Id==TargetId) return false;
+	const auto* A=Profile.Accounts.FindByPredicate([&](const auto& E){return E.Id==Id;});
+	const auto* T=Profile.Accounts.FindByPredicate([&](const auto& E){return E.Id==TargetId;});
+	// Favorites and All accounts are separate groups; the star moves between them.
+	return A && T && A->bFavorite==T->bFavorite;
 }
 
 bool UACELoginWidget::MoveAccountInOrder(const FString& Id, const FString& TargetId, bool bAfter)
 {
-	if (!CanReorderAccounts() || Id==TargetId) return false;
-	const int32 From=Profile.Accounts.IndexOfByPredicate([&](const auto& A){return A.Id==Id;});
-	const int32 Target=Profile.Accounts.IndexOfByPredicate([&](const auto& A){return A.Id==TargetId;});
+	if (!CanMoveAccount(Id,TargetId)) return false;
+	// A drag starts from what is on screen: under A-Z or Recent, adopt that order
+	// first, then switch the list to Custom so the dropped position sticks.
+	TArray<FACELoginAccount> Order=Profile.Accounts;
+	const bool bCustom=Profile.AccountSort==TEXT("custom");
+	if (!bCustom)
+	{
+		auto ByName=[](const FACELoginAccount& X, const FACELoginAccount& Y){ return X.DisplayName().Compare(Y.DisplayName(),ESearchCase::IgnoreCase)<0; };
+		if (Profile.AccountSort==TEXT("recent")) Algo::StableSort(Order,[ByName](const FACELoginAccount& X, const FACELoginAccount& Y){ return X.LastUsed!=Y.LastUsed?X.LastUsed>Y.LastUsed:ByName(X,Y); });
+		else Algo::StableSort(Order,ByName);
+	}
+	const int32 From=Order.IndexOfByPredicate([&](const auto& A){return A.Id==Id;});
+	const int32 Target=Order.IndexOfByPredicate([&](const auto& A){return A.Id==TargetId;});
 	if (From==INDEX_NONE || Target==INDEX_NONE) return false;
 	int32 To=Target+(bAfter?1:0);
 	if (From<To) --To;
 	if (From==To) return false;
 	// Move the entire identity; usernames need not be unique. Leave selection
 	// and any unsaved form edits alone, and use the existing profile format.
-	FACELoginAccount Account=MoveTemp(Profile.Accounts[From]);
-	Profile.Accounts.RemoveAt(From);
-	Profile.Accounts.Insert(MoveTemp(Account),To);
+	FACELoginAccount Account=MoveTemp(Order[From]);
+	Order.RemoveAt(From);
+	Order.Insert(MoveTemp(Account),To);
+	Profile.Accounts=MoveTemp(Order);
+	Profile.AccountSort=TEXT("custom");
 	bLoginEntriesDirty=true;
 	SaveLoginEntries();
 	// Rebuild both lists after the drop callback has finished using the row.

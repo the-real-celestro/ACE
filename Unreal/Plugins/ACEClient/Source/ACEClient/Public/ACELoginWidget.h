@@ -17,6 +17,12 @@ class UACELoginWidget;
 class UACELobbyAccountListView;
 class UACELobbyAccountItem;
 
+/** Wraps an account row with a drag grip and insertion-line drop target (ACELoginAccountOrder.cpp). */
+TSharedRef<SWidget> ACEMakeAccountOrderRow(TAttribute<UACELoginWidget*> Owner, TAttribute<FString> Id, TAttribute<FString> Title, TSharedRef<SWidget> Content);
+#if !UE_BUILD_SHIPPING
+void ACESetAccountDropPreview(const FString& Id);
+#endif
+
 /** Payload-bearing buttons avoid native popup windows, which do not render in VR. */
 UCLASS()
 class UACELoginActionButton : public UButton
@@ -24,14 +30,11 @@ class UACELoginActionButton : public UButton
 	GENERATED_BODY()
 public:
 	FString Action, Value;
-	bool bAccountDragHandle = false;
 	/** Retail art used for this button (see ACELoginLobby.cpp), and whether it is the active/selected one. */
 	uint8 LobbyStyle = 0;
 	bool bLobbyAccent = false;
 	UPROPERTY() TWeakObjectPtr<UACELoginWidget> Owner;
 	UFUNCTION() void HandleAction();
-protected:
-	virtual TSharedRef<SWidget> RebuildWidget() override;
 };
 
 /** A single clickable character-list row. Carries its own list index so a shared OnClicked
@@ -64,6 +67,8 @@ class ACECLIENT_API UACELoginWidget : public UUserWidget
 public:
 	void RunAction(const FString& Action, const FString& Value = FString());
 	bool CanReorderAccounts() const;
+	/** True when Id can be dropped beside TargetId (same group, no search filter). */
+	bool CanMoveAccount(const FString& Id, const FString& TargetId) const;
 	bool MoveAccountInOrder(const FString& Id, const FString& TargetId, bool bAfter);
 	virtual void NativeConstruct() override;
 	virtual void NativeDestruct() override;
@@ -175,7 +180,6 @@ protected:
 	UFUNCTION() void OnAccountSearchCommitted(const FText& Text, ETextCommit::Type CommitMethod);
 	UTextBlock* Heading(const FString& Text, int32 FancySize = 24);
 	UWidget* Frame(UWidget* Content, const FMargin& Padding);
-	UPROPERTY() TObjectPtr<UScrollBox> ManagedAccountList;
 	UPROPERTY() TObjectPtr<UScrollBox> BrowserList;
 	UPROPERTY() TObjectPtr<UTextBlock> ServerTitle;
 	UPROPERTY() TObjectPtr<UTextBlock> ServerDetail;

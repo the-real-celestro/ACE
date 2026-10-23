@@ -98,7 +98,13 @@ TSharedRef<SWidget> UACELobbyAccountRow::RebuildWidget()
 		auto* NameSlot = Line->AddChildToHorizontalBox(Name);
 		NameSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); NameSlot->SetVerticalAlignment(VAlign_Center);
 	}
-	return Super::RebuildWidget();
+	// Rows are recycled, so the grip and drop target read the current item each time.
+	TWeakObjectPtr<UACELobbyAccountRow> Self(this);
+	return ACEMakeAccountOrderRow(
+		TAttribute<UACELoginWidget*>::CreateLambda([Self]() -> UACELoginWidget* { return Self.IsValid()&&Self->Item?Self->Item->Owner.Get():nullptr; }),
+		TAttribute<FString>::CreateLambda([Self]() { return Self.IsValid()&&Self->Item?Self->Item->Id:FString(); }),
+		TAttribute<FString>::CreateLambda([Self]() { return Self.IsValid()&&Self->Item?Self->Item->Title:FString(); }),
+		Super::RebuildWidget());
 }
 
 void UACELobbyAccountRow::NativeOnListItemObjectSet(UObject* ListItemObject)
