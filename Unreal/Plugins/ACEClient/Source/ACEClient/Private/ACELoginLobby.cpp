@@ -50,6 +50,8 @@
 #include "Widgets/SWidget.h"
 #include "Widgets/SLeafWidget.h"
 #include "Rendering/DrawElements.h"
+#include "Engine/Texture2D.h"
+#include "Framework/Application/SlateApplication.h"
 #if PLATFORM_WINDOWS
 #include "Windows/WindowsHWrapper.h"
 #include <shobjidl.h>
@@ -109,6 +111,84 @@ namespace
 	{
 		Box->AddChildToVerticalBox(Child)->SetPadding(FMargin(0,0,0,Bottom));
 	}
+}
+
+/** Retail progress-meter art from the connect layout (local DAT 0x21000000): fifteen
+ *  animation frames each of the filled (blue mana) and empty glass vial, 325x52. */
+struct FACEVialArt
+{
+	TArray<FSlateBrush> Full, Empty;
+	bool IsReady() const { return Full.Num() > 0 && Full.Num() == Empty.Num(); }
+};
+
+namespace
+{
+	constexpr uint32 ACETitleLogoId = 0x06001343u; // 800x482 gold-ring title art
+	const uint32 ACEVialFullIds[] = {0x0600195Cu,0x0600195Du,0x0600195Eu,0x0600195Fu,0x06001960u,0x06001961u,0x06001962u,0x06001963u,
+		0x06001964u,0x06001965u,0x06001970u,0x06001971u,0x06001972u,0x06001973u,0x06001974u};
+	const uint32 ACEVialEmptyIds[] = {0x06001966u,0x06001967u,0x06001968u,0x06001969u,0x0600196Au,0x0600196Bu,0x0600196Cu,0x0600196Du,
+		0x0600196Eu,0x0600196Fu,0x06001975u,0x06001976u,0x06001977u,0x06001978u,0x06001979u};
+	constexpr float VialW = 325.f, VialH = 52.f;
+
+	/** Draws one retail vial: the empty glass, then the filled frame revealed left to right
+	 *  with a gently rippling front edge. Falls back to a plain bar until DAT art loads. */
+	class SACEManaVial : public SLeafWidget
+	{
+	public:
+		SLATE_BEGIN_ARGS(SACEManaVial) {} SLATE_ATTRIBUTE(float, Fill) SLATE_ARGUMENT(TSharedPtr<FACEVialArt>, Art) SLATE_END_ARGS()
+		void Construct(const FArguments& Args)
+		{
+			Fill = Args._Fill; Art = Args._Art;
+			RegisterActiveTimer(0.f, FWidgetActiveTimerDelegate::CreateSP(this, &SACEManaVial::Animate));
+		}
+		EActiveTimerReturnType Animate(double, float)
+		{
+			Invalidate(EInvalidateWidgetReason::Paint);
+			return EActiveTimerReturnType::Continue;
+		}
+		FVector2D ComputeDesiredSize(float) const override { return FVector2D(VialW, VialH); }
+		int32 OnPaint(const FPaintArgs&, const FGeometry& G, const FSlateRect&, FSlateWindowElementList& Out, int32 Layer, const FWidgetStyle& Style, bool) const override
+		{
+			const FVector2D Size = G.GetLocalSize();
+			if (Size.X <= 0 || Size.Y <= 0) return Layer;
+			const double Scale = FMath::Min(Size.X / VialW, Size.Y / VialH);
+			const FGeometry ArtGeo = G.MakeChild(FVector2D(VialW, VialH), FSlateLayoutTransform(Scale, (Size - FVector2D(VialW, VialH) * Scale) * .5));
+			const float F = FMath::Clamp(Fill.Get(0.f), 0.f, 1.f);
+			const double Now = FSlateApplication::IsInitialized() ? FSlateApplication::Get().GetCurrentTime() : FPlatformTime::Seconds();
+			const FLinearColor Tint = Style.GetColorAndOpacityTint();
+			if (Art.IsValid() && Art->IsReady())
+			{
+				const int32 Frame = FMath::Clamp(int32(FMath::Fmod(Now * 12.0, double(Art->Full.Num()))), 0, Art->Full.Num() - 1);
+				FSlateDrawElement::MakeBox(Out, Layer, ArtGeo.ToPaintGeometry(), &Art->Empty[Frame], ESlateDrawEffect::None, Tint);
+				if (F > 0.f)
+				{
+					// Horizontal bands each get their own edge offset so the mana front ripples.
+					constexpr int32 Bands = 13; constexpr float BandH = VialH / Bands;
+					const float Ripple = F < .995f ? 3.f * FMath::Min(1.f, F * 20.f) : 0.f;
+					for (int32 B = 0; B < Bands; ++B)
+					{
+						const float Y0 = B * BandH;
+						const float X = FMath::Clamp(F * VialW + Ripple * float(FMath::Sin(Now * 5.0 + B * .8)), 0.f, VialW);
+						if (X <= .5f) continue;
+						FSlateBrush Slice = Art->Full[Frame];
+						Slice.SetUVRegion(FBox2f(FVector2f(0.f, Y0 / VialH), FVector2f(X / VialW, (Y0 + BandH) / VialH)));
+						FSlateDrawElement::MakeBox(Out, Layer + 1, ArtGeo.ToPaintGeometry(FVector2D(X, BandH), FSlateLayoutTransform(FVector2D(0, Y0))),
+							&Slice, ESlateDrawEffect::None, Tint);
+					}
+				}
+				return Layer + 1;
+			}
+			static const FSlateRoundedBoxBrush Glass(FLinearColor(.02f, .018f, .015f, 1), 10.f, FLinearColor(.25f, .2f, .12f, 1), 1.f);
+			static const FSlateRoundedBoxBrush Mana(FLinearColor(.05f, .3f, 1.f, 1), 8.f);
+			FSlateDrawElement::MakeBox(Out, Layer, ArtGeo.ToPaintGeometry(FVector2D(VialW - 16, 18), FSlateLayoutTransform(FVector2D(8, 17))), &Glass, ESlateDrawEffect::None, Tint);
+			if (F > 0.f)
+				FSlateDrawElement::MakeBox(Out, Layer + 1, ArtGeo.ToPaintGeometry(FVector2D((VialW - 20) * F, 12), FSlateLayoutTransform(FVector2D(10, 20))), &Mana, ESlateDrawEffect::None, Tint);
+			return Layer + 1;
+		}
+	private:
+		TAttribute<float> Fill;
+		TSharedPtr<FACEVialArt> Art;
+	};
 }
 
 void UACELoginActionButton::HandleAction()
@@ -337,8 +417,12 @@ void UACELoginWidget::EnsureDefaultLayout()
 	AddLine(Updates,AutoUpdateCheckBox,8);
 	AddLine(Updates,Label(TEXT("Off by default. When enabled, checks every 15 minutes in the launcher and updates before you log in. Never interrupts gameplay. Cancel pauses automatic updates until the next app launch or Check now."),16,true));
 	UpdateText=Label(TEXT("Checking for updates..."),20); AddLine(Updates,UpdateText,20);
-	UpdateProgress=WidgetTree->ConstructWidget<UProgressBar>(); UpdateProgress->SetFillColorAndOpacity(Gold);
-	auto* ProgressSize=WidgetTree->ConstructWidget<USizeBox>(); ProgressSize->SetHeightOverride(16); ProgressSize->SetContent(UpdateProgress); AddLine(Updates,ProgressSize,20);
+	if (!VialArt) VialArt=MakeShared<FACEVialArt>();
+	TWeakObjectPtr<UACELoginWidget> WeakThis(this);
+	auto* UpdateVial=WidgetTree->ConstructWidget<UNativeWidgetHost>(); UpdateVial->SetVisibility(ESlateVisibility::HitTestInvisible);
+	UpdateVial->SetContent(SNew(SACEManaVial).Art(VialArt).Fill_Lambda([WeakThis](){return WeakThis.IsValid()?WeakThis->UpdatePageFill:0.f;}));
+	auto* ProgressSize=WidgetTree->ConstructWidget<USizeBox>(); ProgressSize->SetWidthOverride(VialW); ProgressSize->SetHeightOverride(VialH); ProgressSize->SetContent(UpdateVial);
+	AddLine(Updates,ProgressSize,20); Cast<UVerticalBoxSlot>(ProgressSize->Slot)->SetHorizontalAlignment(HAlign_Left);
 	auto* UpdateActions=WidgetTree->ConstructWidget<UWrapBox>(); UpdateActions->SetInnerSlotPadding(FVector2D(10,10)); AddLine(Updates,UpdateActions,20);
 	CheckUpdateButton=ActionButton(TEXT("Check now"),TEXT("checkupdate")); UpdateActions->AddChildToWrapBox(CheckUpdateButton);
 	DownloadUpdateButton=ActionButton(TEXT("Download update"),TEXT("downloadupdate"),FString(),true); UpdateActions->AddChildToWrapBox(DownloadUpdateButton);
@@ -389,6 +473,32 @@ void UACELoginWidget::EnsureDefaultLayout()
 	// Retained for Blueprint/test compatibility; retail DAT owns character selection.
 	EnterWorldButton=ActionButton(TEXT("Enter world"),TEXT("enter")); EnterWorldButton->SetVisibility(ESlateVisibility::Collapsed);
 	CharacterListLabel=Label(TEXT("")); CharacterListBox=WidgetTree->ConstructWidget<UScrollBox>();
+	// Retail connect screen (layout 0x21000000, authored at 800x600): logo at the top,
+	// Connect and Update progress vials beneath, letterboxed in black over the lobby.
+	ConnectScreen=WidgetTree->ConstructWidget<UBorder>(); ConnectScreen->SetBrush(FSlateRoundedBoxBrush(FLinearColor::Black,0.f)); ConnectScreen->SetPadding(FMargin(0));
+	auto* ConnectSlot=Canvas->AddChildToCanvas(ConnectScreen); ConnectSlot->SetAnchors(FAnchors(0,0,1,1)); ConnectSlot->SetOffsets(FMargin(0));
+	ConnectScreen->SetHorizontalAlignment(HAlign_Fill); ConnectScreen->SetVerticalAlignment(VAlign_Fill);
+	auto* ConnectFit=WidgetTree->ConstructWidget<UScaleBox>(); ConnectFit->SetStretch(EStretch::ScaleToFit); ConnectScreen->SetContent(ConnectFit);
+	auto* ConnectFrame=WidgetTree->ConstructWidget<USizeBox>(); ConnectFrame->SetWidthOverride(800); ConnectFrame->SetHeightOverride(600); ConnectFit->SetContent(ConnectFrame);
+	auto* ConnectCanvas=WidgetTree->ConstructWidget<UCanvasPanel>(); ConnectFrame->SetContent(ConnectCanvas);
+	auto Place=[&](UWidget* W,float X,float Y,float Wd,float Ht){auto* S=ConnectCanvas->AddChildToCanvas(W); S->SetPosition(FVector2D(X,Y)); S->SetSize(FVector2D(Wd,Ht));};
+	ConnectLogo=WidgetTree->ConstructWidget<UImage>(); ConnectLogo->SetVisibility(ESlateVisibility::HitTestInvisible); ConnectLogo->SetRenderOpacity(0);
+	Place(ConnectLogo,0,30,800,482);
+	for (int32 I=0;I<2;++I)
+	{
+		auto* Host=WidgetTree->ConstructWidget<UNativeWidgetHost>(); Host->SetVisibility(ESlateVisibility::HitTestInvisible);
+		Host->SetContent(SNew(SACEManaVial).Art(VialArt).Fill_Lambda([WeakThis,I](){return WeakThis.IsValid()?(I?WeakThis->UpdateVialFill:WeakThis->ConnectFill):0.f;}));
+		Place(Host,I?420.f:40.f,511,VialW,VialH);
+	}
+	auto MakeConnectText=[&](float X,float Y,float Wd,float Ht,int32 Size)
+	{
+		auto* T=Label(TEXT(""),Size); T->SetJustification(ETextJustify::Center); T->SetColorAndOpacity(FLinearColor::White); Place(T,X,Y,Wd,Ht); return T;
+	};
+	ConnectLabel=MakeConnectText(28,562,354,30,14); ConnectLabel->SetAutoWrapText(false);
+	ConnectUpdateLabel=MakeConnectText(408,562,354,30,14); ConnectUpdateLabel->SetAutoWrapText(false);
+	ConnectDetail=MakeConnectText(60,452,680,56,16);
+	ConnectCancelButton=ActionButton(TEXT("Cancel"),TEXT("cancelconnect")); Place(ConnectCancelButton,680,24,104,42);
+	ConnectScreen->SetVisibility(ESlateVisibility::Collapsed);
 }
 
 void UACELoginWidget::NativeConstruct()
@@ -465,6 +575,7 @@ void UACELoginWidget::NativeTick(const FGeometry& Geometry, float Dt)
 			}
 			bRetailFontsReady=true;
 		}
+		LoadVialArt();
 		if (Updater)
 		{
 			Updater->PollInstall();
@@ -475,6 +586,8 @@ void UACELoginWidget::NativeTick(const FGeometry& Geometry, float Dt)
 		}
 		RefreshUpdateControls();
 	}
+	TickConnectScreen(Dt);
+	UpdatePageFill=FMath::FInterpTo(UpdatePageFill,UpdatePageTarget,Dt,6.f);
 	if(StyledPage!=Pages->GetActiveWidgetIndex())
 	{
 		StyledPage=Pages->GetActiveWidgetIndex();
@@ -528,7 +641,7 @@ void UACELoginWidget::RefreshUpdateControls()
 	if (UpdateText->GetText().ToString()!=Text) UpdateText->SetText(FText::FromString(Text));
 	UpdateText->SetColorAndOpacity(LobbyTextColor);
 	UpdateInstallHelp->SetVisibility(State==EACEUpdateState::Ready || State==EACEUpdateState::InstallNotice || State==EACEUpdateState::Installing?ESlateVisibility::Collapsed:ESlateVisibility::HitTestInvisible);
-	UpdateProgress->SetPercent(State==EACEUpdateState::Ready || State==EACEUpdateState::InstallNotice || State==EACEUpdateState::Installing?1.f:Updater->Progress());
+	UpdatePageTarget=State==EACEUpdateState::Ready || State==EACEUpdateState::InstallNotice || State==EACEUpdateState::Installing?1.f:Updater->Progress();
 	CheckUpdateButton->SetIsEnabled(!Busy && State!=EACEUpdateState::Checking);
 	DownloadUpdateButton->SetVisibility(Available && !Busy && State!=EACEUpdateState::Ready?ESlateVisibility::Visible:ESlateVisibility::Collapsed);
 	InstallUpdateButton->SetVisibility(!PLATFORM_MAC && State==EACEUpdateState::Ready?ESlateVisibility::Visible:ESlateVisibility::Collapsed);
@@ -676,7 +789,12 @@ void UACELoginWidget::DoLogin()
 	{
 		if (auto* GI=GetGameInstance()) if (auto* Dat=GI->GetSubsystem<UACEDatSubsystem>()) Dat->BeginBackgroundLoad(true);
 		SetStatus(TEXT("Connecting..."));
-		if (!Client->Login(S->Host,S->Port,Profile.Account,Profile.Password,S->bGDLE)) SetStatus(TEXT("Could not start the connection. Check the server address."));
+		// Connect() resets the previous session first; that Disconnected is not a cancel.
+		bSuppressConnectDisconnect=true;
+		const bool bStarted=Client->Login(S->Host,S->Port,Profile.Account,Profile.Password,S->bGDLE);
+		bSuppressConnectDisconnect=false;
+		if (!bStarted) { EndConnectScreen(); SetStatus(TEXT("Could not start the connection. Check the server address.")); }
+		else if (Client->GetSessionState()!=EACESessionState::Failed && Client->GetSessionState()!=EACESessionState::Disconnected) ShowConnectScreen();
 	}
 }
 
@@ -780,6 +898,15 @@ void UACELoginWidget::SetPasswordVisible(bool bVisible)
 void UACELoginWidget::RunAction(const FString& Action, const FString& Value)
 {
 	if(Action==TEXT("togglepassword")){SetPasswordVisible(PasswordBox&&PasswordBox->GetIsPassword());return;}
+	if(Action==TEXT("cancelconnect"))
+	{
+		// Drops the half-open session (the server is told to disconnect) and returns to the lobby.
+		const auto Session=Client?Client->GetSession():nullptr;
+		EndConnectScreen();
+		if(Session && Session->GetState()!=EACESessionState::Disconnected) Session->Disconnect();
+		SetStatus(TEXT("Connection cancelled."));
+		return;
+	}
 	// Reveal is temporary UI state, never a saved account preference.
 	if(Action==TEXT("play")||Action==TEXT("plugins")||Action==TEXT("updates")||Action==TEXT("files")||Action==TEXT("browser")||Action==TEXT("launch")||Action==TEXT("newaccount"))SetPasswordVisible(false);
 	if (Action==TEXT("quit"))
@@ -914,4 +1041,100 @@ void UACELoginWidget::RunAction(const FString& Action, const FString& Value)
 #endif
 	}
 	SaveLoginEntries();
+}
+
+bool UACELoginWidget::IsConnectScreenVisible() const
+{
+	return ConnectScreen && ConnectScreen->GetVisibility()!=ESlateVisibility::Collapsed;
+}
+
+void UACELoginWidget::ShowConnectScreen()
+{
+	if (!ConnectScreen) return;
+	ConnectFailTime=-1;
+	if (!IsConnectScreenVisible())
+	{
+		// Both vials start empty, like retail, and fill as each stage completes.
+		ConnectFill=UpdateVialFill=0;
+		SetConnectStep(.05f,.25f,TEXT("Connecting to server..."));
+		ConnectDetail->SetText(FText::GetEmpty());
+		ConnectCancelButton->SetVisibility(ESlateVisibility::Visible);
+		ConnectScreen->SetVisibility(ESlateVisibility::Visible);
+		LoadVialArt();
+	}
+}
+
+void UACELoginWidget::EndConnectScreen()
+{
+	ConnectFailTime=-1;
+	if (ConnectScreen) ConnectScreen->SetVisibility(ESlateVisibility::Collapsed);
+}
+
+void UACELoginWidget::SetConnectStep(float Base, float Cap, const FString& Text)
+{
+	ConnectStepBase=Base; ConnectStepCap=Cap; ConnectStepTime=0;
+	if (ConnectLabel && ConnectLabel->GetText().ToString()!=Text) ConnectLabel->SetText(FText::FromString(Text));
+}
+
+float UACELoginWidget::UpdateVialTarget(FString& Text) const
+{
+	if (!Updater) { Text=TEXT("Update progress"); return 0.f; }
+	switch (Updater->State)
+	{
+	case EACEUpdateState::Checking: Text=TEXT("Checking for updates..."); return .6f;
+	case EACEUpdateState::Current: Text=TEXT("Patching Done!"); return 1.f; // Retail wording.
+	case EACEUpdateState::Available:
+		Text=Updater->Release.Version.IsEmpty()?FString(TEXT("Update available")):FString::Printf(TEXT("Update %s available"),*Updater->Release.Version);
+		return 1.f;
+	case EACEUpdateState::Downloading: Text=FString::Printf(TEXT("Downloading update %.0f%%"),Updater->Progress()*100); return Updater->Progress();
+	case EACEUpdateState::Verifying: Text=TEXT("Verifying update..."); return FMath::Max(Updater->Progress(),.95f);
+	case EACEUpdateState::Ready: Text=TEXT("Update ready to install"); return 1.f;
+	case EACEUpdateState::InstallNotice:
+	case EACEUpdateState::Installing: Text=TEXT("Installing update..."); return 1.f;
+	case EACEUpdateState::Error: Text=TEXT("Could not check for updates"); return 0.f;
+	default: Text=TEXT("Updates not checked"); return 0.f;
+	}
+}
+
+void UACELoginWidget::TickConnectScreen(float Dt)
+{
+	if (!IsConnectScreenVisible()) return;
+	ConnectStepTime+=Dt;
+	float Target;
+	if (ConnectFailTime>=0)
+	{
+		ConnectFailTime+=Dt; Target=0;
+		// Drain, let the reason be read, then return to the lobby (which shows it too).
+		if (ConnectFailTime>3.f && ConnectFill<.01f) { EndConnectScreen(); return; }
+	}
+	else // Creep toward the next stage while waiting so a slow server still looks alive.
+		Target=ConnectStepBase+(ConnectStepCap-ConnectStepBase)*.8f*(1.f-FMath::Exp(-ConnectStepTime/3.f));
+	ConnectFill=FMath::FInterpTo(ConnectFill,Target,Dt,ConnectFailTime>=0?2.f:4.f);
+	FString UpdateTextValue; const float UpdateTarget=UpdateVialTarget(UpdateTextValue);
+	UpdateVialFill=FMath::FInterpTo(UpdateVialFill,UpdateTarget,Dt,Updater&&Updater->State==EACEUpdateState::Checking?.6f:4.f);
+	if (ConnectUpdateLabel && ConnectUpdateLabel->GetText().ToString()!=UpdateTextValue) ConnectUpdateLabel->SetText(FText::FromString(UpdateTextValue));
+}
+
+void UACELoginWidget::LoadVialArt()
+{
+	if (!VialArt) VialArt=MakeShared<FACEVialArt>();
+	const bool bLogoReady=!ConnectLogo || ConnectLogo->GetRenderOpacity()>0;
+	if (VialArt->IsReady() && bLogoReady) return;
+	auto* GI=GetGameInstance(); auto* Dat=GI?GI->GetSubsystem<UACEDatSubsystem>():nullptr;
+	if (!Dat || !Dat->IsDatReady() || !Dat->GetUiResources()) return;
+	UACEUIResourceResolver* Res=Dat->GetUiResources();
+	if (!bLogoReady)
+		if (UTexture2D* Logo=Res->ResolveTexture(ACETitleLogoId)) { VialTextures.Add(Logo); ConnectLogo->SetBrushFromTexture(Logo); ConnectLogo->SetRenderOpacity(1); }
+	if (VialArt->IsReady()) return;
+	TArray<FSlateBrush> Full, Empty;
+	for (int32 I=0;I<UE_ARRAY_COUNT(ACEVialFullIds);++I)
+	{
+		UTexture2D* A=Res->ResolveTexture(ACEVialFullIds[I]); UTexture2D* B=Res->ResolveTexture(ACEVialEmptyIds[I]);
+		if (!A || !B) return; // Retry on the next poll; the plain bar is drawn meanwhile.
+		VialTextures.AddUnique(A); VialTextures.AddUnique(B);
+		FSlateBrush Brush; Brush.DrawAs=ESlateBrushDrawType::Image; Brush.ImageSize=FVector2D(VialW,VialH);
+		Brush.SetResourceObject(A); Full.Add(Brush);
+		Brush.SetResourceObject(B); Empty.Add(Brush);
+	}
+	VialArt->Full=MoveTemp(Full); VialArt->Empty=MoveTemp(Empty);
 }

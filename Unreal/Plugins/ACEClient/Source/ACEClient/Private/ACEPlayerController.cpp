@@ -5018,6 +5018,7 @@ void AACEPlayerController::TickPendingCharacterSelect()
 		{
 			UE_LOG(LogTemp, Warning, TEXT("ACE: %s"), *CharacterSelectLoadError);
 			bPendingCharSelect = false;
+			if (LoginWidget) LoginWidget->EndConnectScreen(); // Show the error and Login retry.
 		}
 		return;
 	}

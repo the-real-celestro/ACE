@@ -96,6 +96,11 @@ public:
 	/** Keep the launcher backdrop opaque, including when returning from the game. */
 	void SetUseDatIntroBackdrop(bool bUse);
 
+	/** Retail connect screen (local DAT layout 0x21000000): the title logo with the
+	 *  Connect/Update progress vials, shown from Login until character selection. */
+	void EndConnectScreen();
+	bool IsConnectScreenVisible() const;
+
 protected:
 	friend class FACEMissingDatLoginTest;
 	friend class FACELauncherWidgetTest;
@@ -146,7 +151,22 @@ protected:
 	UPROPERTY() TObjectPtr<class UACEUpdateSubsystem> Updater;
 	UPROPERTY() TObjectPtr<UTextBlock> UpdateText;
 	UPROPERTY() TObjectPtr<UTextBlock> UpdateInstallHelp;
-	UPROPERTY() TObjectPtr<class UProgressBar> UpdateProgress;
+	UPROPERTY() TObjectPtr<UBorder> ConnectScreen;
+	UPROPERTY() TObjectPtr<class UImage> ConnectLogo;
+	UPROPERTY() TObjectPtr<UTextBlock> ConnectLabel;
+	UPROPERTY() TObjectPtr<UTextBlock> ConnectUpdateLabel;
+	UPROPERTY() TObjectPtr<UTextBlock> ConnectDetail;
+	UPROPERTY() TObjectPtr<UACELoginActionButton> ConnectCancelButton;
+	UPROPERTY() TArray<TObjectPtr<class UTexture2D>> VialTextures;
+	TSharedPtr<struct FACEVialArt> VialArt;
+	float ConnectFill = 0, ConnectStepBase = 0, ConnectStepCap = 0, ConnectStepTime = 0, ConnectFailTime = -1;
+	float UpdateVialFill = 0, UpdatePageFill = 0, UpdatePageTarget = 0;
+	bool bSuppressConnectDisconnect = false;
+	void ShowConnectScreen();
+	void SetConnectStep(float Base, float Cap, const FString& Text);
+	void TickConnectScreen(float DeltaTime);
+	float UpdateVialTarget(FString& Text) const;
+	void LoadVialArt();
 	UPROPERTY() TObjectPtr<UACELoginActionButton> UpdateNavButton;
 	UPROPERTY() TObjectPtr<UButton> CheckUpdateButton;
 	UPROPERTY() TObjectPtr<UButton> DownloadUpdateButton;

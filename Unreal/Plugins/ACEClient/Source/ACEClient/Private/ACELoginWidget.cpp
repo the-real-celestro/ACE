@@ -70,28 +70,54 @@ void UACELoginWidget::DoEnterSelectedCharacter()
 
 void UACELoginWidget::HandleState(EACESessionState NewState)
 {
+	// The retail connect screen's left vial follows the login handshake.
 	switch (NewState)
 	{
-	case EACESessionState::Connecting: SetStatus(TEXT("Connecting...")); break;
-	case EACESessionState::AwaitConnectRequest: SetStatus(TEXT("Awaiting ConnectRequest")); break;
-	case EACESessionState::AwaitCharacterList: SetStatus(TEXT("Waiting for the server's character list...")); break;
+	case EACESessionState::Connecting:
+		SetStatus(TEXT("Connecting..."));
+		ShowConnectScreen();
+		SetConnectStep(.05f, .25f, TEXT("Connecting to server..."));
+		break;
+	case EACESessionState::AwaitConnectRequest:
+		SetStatus(TEXT("Awaiting ConnectRequest"));
+		SetConnectStep(.25f, .5f, TEXT("Logging in..."));
+		break;
+	case EACESessionState::AwaitCharacterList:
+		SetStatus(TEXT("Waiting for the server's character list..."));
+		SetConnectStep(.5f, .8f, TEXT("Receiving character list..."));
+		break;
 	case EACESessionState::CharacterSelect:
 		// The controller removes this card only once the DAT screen is ready.
 		// Do not overwrite a loading failure set by its character-list handler.
+		SetConnectStep(1.f, 1.f, TEXT("Connected!"));
 		break;
 	case EACESessionState::EnteringWorld: SetStatus(TEXT("Entering world...")); break;
 	case EACESessionState::InWorld:
 		SetStatus(TEXT("In world"));
+		EndConnectScreen();
 		SetVisibility(ESlateVisibility::Collapsed);
 		break;
 	case EACESessionState::Disconnected:
 	case EACESessionState::Failed:
 	{
 		const auto Session = Client ? Client->GetSession() : nullptr;
-		SetStatus(NewState == EACESessionState::Failed
+		const FString Reason = NewState == EACESessionState::Failed
 			? (Session && !Session->GetConnectionError().IsEmpty() ? Session->GetConnectionError() : TEXT("Connection failed (see log)"))
-			: TEXT("Disconnected"));
+			: TEXT("Disconnected");
+		SetStatus(Reason);
 		SetVisibility(ESlateVisibility::Visible);
+		if (NewState == EACESessionState::Failed && IsConnectScreenVisible())
+		{
+			// Show the reason while the mana drains, then return to the lobby.
+			SetConnectStep(0.f, 0.f, TEXT("Connection failed"));
+			if (ConnectDetail) ConnectDetail->SetText(FText::FromString(Reason));
+			if (ConnectCancelButton) ConnectCancelButton->SetVisibility(ESlateVisibility::Collapsed);
+			ConnectFailTime = 0.f;
+		}
+		else if (NewState == EACESessionState::Disconnected && !bSuppressConnectDisconnect && ConnectFailTime < 0.f)
+		{
+			EndConnectScreen();
+		}
 		break;
 	}
 	default: break;
