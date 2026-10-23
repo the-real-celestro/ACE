@@ -17,6 +17,7 @@
 #include "Algo/StableSort.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Border.h"
+#include "Components/ButtonSlot.h"
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Components/EditableTextBox.h"
@@ -100,6 +101,7 @@ namespace
 		TAttribute<bool> Revealed;
 		TArray<FVector2D> Outline,Pupil;
 	};
+	const TCHAR* const ServerTypeHint=TEXT("Choose the login type used by this server.");
 	uint8 LobbyStyleFor(const FString& Action)
 	{
 		if (Action==TEXT("launch")) return LobbyRing;
@@ -511,7 +513,7 @@ void UACELoginWidget::EnsureDefaultLayout()
 	UVerticalBox* Confirmation; ConfirmPanel=Card(Confirmation,false); AddLine(Footer,ConfirmPanel,8);
 	ConfirmText=Label(TEXT(""),18); AddLine(Confirmation,ConfirmText);
 	Row(Confirmation,{{TEXT("Remove"),TEXT("confirmremove")},{TEXT("Keep"),TEXT("cancelremove")}}); ConfirmPanel->SetVisibility(ESlateVisibility::Collapsed);
-	auto* StatusBorder=WidgetTree->ConstructWidget<UBorder>(); StatusBorder->SetBrush(FSlateRoundedBoxBrush(FLinearColor(.004f,.008f,.02f,.85f),3.f,FLinearColor(.45f,.36f,.2f,1),1.f));
+	auto* StatusBorder=WidgetTree->ConstructWidget<UBorder>(); StatusBorder->SetBrush(FSlateRoundedBoxBrush(FLinearColor(.008f,.02f,.06f,.75f),0.f,FLinearColor(.62f,.43f,.16f,1),1.f));
 	StatusBorder->SetPadding(FMargin(12,8));
 	StatusText=Label(TEXT(""),16,false,1.f); StatusBorder->SetContent(StatusText); AddLine(Footer,StatusBorder,8);
 	StatusBorder->SetVisibility(ESlateVisibility::Collapsed);
@@ -662,10 +664,22 @@ void UACELoginWidget::EnsureDefaultLayout()
 	UVerticalBox* Accounts; Pages->AddChild(Card(Accounts,false));
 	AddLine(Accounts,Label(TEXT("Manage accounts"),30));
 	AddLine(Accounts,Label(TEXT("Drag the grip beside an account to reorder. Use New account to add another login, even with the same username."),18,true));
-	ManagedAccountList=WidgetTree->ConstructWidget<UScrollBox>(); ManagedAccountList->SetScrollbarThickness(FVector2D(8,8));
-	auto* ManagedSlot=Accounts->AddChildToVerticalBox(ManagedAccountList); ManagedSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); ManagedSlot->SetPadding(FMargin(0,0,0,12));
-	AccountAliasBox=Field(Accounts,TEXT("Alias (optional)"),TEXT("AccountAliasBox"));
-	auto* Credentials=WidgetTree->ConstructWidget<UHorizontalBox>(); AddLine(Accounts,Credentials,0);
+	// The reorderable list sits beside the edit form and takes the full height of the page
+	// body (about eight rows at the 1440x900 design size, scrolling past that). Stacked
+	// above the form in a Fill slot it was left only the few pixels the retail-styled
+	// fields and plates did not use, which collapsed it to a single thin strip.
+	auto* AccountsBody=WidgetTree->ConstructWidget<UHorizontalBox>();
+	auto* AccountsBodySlot=Accounts->AddChildToVerticalBox(AccountsBody); AccountsBodySlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); AccountsBodySlot->SetPadding(FMargin(0,4,0,0));
+	ManagedAccountList=WidgetTree->ConstructWidget<UScrollBox>(); ManagedAccountList->SetScrollbarThickness(FVector2D(16,16));
+	ManagedAccountList->SetScrollbarPadding(FMargin(6,0,0,0)); ManagedAccountList->SetAlwaysShowScrollbar(false);
+	auto* ManagedMin=WidgetTree->ConstructWidget<USizeBox>(); ManagedMin->SetMinDesiredHeight(200); ManagedMin->SetContent(ManagedAccountList);
+	auto* ManagedSlot=AccountsBody->AddChildToHorizontalBox(Frame(ManagedMin,FMargin(10,10,8,10)));
+	ManagedSlot->SetPadding(FMargin(0,0,20,0)); ManagedSlot->SetVerticalAlignment(VAlign_Fill);
+	{ FSlateChildSize ListShare(ESlateSizeRule::Fill); ListShare.Value=.46f; ManagedSlot->SetSize(ListShare); }
+	auto* AccountForm=WidgetTree->ConstructWidget<UVerticalBox>();
+	{ auto* FormSlot=AccountsBody->AddChildToHorizontalBox(AccountForm); FSlateChildSize FormShare(ESlateSizeRule::Fill); FormShare.Value=.54f; FormSlot->SetSize(FormShare); FormSlot->SetVerticalAlignment(VAlign_Top); }
+	AccountAliasBox=Field(AccountForm,TEXT("Alias (optional)"),TEXT("AccountAliasBox"));
+	auto* Credentials=WidgetTree->ConstructWidget<UHorizontalBox>(); AddLine(AccountForm,Credentials,0);
 	auto* UserColumn=WidgetTree->ConstructWidget<UVerticalBox>(); auto* UserSlot=Credentials->AddChildToHorizontalBox(UserColumn);
 	UserSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); UserSlot->SetPadding(FMargin(0,0,16,0));
 	auto* PasswordColumn=WidgetTree->ConstructWidget<UVerticalBox>(); Credentials->AddChildToHorizontalBox(PasswordColumn)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
@@ -682,9 +696,8 @@ void UACELoginWidget::EnsureDefaultLayout()
 	auto* EyeWidth=WidgetTree->ConstructWidget<USizeBox>(); EyeWidth->SetWidthOverride(44); EyeWidth->SetContent(PasswordVisibilityButton);
 	PasswordRow->AddChildToHorizontalBox(EyeWidth)->SetPadding(FMargin(8,0,0,0));
 	SetPasswordVisible(false);
-	Row(Accounts,{{TEXT("Save account"),TEXT("saveaccount")},{TEXT("New account"),TEXT("newaccount")},{TEXT("Remove account"),TEXT("removeaccount")}});
-	AddLine(Accounts,Label(PLATFORM_LINUX ? TEXT("Passwords are kept for this session only. Enter them here after restarting.") : PLATFORM_MAC ? TEXT("Passwords are saved securely in your macOS Keychain.") : TEXT("Accounts are saved securely on this device."),14,true));
-	Row(Accounts,{{TEXT("Back to play"),TEXT("play")}});
+	Row(AccountForm,{{TEXT("Save account"),TEXT("saveaccount")},{TEXT("New account"),TEXT("newaccount")},{TEXT("Remove account"),TEXT("removeaccount")},{TEXT("Back to play"),TEXT("play")}});
+	AddLine(AccountForm,Label(PLATFORM_LINUX ? TEXT("Passwords are kept for this session only. Enter them here after restarting.") : PLATFORM_MAC ? TEXT("Passwords are saved securely in your macOS Keychain.") : TEXT("Accounts are saved securely on this device."),14,true),0);
 	// Retained for Blueprint/test compatibility; retail DAT owns character selection.
 	EnterWorldButton=ActionButton(TEXT("Enter world"),TEXT("enter")); EnterWorldButton->SetVisibility(ESlateVisibility::Collapsed);
 	CharacterListLabel=Label(TEXT("")); CharacterListBox=WidgetTree->ConstructWidget<UScrollBox>();
@@ -823,8 +836,12 @@ void UACELoginWidget::NativeTick(const FGeometry& Geometry, float Dt)
 		if (At(9.f)) Shot(TEXT("Lobby_Files.png"));
 		if (At(10.f)) RunAction(TEXT("updates"),FString());
 		if (At(11.f)) Shot(TEXT("Lobby_Updates.png"));
-		if (At(12.f)) { RunAction(TEXT("play"),FString()); RunAction(TEXT("selectaccount"),LobbyShotAccountId); }
-		if (At(13.f)) FPlatformMisc::RequestExit(false);
+		if (At(12.f)) RunAction(TEXT("browser"),FString());
+		if (At(14.f)) Shot(TEXT("Lobby_Browser.png"));
+		if (At(15.f)) RunAction(TEXT("plugins"),FString());
+		if (At(16.f)) Shot(TEXT("Lobby_Plugins.png"));
+		if (At(17.f)) { RunAction(TEXT("play"),FString()); RunAction(TEXT("selectaccount"),LobbyShotAccountId); }
+		if (At(18.f)) FPlatformMisc::RequestExit(false);
 	}
 #endif
 	if (UpdateProgressBox)
@@ -945,6 +962,13 @@ void UACELoginWidget::ApplyLobbyArt()
 	}
 	WidgetTree->ForEachWidget([](UWidget* Widget){ if (auto* B=Cast<UACELoginActionButton>(Widget)) ButtonStyle(B,B->bLobbyAccent); });
 	for (auto* List:{AccountList.Get(),FavoriteList.Get()}) if (List) List->ApplyArt();
+	if (ManagedAccountList)
+	{
+		FScrollBarStyle Bar=ManagedAccountList->GetWidgetBarStyle();
+		Bar.SetVerticalBackgroundImage(Art->Track).SetNormalThumbImage(Art->Thumb[0]).SetHoveredThumbImage(Art->Thumb[1]).SetDraggedThumbImage(Art->Thumb[1])
+			.SetVerticalTopSlotImage(FSlateNoResource()).SetVerticalBottomSlotImage(FSlateNoResource()).SetThickness(16.f);
+		ManagedAccountList->SetWidgetBarStyle(Bar);
+	}
 	for (const auto& Frame:LobbyFrames) if (const TSharedPtr<SWidget> Pinned=Frame.Pin()) Pinned->Invalidate(EInvalidateWidgetReason::Paint);
 	StyledPage=INDEX_NONE;
 }
@@ -1112,9 +1136,15 @@ void UACELoginWidget::RefreshAccounts()
 			auto* Button=ActionButton(A.DisplayName(),TEXT("selectaccount"),A.Id,A.Id==Profile.SelectedAccountId);
 			Button->bAccountDragHandle=true;
 			Button->SetToolTipText(FText::FromString(A.DisplayName()));
-			Cast<UScrollBoxSlot>(List->AddChild(Button))->SetPadding(FMargin(0,0,0,6));
+			if (auto* Size=Cast<USizeBox>(Button->GetContent()))
+			{
+				Size->SetMinDesiredHeight(30);
+				if (auto* ContentSlot=Cast<UButtonSlot>(Size->Slot)) ContentSlot->SetHorizontalAlignment(HAlign_Fill); // Names read from the left, like the sidebar list.
+				if (auto* Caption=Cast<UTextBlock>(Size->GetContent())) Caption->SetJustification(ETextJustify::Left);
+			}
+			auto* RowSlot=Cast<UScrollBoxSlot>(List->AddChild(Button)); RowSlot->SetPadding(FMargin(0,0,0,5)); RowSlot->SetHorizontalAlignment(HAlign_Fill);
 		}
-		if (!List->GetChildrenCount()) List->AddChild(Label(TEXT("Add a login on the Accounts tab."),18,true));
+		if (!List->GetChildrenCount()) List->AddChild(Label(TEXT("No saved accounts yet. Enter a username and password, then Save account."),16,true));
 		List->SetScrollOffset(ScrollOffset);
 	}
 	RefreshAccountLists();
@@ -1266,7 +1296,7 @@ void UACELoginWidget::EditServer(bool bNew)
 	DescriptionBox->SetText(FText::FromString(S?S->Description:TEXT("")));
 	WebsiteBox->SetText(FText::FromString(S?S->Website:TEXT(""))); DiscordBox->SetText(FText::FromString(S?S->Discord:TEXT("")));
 	ButtonStyle(ACETypeButton,!bEditingGDLE); ButtonStyle(GDLETypeButton,bEditingGDLE); Pages->SetActiveWidgetIndex(1);
-	SetStatus(TEXT("Choose the login type used by this server."));
+	SetStatus(ServerTypeHint);
 }
 
 void UACELoginWidget::DoLogin()
@@ -1432,6 +1462,9 @@ void UACELoginWidget::RunAction(const FString& Action, const FString& Value)
 	}
 	// Reveal is temporary UI state, never a saved account preference.
 	if(Action==TEXT("play")||Action==TEXT("plugins")||Action==TEXT("updates")||Action==TEXT("files")||Action==TEXT("browser")||Action==TEXT("launch")||Action==TEXT("newaccount"))SetPasswordVisible(false);
+	// The server editor's hint belongs to that page; don't leave it over the next tab.
+	if((Action==TEXT("play")||Action==TEXT("accounts")||Action==TEXT("plugins")||Action==TEXT("updates")||Action==TEXT("files")||Action==TEXT("browser"))
+		&& StatusText && StatusText->GetText().ToString()==ServerTypeHint) SetStatus(FString());
 	if (Action==TEXT("quit"))
 	{
 		SaveLoginEntries();
