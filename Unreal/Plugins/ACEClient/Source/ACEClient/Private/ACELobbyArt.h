@@ -51,6 +51,14 @@ namespace ACELobbyArt
 	 * halves of the composition) and filled the same way. Null if the DAT is not ready. The
 	 * caller keeps the texture alive.
 	 */
+	/**
+	 * A new transient texture of DAT image ImageId with its opaque black backing keyed out:
+	 * dark pixels connected to the image border become transparent (soft over a short ramp,
+	 * colour un-premultiplied), so the art composites over any panel exactly as it looked on
+	 * black. Pixels inside the drawn shape are untouched. Null if it cannot be decoded. The
+	 * caller keeps the texture alive.
+	 */
+	UTexture2D* KeyedOverBlack(UACEDatSubsystem* Dat, uint32 ImageId);
 	UTexture2D* ExtendedBackdrop(UACEDatSubsystem* Dat, uint32 ImageId, int32 ExtX, int32 ExtY, int32 Spread = 0, int32 SplitX = 212);
 
 	extern const FLinearColor Gold;      // headings, retail orange-gold

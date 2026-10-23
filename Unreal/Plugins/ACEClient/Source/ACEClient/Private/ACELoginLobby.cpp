@@ -648,6 +648,7 @@ void UACELoginWidget::EnsureDefaultLayout()
 	auto* UpdateVial=WidgetTree->ConstructWidget<UNativeWidgetHost>(); UpdateVial->SetVisibility(ESlateVisibility::HitTestInvisible);
 	UpdateVial->SetContent(SNew(SACEManaVial).Art(VialArt).Fill_Lambda([WeakThis](){return WeakThis.IsValid()?WeakThis->UpdatePageFill:0.f;}));
 	auto* ProgressSize=WidgetTree->ConstructWidget<USizeBox>(); ProgressSize->SetWidthOverride(VialW); ProgressSize->SetHeightOverride(VialH); ProgressSize->SetContent(UpdateVial);
+	ProgressSize->SetVisibility(ESlateVisibility::Collapsed); UpdateProgressBox=ProgressSize; // Shown only while the updater works.
 	AddLine(Updates,ProgressSize,20); Cast<UVerticalBoxSlot>(ProgressSize->Slot)->SetHorizontalAlignment(HAlign_Left);
 	auto* UpdateActions=WidgetTree->ConstructWidget<UWrapBox>(); UpdateActions->SetInnerSlotPadding(FVector2D(10,10)); AddLine(Updates,UpdateActions,20);
 	CheckUpdateButton=ActionButton(TEXT("Check now"),TEXT("checkupdate")); UpdateActions->AddChildToWrapBox(CheckUpdateButton);
@@ -820,10 +821,30 @@ void UACELoginWidget::NativeTick(const FGeometry& Geometry, float Dt)
 		if (At(7.f)) Shot(TEXT("Lobby_Accounts.png"));
 		if (At(8.f)) RunAction(TEXT("files"),FString());
 		if (At(9.f)) Shot(TEXT("Lobby_Files.png"));
-		if (At(10.f)) { RunAction(TEXT("play"),FString()); RunAction(TEXT("selectaccount"),LobbyShotAccountId); }
-		if (At(11.f)) FPlatformMisc::RequestExit(false);
+		if (At(10.f)) RunAction(TEXT("updates"),FString());
+		if (At(11.f)) Shot(TEXT("Lobby_Updates.png"));
+		if (At(12.f)) { RunAction(TEXT("play"),FString()); RunAction(TEXT("selectaccount"),LobbyShotAccountId); }
+		if (At(13.f)) FPlatformMisc::RequestExit(false);
 	}
 #endif
+	if (UpdateProgressBox)
+	{
+		// The Updates-page vial appears only while checking/downloading/verifying, then shows
+		// full for a moment when a download completes; otherwise the status text stands alone.
+		const EACEUpdateState S=Updater?Updater->State:EACEUpdateState::Idle;
+		const bool bActive=S==EACEUpdateState::Checking || S==EACEUpdateState::Downloading || S==EACEUpdateState::Verifying;
+		const double Now=FPlatformTime::Seconds();
+		if (bActive) bUpdateVialWasActive=true;
+		else if (bUpdateVialWasActive)
+		{
+			bUpdateVialWasActive=false;
+			UpdateVialHoldUntil=S==EACEUpdateState::Ready || S==EACEUpdateState::InstallNotice || S==EACEUpdateState::Installing?Now+1.0:0.0;
+		}
+		const bool bShow=bActive || Now<UpdateVialHoldUntil;
+		const ESlateVisibility Wanted=bShow?ESlateVisibility::HitTestInvisible:ESlateVisibility::Collapsed;
+		if (UpdateProgressBox->GetVisibility()!=Wanted) UpdateProgressBox->SetVisibility(Wanted);
+		if (!bShow) UpdatePageFill=0; // Start from empty the next time it appears.
+	}
 	UpdatePageFill=FMath::FInterpTo(UpdatePageFill,UpdatePageTarget,Dt,6.f);
 	if(StyledPage!=Pages->GetActiveWidgetIndex())
 	{
@@ -1705,7 +1726,11 @@ void UACELoginWidget::LoadVialArt()
 	TArray<FSlateBrush> Full, Empty;
 	for (int32 I=0;I<UE_ARRAY_COUNT(ACEVialFullIds);++I)
 	{
-		UTexture2D* A=Res->ResolveTexture(ACEVialFullIds[I]); UTexture2D* B=Res->ResolveTexture(ACEVialEmptyIds[I]);
+		// The retail frames sit on opaque black (invisible on the black connect screen); key it
+		// out so the vial also sits cleanly on the lobby's Updates panel.
+		UTexture2D* A=ACELobbyArt::KeyedOverBlack(Dat,ACEVialFullIds[I]); UTexture2D* B=ACELobbyArt::KeyedOverBlack(Dat,ACEVialEmptyIds[I]);
+		if (!A) A=Res->ResolveTexture(ACEVialFullIds[I]);
+		if (!B) B=Res->ResolveTexture(ACEVialEmptyIds[I]);
 		if (!A || !B) return; // Retry on the next poll; the plain bar is drawn meanwhile.
 		VialTextures.AddUnique(A); VialTextures.AddUnique(B);
 		FSlateBrush Brush; Brush.DrawAs=ESlateBrushDrawType::Image; Brush.ImageSize=FVector2D(VialW,VialH);

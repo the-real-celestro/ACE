@@ -153,6 +153,45 @@ namespace
 
 const FACELobbyArt* ACELobbyArt::Get() { return GArt; }
 
+UTexture2D* ACELobbyArt::KeyedOverBlack(UACEDatSubsystem* Dat, uint32 ImageId)
+{
+	if (!ImageId || !Dat || !Dat->IsDatReady() || !Dat->GetTextureResolver()) return nullptr;
+	FImg Img;
+	if (!Decode(Dat->GetTextureResolver(), ImageId, Img) || !Img.IsValid()) return nullptr;
+	// Flood from the border through dark pixels: that region is the black backing (and the
+	// dark anti-aliased fringe against it); enclosed dark glass stays opaque.
+	constexpr int32 Lo = 6, Hi = 48;
+	auto Level = [](const FColor& C) { return FMath::Max3<int32>(C.R, C.G, C.B); };
+	TArray<uint8> Seen; Seen.SetNumZeroed(Img.W * Img.H);
+	TArray<int32> Stack;
+	auto Push = [&](int32 X, int32 Y)
+	{
+		if (X < 0 || Y < 0 || X >= Img.W || Y >= Img.H) return;
+		const int32 I = Y * Img.W + X;
+		if (Seen[I] || Level(Img.Px[I]) >= Hi) return;
+		Seen[I] = 1; Stack.Add(I);
+	};
+	for (int32 X = 0; X < Img.W; ++X) { Push(X, 0); Push(X, Img.H - 1); }
+	for (int32 Y = 0; Y < Img.H; ++Y) { Push(0, Y); Push(Img.W - 1, Y); }
+	int32 Keyed = 0;
+	while (Stack.Num())
+	{
+		const int32 I = Stack.Pop(EAllowShrinking::No), X = I % Img.W, Y = I / Img.W;
+		FColor& C = Img.Px[I];
+		const float A = FMath::Clamp(float(Level(C) - Lo) / float(Hi - Lo), 0.f, 1.f) * (C.A / 255.f);
+		if (A <= 0.f) C = FColor(0, 0, 0, 0);
+		else
+		{
+			const float K = (C.A / 255.f) / A; // Over black: (C*K)*A == C*(srcA), so nothing shifts.
+			C = FColor(uint8(FMath::Min(255.f, C.R * K)), uint8(FMath::Min(255.f, C.G * K)), uint8(FMath::Min(255.f, C.B * K)), uint8(FMath::RoundToInt(A * 255.f)));
+		}
+		++Keyed;
+		Push(X + 1, Y); Push(X - 1, Y); Push(X, Y + 1); Push(X, Y - 1);
+	}
+	UE_LOG(LogACELobbyArt, Verbose, TEXT("Keyed %d of %d backing pixels in 0x%08X"), Keyed, Img.W * Img.H, ImageId);
+	return FACEDatTextureResolver::CreateTransientRgbaUi(Img.W, Img.H, Img.Px);
+}
+
 UTexture2D* ACELobbyArt::ExtendedBackdrop(UACEDatSubsystem* Dat, uint32 ImageId, int32 ExtX, int32 ExtY, int32 Spread, int32 SplitX)
 {
 	static uint32 SrcId = 0;

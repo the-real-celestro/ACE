@@ -210,6 +210,9 @@ protected:
 	TSharedPtr<struct FACEVialArt> VialArt;
 	float ConnectFill = 0, ConnectStepBase = 0, ConnectStepCap = 0, ConnectStepTime = 0, ConnectFailTime = -1;
 	float UpdateVialFill = 0, UpdatePageFill = 0, UpdatePageTarget = 0;
+	UPROPERTY() TObjectPtr<class USizeBox> UpdateProgressBox; // Updates-page vial, collapsed while the updater is idle.
+	bool bUpdateVialWasActive = false;
+	double UpdateVialHoldUntil = 0;
 	bool bSuppressConnectDisconnect = false;
 	bool bConnectScreenPreview = false; // -ACEConnectScreenPreview (non-shipping): loop the screen without connecting.
 	float ConnectPreviewTime = 0;
