@@ -104,7 +104,7 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMMicroPanel()
             .OnCheckStateChanged_Lambda([Write](ECheckBoxState State){Write(State==ECheckBoxState::Checked);})
             [SNew(SACEPluginText).Text(FText::FromString(Label)).Font(FACEPluginStyle::NativeFont("Regular",15))]];
     };
-    Rows->AddSlot().AutoHeight().Padding(2,4)[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(&FACEPluginStyle::Current()->Button)
+    Rows->AddSlot().AutoHeight().HAlign(HAlign_Left).Padding(2,4)[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(&FACEPluginStyle::Current()->Button)
         .IsFocusable(false)
         .OnClicked_Lambda([Host,UCM]()
         {
@@ -169,7 +169,7 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMMicroPanel()
             Host->SaveCurrentProfile(P->Id,false);
         });
     }
-    Rows->AddSlot().AutoHeight().Padding(2,4)[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(&FACEPluginStyle::Current()->Button).IsFocusable(false)
+    Rows->AddSlot().AutoHeight().HAlign(HAlign_Left).Padding(2,4)[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(&FACEPluginStyle::Current()->Button).IsFocusable(false)
 
         .OnClicked_Lambda([Host](){if(Host.IsValid())Host->TogglePluginWindow(TEXT("ucm.log"));return FReply::Handled();})
         [SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",15)).Text(FText::FromString(TEXT("Open UCM Log")))]];

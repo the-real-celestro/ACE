@@ -203,14 +203,23 @@ bool FACEUCMProfilePanelTest::RunTest(const FString&)
         }
         if(FString(Page)==TEXT("Route"))TestFalse(TEXT("Route has no duplicate import selector"),Text.Contains(TEXT("Navigation route\n")));
         if(FString(Page)==TEXT("Monsters"))TestTrue(TEXT("Monsters can add current target"),Text.Contains(TEXT("Add selected monster")));
-        if(FString(Page)==TEXT("Buffs"))TestTrue(TEXT("Buffs includes protection choices"),Text.Contains(TEXT("Protections:"))&&Text.Contains(TEXT("Banes:")));
+        if(FString(Page)==TEXT("Buffs"))
+        {
+            TestTrue(TEXT("Buffs includes protection choices"),Text.Contains(TEXT("Protections"))&&Text.Contains(TEXT("Banes")));
+            if(FACEPluginStyle::IsCodex())TestTrue(TEXT("Codex exposes protection presets"),Text.Contains(TEXT("Custom\n"))&&Text.Contains(TEXT("BPSAC\n")));
+        }
     }
     const FString Overview=CollectText(Host->MakeUCMPanel(TEXT("Overview")));
     TestFalse(TEXT("Overview no longer includes Open Log"),Overview.Contains(TEXT("Open UCM Log")));
     TestFalse(TEXT("Overview no longer includes protection selectors"),Overview.Contains(TEXT("Protections:"))||Overview.Contains(TEXT("Banes:")));
     TestTrue(TEXT("Overview calls section Configuration"),Overview.Contains(TEXT("Configuration")));
     TestFalse(TEXT("Overview removes setup header and plugin bar preference"),Overview.Contains(TEXT("Setup:"))||Overview.Contains(TEXT("Show plugin bar")));
-    for(const auto& Section:ACEUCMProfiles::Sections())TestTrue(TEXT("Overview contains all six profile selectors"),Overview.Contains(Section+TEXT(": ")));
+    for(const auto& Section:ACEUCMProfiles::Sections())
+    {
+        if(Section==TEXT("Character")&&FACEPluginStyle::IsCodex())
+            TestTrue(TEXT("Overview selects Character through its header"),Overview.Contains(TEXT("Profile\n")));
+        else TestTrue(*(TEXT("Overview contains profile selector for ")+Section),Overview.Contains(Section+TEXT(": ")));
+    }
     const FString ImportText=CollectText(Host->MakeUCMPanel(TEXT("Import")));
     TestFalse(TEXT("Import removes setups and JSON editor"),ImportText.Contains(TEXT("New setup"))||ImportText.Contains(TEXT("Save current setup"))||ImportText.Contains(TEXT("Edit advanced JSON")));
     TestTrue(TEXT("Distinct loot and route import actions"),ImportText.Contains(TEXT("Import vTank Loot Profile (*.utl)"))&&ImportText.Contains(TEXT("Import vTank Route (*.nav)")));
@@ -231,7 +240,7 @@ bool FACEUCMProfilePanelTest::RunTest(const FString&)
     TMap<FName,TSharedPtr<SSlider>> Sliders;
     TFunction<void(const TSharedRef<SWidget>&)> CollectSliders=[&](const TSharedRef<SWidget>& Widget)
     {
-        if(Widget->GetType()==FName(TEXT("SSlider")))Sliders.Add(Widget->GetTag(),StaticCastSharedRef<SSlider>(Widget));
+        if(Widget->GetType()==FName(TEXT("SSlider"))||Widget->GetType()==FName(TEXT("SACEPluginSlider")))Sliders.Add(Widget->GetTag(),StaticCastSharedRef<SSlider>(Widget));
         auto Children=Widget->GetChildren();for(int32 I=0;I<Children->Num();++I)CollectSliders(Children->GetChildAt(I));
     };
     CollectSliders(CombatPanel);CollectSliders(Host->MakeUCMPanel(TEXT("Monsters")));

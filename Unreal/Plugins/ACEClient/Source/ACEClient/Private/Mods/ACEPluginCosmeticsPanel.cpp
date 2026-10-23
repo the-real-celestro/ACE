@@ -207,8 +207,8 @@ TSharedRef<SWidget> UACEPluginCosmetics::MakePanel()
     TWeakObjectPtr<UACEPluginCosmetics> Self(this);auto Body=SNew(SVerticalBox);
     auto Add=[&](TSharedRef<SWidget> W){Body->AddSlot().AutoHeight().Padding(4)[W];};
     auto Button=[&](const FString& Caption,TFunction<void()> Action,bool bDuringWork=false)->TSharedRef<SWidget>
-    {return SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(&FACEPluginStyle::Current()->Button).IsFocusable(false).IsEnabled_Lambda([Self,bDuringWork](){return Self.IsValid()&&(bDuringWork||!Self->ToolProcess.IsValid());})
-        .OnClicked_Lambda([Self,Action](){if(Self.IsValid())Action();return FReply::Handled();})[Label(Caption)];};
+    {return SNew(SBox).HAlign(HAlign_Left)[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(&FACEPluginStyle::Current()->Button).IsFocusable(false).IsEnabled_Lambda([Self,bDuringWork](){return Self.IsValid()&&(bDuringWork||!Self->ToolProcess.IsValid());})
+        .OnClicked_Lambda([Self,Action](){if(Self.IsValid())Action();return FReply::Handled();})[Label(Caption)]];};
     Add(Label(TEXT("Local appearance only · one weapon or shield · disable in Plugins to restore AC gear")));
     Add(SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular")).AutoWrapText(true).Text_Lambda([Self](){return FText::FromString(Self.IsValid()?Self->Status:TEXT("Unavailable"));}));
     Add(Button(TEXT("Search local ")+SourceLabel+TEXT(" installations"),[Self](){Self->QueueRequest(TEXT("scan"));}));

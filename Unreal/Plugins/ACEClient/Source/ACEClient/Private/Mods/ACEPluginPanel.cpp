@@ -64,7 +64,7 @@ namespace ACEPluginPanelPrivate
         SLATE_BEGIN_ARGS(SACEPlugins) {} SLATE_ARGUMENT(UACEPluginSubsystem*, Host) SLATE_ARGUMENT(FString, PluginId) SLATE_END_ARGS()
         void Construct(const FArguments& Args)
         {
-            Host = Args._Host; Id = Args._PluginId; FACEPluginStyle::Use(Args._Host,Id.IsEmpty()?TEXT("__manager"):Id); PluginOnly = !Id.IsEmpty();
+            Host = Args._Host; ManagerSelected=Host.IsValid()?Host->PluginManagerSelection:FString(); Id = Args._PluginId; FACEPluginStyle::Use(Args._Host,Id.IsEmpty()?TEXT("__manager"):Id); PluginOnly = !Id.IsEmpty();
             Body=SNew(SVerticalBox);
             Rebuild();
         }
@@ -85,6 +85,12 @@ namespace ACEPluginPanelPrivate
                 }
             }
             if(Host.IsValid()&&Id.IsEmpty()&&OrderRevision!=Host->GetPluginOrderRevision())OrderRows();
+            if(Host.IsValid()&&Id.IsEmpty()&&ManagerSelected!=Host->PluginManagerSelection)
+            {
+                ManagerSelected=Host->PluginManagerSelection;
+                if(Retail&&Retail->Codex)RebuildDetail();
+                else if(Scroll)if(const auto* Row=RowsById.Find(ManagerSelected))Scroll->ScrollDescendantIntoView(*Row);
+            }
             if(auto P=DisplayedPlugin();P&&P->ScrollPanel()!=Scrollable)SetScrolling(P->ScrollPanel());
         }
     private:
@@ -174,7 +180,8 @@ namespace ACEPluginPanelPrivate
         {
             SetScrolling(false);
             const auto Order=Host->PluginDisplayOrder();
-            if(!FindPlugin(ManagerSelected)){ManagerSelected.Reset();for(const auto& PluginId:Order)if(FindPlugin(PluginId)){ManagerSelected=PluginId;break;}}
+            if(ManagerSelected!=TEXT("__appearance")&&!FindPlugin(ManagerSelected)){ManagerSelected.Reset();for(const auto& PluginId:Order)if(FindPlugin(PluginId)){ManagerSelected=PluginId;break;}}
+            Host->PluginManagerSelection=ManagerSelected;
             auto SearchBox=SNew(SEditableTextBox).Style(&Retail->Edit).Font(FCoreStyle::GetDefaultFontStyle("Regular",12))
                 .HintText(FText::FromString(TEXT("Search plugins"))).Text(FText::FromString(ManagerFilter))
                 .OnTextChanged_Lambda([this](const FText& T){ManagerFilter=T.ToString();});
@@ -186,6 +193,8 @@ namespace ACEPluginPanelPrivate
                     {return FText::FromString(FString::Printf(TEXT("INSTALLED · %d"),Host.IsValid()?Host->Plugins.Num():0));}),10,FACEPluginStyle::Muted())]
                 +SVerticalBox::Slot().FillHeight(1)[SNew(SScrollBox).ScrollBarStyle(&ScrollStyle())
                     +SScrollBox::Slot()[SAssignNew(PluginRows,SVerticalBox)]];
+            List->AddSlot().AutoHeight().Padding(0,10,0,0)[SNew(SBox).HAlign(HAlign_Left)
+                [Plate(TEXT("Appearance & bar"),[this]{ManagerSelected=TEXT("__appearance");Host->PluginManagerSelection=ManagerSelected;RebuildDetail();},TEXT("PluginGlobalAppearance"))]];
             for(auto P:Host->Plugins)
             {
                 const FString PluginId=P->Id;
@@ -229,7 +238,7 @@ namespace ACEPluginPanelPrivate
                         +SOverlay::Slot()[SAssignNew(RowBorder,SBorder).Padding(FMargin(2,6,4,6))
                             .BorderImage_Lambda([this,PluginId]()->const FSlateBrush*{return ManagerSelected==PluginId?&Retail->QuietRowSelected.Normal:&Retail->QuietRow.Normal;})
                             .OnMouseButtonDown_Lambda([this,PluginId](const FGeometry&,const FPointerEvent& E)
-                            {if(E.GetEffectingButton()!=EKeys::LeftMouseButton)return FReply::Unhandled();ManagerSelected=PluginId;RebuildDetail();return FReply::Handled();})
+                            {if(E.GetEffectingButton()!=EKeys::LeftMouseButton)return FReply::Unhandled();ManagerSelected=PluginId;Host->PluginManagerSelection=PluginId;RebuildDetail();return FReply::Handled();})
                             [Row]]
                         +SOverlay::Slot().HAlign(HAlign_Left)[SNew(SBox).WidthOverride(3)
                             .Visibility_Lambda([this,PluginId]{return ManagerSelected==PluginId?EVisibility::HitTestInvisible:EVisibility::Collapsed;})
@@ -308,8 +317,10 @@ namespace ACEPluginPanelPrivate
                     FName(*(TEXT("PluginOnBar.")+PluginId)))];
                 Pane->AddSlot().AutoHeight()[Card(Top)];
             }
-            else Pane->AddSlot().AutoHeight()[CodexText(FText::FromString(TEXT("No plugins installed.")),14,FACEPluginStyle::Cream())];
-            auto Look=SNew(SVerticalBox);
+            else if(ManagerSelected!=TEXT("__appearance"))Pane->AddSlot().AutoHeight()[CodexText(FText::FromString(TEXT("No plugins installed.")),14,FACEPluginStyle::Cream())];
+            if(ManagerSelected==TEXT("__appearance"))
+            {
+            auto Look=SNew(SVerticalBox).Tag(TEXT("PluginGlobalAppearanceContent"));
             Look->AddSlot().AutoHeight().Padding(0,0,0,10)[CodexCaption(TEXT("Appearance · all plugins"))];
             Look->AddSlot().AutoHeight()[SNew(SHorizontalBox)
                 +SHorizontalBox::Slot().AutoWidth().Padding(0,0,10,0)[ThemeCard(TEXT("codex"),TEXT("Codex"),TEXT("Lobby art, slim gold"))]
@@ -328,6 +339,7 @@ namespace ACEPluginPanelPrivate
                 [Plate(TEXT("Expand bar"),[this]{Host->SetPluginBarVisible(true);Host->SetPluginBarMinimized(false);})]];
             Look->AddSlot().AutoHeight().Padding(0,10,0,0)[Host->MakePluginWindowControls(FString())];
             Pane->AddSlot().AutoHeight().Padding(0,12,0,0)[Card(Look)];
+            }
             Detail->SetContent(SNew(SScrollBox).ScrollBarStyle(&ScrollStyle())+SScrollBox::Slot().Padding(0,0,8,0)[Pane]);
         }
         TSharedPtr<FACEClientPlugin> DisplayedPlugin() const
@@ -442,6 +454,7 @@ namespace ACEPluginPanelPrivate
                             +SVerticalBox::Slot().AutoHeight().Padding(58,8,0,0)[Host->MakePluginWindowControls(P->Id)]]]);
                 }
                 OrderRows();
+                if(Scroll)if(const auto* Row=RowsById.Find(Host->PluginManagerSelection))Scroll->ScrollDescendantIntoView(*Row);
                 if(Host->Plugins.IsEmpty())Add(Label(TEXT("No plugins installed."),16));
                 if(!ManagerNotice.IsEmpty())Add(Label(ManagerNotice,16));
                 return;
@@ -459,7 +472,7 @@ namespace ACEPluginPanelPrivate
             // Notice is shared action feedback, not this plugin's title or status.
             // Each plugin supplies its own feedback inside its panel.
             if(UACEPluginSubsystem::IsLedger(P->Id)){Add(Host->MakeLedgerPanel(P->Id));return;}
-            if(P->Id==TEXT("waypoint")){Add(SNew(SBox).HeightOverride(650)[Host->MakeWaypointPanel()]);return;}
+            if(P->Id==TEXT("waypoint")){Add(SNew(SBox).HeightOverride(650)[Host->MakeWaypointPanel(true)]);return;}
             if(P->Id==TEXT("looteditor")){Add(SNew(SBox).HeightOverride(650)[Host->MakeUCMPanel(TEXT("Standalone loot"))]);return;}
             if(P->Id==TEXT("ucmmicro")){Add(Host->MakeUCMMicroPanel());return;}
             if(P->Id==TEXT("actiondeck")){Add(Host->GetGameInstance()->GetSubsystem<UACEActionDeckSubsystem>()->MakePanel());return;}
@@ -588,10 +601,16 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakePanel(const FString& PluginId)
     if(PluginId==TEXT("ucm.log"))return MakeUCMLogPanel();
     if(PluginId==TEXT("ucmmicro"))return MakeUCMMicroPanel();
     if(PluginId==TEXT("actiondeck"))return GetGameInstance()->GetSubsystem<UACEActionDeckSubsystem>()->MakePanel();
-    if(PluginId==TEXT("waypoint")||PluginId==TEXT("waypoint.map"))return MakeWaypointPanel(PluginId.EndsWith(TEXT(".map")),false,false);
+    if(PluginId==TEXT("waypoint")||PluginId==TEXT("waypoint.map"))return MakeWaypointPanel(true,false,false);
     if(PluginId==TEXT("looteditor"))return MakeUCMPanel(TEXT("Standalone loot"),false);
     if(PluginId==TEXT("ucm"))return MakeUCMPanel(FString(),false);
     return SNew(ACEPluginPanelPrivate::SACEPlugins).Host(this).PluginId(PluginId);
+}
+void UACEPluginSubsystem::OpenPluginSettings(const FString& WindowId)
+{
+    PluginManagerSelection=WindowId==TEXT("__manager")?TEXT("__appearance")
+        :WindowId.StartsWith(TEXT("waypoint."))?TEXT("waypoint"):WindowId==TEXT("ucm.log")?TEXT("ucm"):WindowId;
+    if(!DesktopPanel)TogglePanel();
 }
 void UACEPluginSubsystem::TogglePanel()
 {

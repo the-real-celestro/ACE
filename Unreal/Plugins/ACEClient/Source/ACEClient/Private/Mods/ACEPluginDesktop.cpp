@@ -15,6 +15,7 @@
 #include "Framework/Application/SlateApplication.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SScaleBox.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Text/STextBlock.h"
@@ -33,6 +34,12 @@ namespace
     const FButtonStyle& DockButtonStyle(){return FACEPluginStyle::Current()->DockButton;}
     TSharedRef<SWidget> DockIcon(const FString& Id)
     {return SNew(SBox).WidthOverride(26).HeightOverride(26)[SNew(SACEPluginIcon).Id(Id)];}
+    TSharedRef<SWidget> WindowIcon(UACEPluginSubsystem* Host,const FString& Id)
+    {
+        if(Host)for(const auto& Plugin:Host->Plugins)
+            if(Plugin->Id==Id)return SNew(SACEPluginBadge).Plugin(Plugin);
+        return DockIcon(Id==TEXT("__manager")?TEXT("plugin.options"):Id);
+    }
     TSharedRef<STextBlock> Caption(const FString& Text, int32 Size = 12)
     { return SNew(SACEPluginText).Text(FText::FromString(Text)).Font(FCoreStyle::GetDefaultFontStyle("Regular",Size)); }
 
@@ -119,6 +126,7 @@ namespace
             if(Frameless){ChildSlot[Args._Content.Widget];return;}
             auto Title = SNew(SHorizontalBox);
             const bool IsBar=bool(Args._ToggleMinimized);
+            if(IsBar&&Retail->Codex){ConstructCodexBar(Args);return;}
             if(!IsBar&&Retail->Codex){ConstructCodex(Args);return;}
             if(IsBar)
             {
@@ -131,7 +139,18 @@ namespace
                     [SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Bold",12))
                         .Text_Lambda([Mini=Args._Minimized](){return FText::FromString(Mini.Get()?TEXT("+"):TEXT("-"));})]];
             }
-            else Title->AddSlot().FillWidth(1).VAlign(VAlign_Center)[SNew(SACEPluginText).Text_Lambda([Title=Args._Title]{return FText::FromString(Title.Get());}).Font(FCoreStyle::GetDefaultFontStyle("Regular",12))];
+            else
+            {
+                if(Args._Icon)Title->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,6,0)
+                    [SNew(SBox).WidthOverride(18).HeightOverride(18).Tag(TEXT("PluginFrameIcon"))
+                        [SNew(SScaleBox).Stretch(EStretch::ScaleToFit)[Args._Icon.ToSharedRef()]]];
+                Title->AddSlot().FillWidth(1).VAlign(VAlign_Center)[SNew(SACEPluginText).Text_Lambda([Title=Args._Title]{return FText::FromString(Title.Get());}).Font(FCoreStyle::GetDefaultFontStyle("Regular",12))];
+            }
+            if(!IsBar&&Host.IsValid())Title->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,4,0)
+                [SNew(SBox).WidthOverride(20).HeightOverride(20)[SNew(SACEPluginButton).Cursor(EMouseCursor::Default).Tag(TEXT("PluginFrameSettings")).ContentPadding(FMargin(0))
+                    .ButtonStyle(&Retail->DockButton).IsFocusable(false).ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Plugin settings"))))
+                    .OnClicked_Lambda([H=Host,Window=Id]{if(H.IsValid())H->OpenPluginSettings(Window);return FReply::Handled();})
+                    [SNew(SScaleBox).Stretch(EStretch::ScaleToFit)[DockIcon(TEXT("plugin.options"))]]]];
             if(!IsBar&&Host.IsValid())Title->AddSlot().AutoWidth()[SNew(SACEPluginButton).Cursor(EMouseCursor::Default).ContentPadding(FMargin(FACEPluginStyle::ChromeButtonPadding)).Tag(TEXT("PluginFramePin"))
                 .IsFocusable(false).ButtonStyle(&Retail->DockButton)
                 .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Pin and hide frame. Hold Quick-show pinned windows to move or unpin."))))
@@ -163,33 +182,78 @@ namespace
                     .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Drag to resize")))).Cursor(EMouseCursor::ResizeSouthEast)
                     .OnMouseButtonDown_Lambda([this](const FGeometry&,const FPointerEvent& E){if(E.GetEffectingButton()!=EKeys::LeftMouseButton||(CanManipulate&&!CanManipulate()))return FReply::Unhandled();Resizing=true;return FReply::Handled().CaptureMouse(SharedThis(this));})[Caption(TEXT("◢"))]]]];
         }
+        void ConstructCodexBar(const FArguments& Args)
+        {
+            auto Header=SNew(SBorder).Tag(TEXT("PluginBarHandle"))
+                .BorderImage(FCoreStyle::Get().GetBrush("NoBrush")).Padding(FMargin(3,1))
+                .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Drag to move the plugin bar while unlocked. Hold Quick-show if pinned."))))
+                .Cursor_Lambda([this]{return CanManipulate&&!CanManipulate()?EMouseCursor::Default:EMouseCursor::CardinalCross;})
+                .OnMouseButtonDown_Lambda([this](const FGeometry&,const FPointerEvent& E){return BeginDrag(E);})
+                [SNew(SHorizontalBox)
+                +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(0,0,3,0)
+                    [SNew(SBox).HAlign(HAlign_Left)[SNew(SBox).WidthOverride(10).HeightOverride(2)
+                        [SNew(SImage).Image(FCoreStyle::Get().GetBrush("WhiteBrush")).ColorAndOpacity(FACEPluginStyle::Gold(.55f))]]]
+                +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+                    [SNew(SBox).WidthOverride(14).HeightOverride(14)
+                        [SNew(SACEPluginButton).Tag(TEXT("PluginBarMinimize")).ButtonStyle(&Retail->DockButton)
+                            .ContentPadding(FMargin(0)).HAlign(HAlign_Center).VAlign(VAlign_Center).IsFocusable(false)
+                            .ToolTip(FACEPluginStyle::Tooltip(TAttribute<FText>::CreateLambda([Mini=Args._Minimized]{return FText::FromString(Mini.Get()?TEXT("Expand plugin bar"):TEXT("Minimize plugin bar"));})))
+                            .OnClicked_Lambda([Toggle=Args._ToggleMinimized]{Toggle();return FReply::Handled();})
+                            [SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",10)).ColorAndOpacity(FACEPluginStyle::Cream())
+                                .Text_Lambda([Mini=Args._Minimized]{return FText::FromString(Mini.Get()?TEXT("+"):TEXT("-"));})]]]];
+            ChildSlot[SNew(SOverlay)
+                +SOverlay::Slot()[SNew(SCodexChrome).Tag(TEXT("PluginBarCodexChrome")).Style(Retail).HeaderHidden(true)]
+                +SOverlay::Slot()[SNew(SVerticalBox)
+                    +SVerticalBox::Slot().AutoHeight()[SNew(SBox).HeightOverride(18)[Header]]
+                    +SVerticalBox::Slot().FillHeight(1)
+                        [SNew(SBox).Visibility_Lambda([Mini=Args._Minimized]{return Mini.Get(false)?EVisibility::Collapsed:EVisibility::Visible;})[Args._Content.Widget]]]];
+        }
         FReply BeginDrag(const FPointerEvent& E)
         {
             if(E.GetEffectingButton()!=EKeys::LeftMouseButton)return FReply::Unhandled();
             if(!Move||(CanManipulate&&!CanManipulate()))return FReply::Handled();
             Dragging=true;return FReply::Handled().CaptureMouse(SharedThis(this));
         }
+        static const FButtonStyle& TitleControlStyle()
+        {
+            static const FButtonStyle Style=[]
+            {
+                FButtonStyle S=FCoreStyle::Get().GetWidgetStyle<FButtonStyle>("Button");
+                S.SetNormal(FSlateRoundedBoxBrush(FLinearColor(.025f,.045f,.075f,.95f),2.f,FACEPluginStyle::Gold(.8f),1.f))
+                    .SetHovered(FSlateRoundedBoxBrush(FACEPluginStyle::Gold(.2f),2.f,FACEPluginStyle::Gold(),1.f))
+                    .SetPressed(FSlateRoundedBoxBrush(FACEPluginStyle::Gold(.35f),2.f,FACEPluginStyle::Gold(),1.f))
+                    .SetNormalPadding(FMargin(0)).SetPressedPadding(FMargin(0));return S;
+            }();return Style;
+        }
         void ConstructCodex(const FArguments& Args)
         {
-            auto Glyph=[](SACELobbyGlyph::EKind Kind){return SNew(SACELobbyGlyph).Kind(Kind).Size(11.f).Color(FACEPluginStyle::Cream());};
+            auto Glyph=[](SACELobbyGlyph::EKind Kind){return SNew(SACELobbyGlyph).Kind(Kind).Size(22.f).Color(FLinearColor(1.f,.96f,.82f));};
             // The plaque's left piece carries the silver ring; the fancy gold title starts just after it,
             // with the caps subtitle on the same line.
             auto Title=SNew(SHorizontalBox)
-                +SHorizontalBox::Slot().AutoWidth()[SNew(SBox).WidthOverride(FMath::RoundToFloat(56*FACEPluginStyle::HeaderHeight()/42.))]
-                +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0,4,0,0)[SNew(SACEPluginText).Text_Lambda([T=Args._Title]{return FText::FromString(T.Get());})
+                +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(SBox).WidthOverride(FMath::RoundToFloat(56*FACEPluginStyle::HeaderHeight()/42.)).HAlign(HAlign_Center)
+                    [SNew(SBox).WidthOverride(24).HeightOverride(24).Tag(TEXT("PluginFrameIcon"))
+                        [SNew(SScaleBox).Stretch(EStretch::ScaleToFit)[Args._Icon.IsValid()?Args._Icon.ToSharedRef():SNullWidget::NullWidget]]]]
+                +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(0,4,0,0)[SNew(SACEPluginText).OverflowPolicy(ETextOverflowPolicy::Ellipsis).Text_Lambda([T=Args._Title]{return FText::FromString(T.Get());})
                     .Font(FCoreStyle::GetDefaultFontStyle("Fancy",18)).ColorAndOpacity(FACEPluginStyle::Gold())]
                 // Always present so the title buttons stay right-aligned even without a subtitle.
-                +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(10,4,6,0)[SNew(SBox)[SNew(SACEPluginText).Text_Lambda([T=Args._Subtitle]{return FText::FromString(T.Get().ToUpper());})
-                    .Visibility_Lambda([T=Args._Subtitle]{return T.Get().IsEmpty()?EVisibility::Collapsed:EVisibility::Visible;})
+                +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(10,4,6,0)[SNew(SBox)[SNew(SACEPluginText).Text_Lambda([T=Args._Subtitle]{return FText::FromString(T.Get().ToUpper());})
+                    .Visibility_Lambda([this,T=Args._Subtitle]{return T.Get().IsEmpty()||GetCachedGeometry().GetLocalSize().X<480?EVisibility::Collapsed:EVisibility::Visible;})
                     .Font(FCoreStyle::GetDefaultFontStyle("Regular",9)).ColorAndOpacity(FACEPluginStyle::Muted())]];
             if(Host.IsValid())Title->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,4,0)
-                [SNew(SBox).WidthOverride(21).HeightOverride(21)[SNew(SACEPluginButton).Cursor(EMouseCursor::Default).ContentPadding(FMargin(0)).Tag(TEXT("PluginFramePin"))
-                .IsFocusable(false).ButtonStyle(&Retail->DockButton)
+                [SNew(SBox).WidthOverride(34).HeightOverride(32)[SNew(SACEPluginButton).Cursor(EMouseCursor::Default).Tag(TEXT("PluginFrameSettings"))
+                    .ContentPadding(FMargin(1)).ButtonStyle(&TitleControlStyle()).IsFocusable(false)
+                    .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Plugin settings"))))
+                    .OnClicked_Lambda([H=Host,Window=Id]{if(H.IsValid())H->OpenPluginSettings(Window);return FReply::Handled();})
+                    [SNew(SScaleBox).Stretch(EStretch::ScaleToFit)[DockIcon(TEXT("plugin.options"))]]]];
+            if(Host.IsValid())Title->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,4,0)
+                [SNew(SBox).WidthOverride(34).HeightOverride(32)[SNew(SACEPluginButton).Cursor(EMouseCursor::Default).ContentPadding(FMargin(0)).Tag(TEXT("PluginFramePin"))
+                .IsFocusable(false).ButtonStyle(&TitleControlStyle())
                 .ToolTip(FACEPluginStyle::Tooltip(TAttribute<FText>::CreateLambda([H=Host,Window=Id]{return FText::FromString(H.IsValid()&&H->IsPluginWindowPinned(Window)?TEXT("Unpin"):TEXT("Pin and hide frame. Hold Quick-show pinned windows to move or unpin."));})))
                 .OnClicked_Lambda([H=Host,Window=Id]{if(H.IsValid())H->SetPluginWindowPinned(Window,!H->IsPluginWindowPinned(Window));return FReply::Handled();})
                 [Glyph(SACELobbyGlyph::EKind::Lock)]]];
             if(Args._Close)Title->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,12,0)
-                [SNew(SBox).WidthOverride(21).HeightOverride(21)[SNew(SACEPluginButton).Cursor(EMouseCursor::Default).ContentPadding(FMargin(0)).IsFocusable(false).ButtonStyle(&Retail->DockButton)
+                [SNew(SBox).WidthOverride(34).HeightOverride(32)[SNew(SACEPluginButton).Cursor(EMouseCursor::Default).ContentPadding(FMargin(0)).Tag(TEXT("PluginFrameClose")).IsFocusable(false).ButtonStyle(&TitleControlStyle())
                 .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Hide window (plugin keeps running)"))))
                 .OnClicked_Lambda([Close=Args._Close](){Close();return FReply::Handled();})[Glyph(SACELobbyGlyph::EKind::Cross)]]];
             ChildSlot[SNew(SOverlay)
@@ -202,7 +266,7 @@ namespace
                     .ToolTip(FACEPluginStyle::Tooltip(TAttribute<FText>::CreateLambda([this](){return FText::FromString(CanManipulate&&!CanManipulate()?TEXT("Unlock the UI or hold Quick-show pinned windows to move"):TEXT("Drag to move"));})))
                     .Cursor_Lambda([this](){return CanManipulate&&!CanManipulate()?EMouseCursor::Default:EMouseCursor::CardinalCross;})
                     .OnMouseButtonDown_Lambda([this](const FGeometry&,const FPointerEvent& E){return BeginDrag(E);})[Title]]]
-                +SVerticalBox::Slot().FillHeight(1)[SNew(SBox).Padding(FMargin(8,6,8,0))
+                +SVerticalBox::Slot().FillHeight(1)[SNew(SBox).Padding(Args._CompactWhenLocked?FMargin(0,6,0,0):FMargin(8,6,8,0))
                     .Tag(Args._CompactWhenLocked?FName(TEXT("LedgerContent")):FName(NAME_None))[Args._Content.Widget]]
                 +SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right)[SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("NoBrush")).Padding(FMargin(8,2,4,4))
                     .Visibility_Lambda([this]{return Resize&&(!CanManipulate||CanManipulate())?EVisibility::Visible:EVisibility::Collapsed;})
@@ -276,7 +340,7 @@ void SACEPluginDesktop::Construct(const FArguments& Args)
     if(ManagerOnly){Toggle(TEXT("__manager"));return;}
     FWindow Bar;
     Bar.Position=Host->GetPluginWindowPosition(BarId,FVector2D(8,80));Bar.Size=FVector2D(38,120);Bar.PluginBar=true;
-    Bar.Widget=SNew(SPluginFrame)
+    Bar.Widget=SNew(SPluginFrame).Host(Host.Get()).WindowId(BarId)
         .Minimized_Lambda([H=Host](){return H.IsValid()&&H->IsPluginBarMinimized();})
         .ToggleMinimized([H=Host](){if(H.IsValid())H->SetPluginBarMinimized(!H->IsPluginBarMinimized());})
         .CanManipulate([H=Host](){return H.IsValid()&&H->IsPluginBarUnlocked();})
@@ -295,7 +359,7 @@ FVector2D SACEPluginDesktop::DisplaySize(const FWindow& W) const
         if(!W.LedgerId.IsEmpty())
         {
             auto Size=Host->LedgerSize(W.LedgerId);
-            Size.X=W.Size.X;
+            Size.X=FMath::Max(W.Size.X,W.LedgerId==TEXT("supplyledger")?88.:160.);
             if(W.Size.Y>0)
             {
                 const double SavedHeight=W.Size.Y+Host->LedgerChromeHeight(W.LedgerId,Host->IsPluginWindowChromeHidden(W.LedgerId));
@@ -393,7 +457,7 @@ void SACEPluginDesktop::Resize(const FString& Id,FVector2D Delta,bool Save)
          // Persist the list area; pinning only hides the editor chrome.
          const double Chrome=Host->LedgerChromeHeight(Id,Host->IsPluginWindowChromeHidden(Id));
          const FVector2D Size=DisplaySize(*W)+Delta;
-         const double MinWidth=Id==TEXT("supplyledger")?72.:160.;
+         const double MinWidth=Id==TEXT("supplyledger")?88.:160.;
          W->Size=FVector2D(FMath::Clamp(Size.X,MinWidth,FMath::Max(MinWidth,ViewSize.X)),
              FMath::Clamp(Size.Y-Chrome,40.,FMath::Max(40.,ViewSize.Y-Chrome)));
          Layout(*W);if(Save)Host->SavePluginWindowPosition(SizeKey(Id),W->Size);return;
@@ -448,7 +512,7 @@ void SACEPluginDesktop::Toggle(const FString& Id)
     if(Dungeon)W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(420,420));
     W.Widget=SNew(SPluginFrame).Host(Host.Get()).WindowId(Id).Title_Lambda([Id,Manager,Arrow,Plugin](){return Manager?TEXT("Plugin Manager"):Id==TEXT("ucm.log")?TEXT("UCM Log"):Arrow?TEXT("Waypoint · drag when unlocked"):Id==TEXT("waypoint.map")?TEXT("Waypoint Map"):Plugin->DisplayTitle();})
         .Frameless(Arrow||Dungeon)
-        .Icon(Plugin?StaticCastSharedRef<SWidget>(SNew(SACEPluginBadge).Plugin(Plugin)):DockIcon(Manager?TEXT("plugin.options"):Id))
+        .Icon(WindowIcon(Host.Get(),Id))
         .Subtitle_Lambda([H=Host,Manager,Plugin,Ledger]()
         {
             if(Manager&&H.IsValid())return FString::Printf(TEXT("%d installed"),H->Plugins.Num());
@@ -507,7 +571,7 @@ void SACEPluginDesktop::Refresh()
             &&!(Id==TEXT("waypoint.map")&&Enabled.Contains(TEXT("waypoint"))))continue;
         // "Show on plugin bar" (Plugin Manager) hides an enabled plugin's button only.
         if(!Manager&&!Host->IsPluginOnBar(Id.StartsWith(TEXT("waypoint."))?FString(TEXT("waypoint")):Id==TEXT("ucm.log")?FString(TEXT("ucm")):Id))continue;
-        auto Icon=P?StaticCastSharedRef<SWidget>(SNew(SACEPluginBadge).Plugin(P)):DockIcon(Manager?TEXT("plugin.options"):Id);
+        auto Icon=WindowIcon(Host.Get(),Id);
         Buttons->AddSlot().AutoSize().Padding(1)[SNew(SACEPluginOrderTarget).Host(Host.Get()).Id(Id).LockId(BarId).Horizontal(Horizontal)
             .Tag(FName(*(TEXT("PluginBarOrder.")+Id)))
             [SNew(SOverlay)+SOverlay::Slot()[SNew(SBox).WidthOverride(32).HeightOverride(32)

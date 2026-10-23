@@ -1,3 +1,4 @@
+#include "Widgets/Layout/SWrapBox.h"
 #include "Mods/ACEAutoCraft.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "Mods/ACEPluginStyle.h"
@@ -132,12 +133,12 @@ public:
         Form->AddSlot().AutoHeight().Padding(0,0,0,10)[CraftLabel(TEXT("Whole batches may exceed the requested quantity. Max assumes successful crafts. Equipped, traded and retained ingredients are protected; reusable retained tools are allowed."),12,CraftMuted)];
         Form->AddSlot().AutoHeight()[SNew(SACEPluginText).ColorAndOpacity(CraftMuted).AutoWrapText(true).Font(FACEPluginStyle::NativeFont("Regular",12))
             .Text_Lambda([this](){const auto* R=Recipe();return FText::FromString(R?FString::Printf(TEXT("Yield: %d per craft | Difficulty: %d%s"),R->Yield,R->Difficulty,R->Conditional||R->Modified?TEXT(" | Server requirements / item changes apply"):TEXT("")):TEXT(""));})];
-        auto Controls=SNew(SHorizontalBox);
-        Controls->AddSlot().FillWidth(1)[Button(TEXT("Make"),[this](){Host->StartAutoCraft();},[this](){return !Plugin->Running&&Plugin->Enabled&&Data().Preview.Valid;},TEXT("AutoCraft.Make"))];
-        Controls->AddSlot().FillWidth(1).Padding(6,0)[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(&Style->Button).IsEnabled_Lambda([this](){return Plugin->Running;})
+        auto Controls=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(6,4));
+        Controls->AddSlot()[Button(TEXT("Make"),[this](){Host->StartAutoCraft();},[this](){return !Plugin->Running&&Plugin->Enabled&&Data().Preview.Valid;},TEXT("AutoCraft.Make"))];
+        Controls->AddSlot()[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(&Style->Button).IsEnabled_Lambda([this](){return Plugin->Running;})
             .OnClicked_Lambda([this](){Host->PauseAutoCraft();return FReply::Handled();})
             [SNew(SACEPluginText).Justification(ETextJustify::Center).Font(FACEPluginStyle::NativeFont("Regular",15)).Text_Lambda([this](){return FText::FromString(Data().Paused?TEXT("Resume"):TEXT("Pause"));})]];
-        Controls->AddSlot().FillWidth(1)[Button(TEXT("Stop"),[this](){Host->Stop(Plugin->Id,TEXT("Stopped by player; an in-flight craft may finish."));},[this](){return Plugin->Running;},TEXT("AutoCraft.Stop"))];
+        Controls->AddSlot()[Button(TEXT("Stop"),[this](){Host->Stop(Plugin->Id,TEXT("Stopped by player; an in-flight craft may finish."));},[this](){return Plugin->Running;},TEXT("AutoCraft.Stop"))];
         ChildSlot[SNew(SBorder).BorderImage(&Style->Background).Padding(14)[SNew(SVerticalBox)
             +SVerticalBox::Slot().AutoHeight()[SNew(SBox).Visibility(Args._ShowTitle?EVisibility::Visible:EVisibility::Collapsed)[CraftLabel(TEXT("Auto Craft"),24)]]
             +SVerticalBox::Slot().AutoHeight().Padding(0,0,0,12)[CraftLabel(TEXT("Choose a recipe. Review the materials. Craft across all your packs."),14,CraftMuted)]

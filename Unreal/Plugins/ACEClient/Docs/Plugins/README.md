@@ -126,6 +126,8 @@ Each row uses the selected item's inventory icon, including its overlays and
 item-type background. Its artwork is retained when the item runs out.
 Click any row's name or icon to show or hide all item names together. Counts stay
 visible in the same position; resize the window to bring them closer to the icons.
+You can also use **Show item names** in Plugin Manager's Supply Ledger window
+settings; turn it off for an icon-and-count list.
 Hover an icon to read its item name. This preference is saved with the character's
 supply list. An empty ledger keeps its **+** add control visible even when pinned.
 
@@ -198,6 +200,10 @@ restocking. See [Item Tools](ItemTools.md) for setup and commands.
 world/dungeon map, with optional GoArrow atlas import. See [Waypoint](Waypoint.md)
 for controls, data sources and the UtilityBelt compatibility findings. This visual
 plugin requires no Start action or game-action permissions.
+Its window opens directly to the map, which expands with the window. Search,
+coordinates, zoom and layer controls stay compact. Use **Settings** for pinning,
+orientation, route display and opacity, or **Settings → Arrow & atlas…** for
+floating-arrow preferences and location imports.
 
 Open **Plugins** on the login screen, **Game Play → Manage Plugins** in desktop
 options, **More → Manage Plugins** in VR, or type `/acueplugins`. Each plugin shows its

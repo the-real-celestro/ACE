@@ -28,7 +28,9 @@ const FButtonStyle& ButtonStyle() {return FACEPluginStyle::Current()->Button;}
 TSharedRef<STextBlock> Text(const FString& Value,int32 Size=14,FLinearColor Color=Ink)
 {return SNew(SACEPluginText).Text(FText::FromString(Value)).Font(FACEPluginStyle::NativeFont("Regular",Size)).ColorAndOpacity(Color).AutoWrapText(true);}
 TSharedRef<SWidget> Button(const FString& Label,TFunction<void()> Action)
-{return SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(&ButtonStyle()).IsFocusable(false).OnClicked_Lambda([Action](){Action();return FReply::Handled();})[Text(Label)];}
+{return SNew(SBox).HAlign(HAlign_Left)[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding))
+    .ButtonStyle(FACEPluginStyle::IsCodex()?&FACEPluginStyle::Current()->DockButton:&ButtonStyle()).IsFocusable(false)
+    .OnClicked_Lambda([Action](){Action();return FReply::Handled();})[Text(Label)]];}
 TSharedRef<SWidget> ItemMenuButton(const FString& Label,TFunction<void()> Action)
 {return SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(&FACEPluginStyle::Current()->MenuItem).IsFocusable(false)
     .OnClicked_Lambda([Action](){Action();FSlateApplication::Get().DismissAllMenus();return FReply::Handled();})[Text(Label)];}

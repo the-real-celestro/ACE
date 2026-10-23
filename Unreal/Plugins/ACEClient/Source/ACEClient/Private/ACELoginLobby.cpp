@@ -883,7 +883,6 @@ void UACELoginWidget::EnsureDefaultLayout()
 		SetPasswordVisible(false);
 		auto* Actions=HBox(); AddLine(Form,Actions,16);
 		AddH(Actions,ActionButton(TEXT("Save Account"),TEXT("saveaccount")),FMargin(0,0,12,0));
-		AddH(Actions,ActionButton(TEXT("New Account"),TEXT("newaccount")));
 		AddH(Actions,Gap(1,1),FMargin(0),true);
 		AddH(Actions,ActionButton(TEXT("Remove"),TEXT("removeaccount")));
 		auto* Note=HBox(); AddLine(Form,Note,0);

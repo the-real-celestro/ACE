@@ -124,5 +124,10 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakePluginWindowControls(const FString&
             [Text(TEXT("Use plugin default"))]];
         Body->AddSlot().AutoHeight().Padding(0,5)[Options];
     }
+    if(Id==TEXT("supplyledger"))Body->AddSlot().AutoHeight().Padding(0,5)[SNew(SCheckBox).Tag(TEXT("SupplyShowNames")).Style(&Theme->Check)
+        .IsChecked_Lambda([H]{return H.IsValid()&&H->AreSupplyNamesVisible()?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
+        .OnCheckStateChanged_Lambda([H](ECheckBoxState Value){if(H.IsValid())H->SetSupplyNamesVisible(Value==ECheckBoxState::Checked);})
+        .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Turn off to show only item icons and counts. You can also click an item icon to toggle names."))))
+        [Text(TEXT("Show item names"))]];
     return Body;
 }

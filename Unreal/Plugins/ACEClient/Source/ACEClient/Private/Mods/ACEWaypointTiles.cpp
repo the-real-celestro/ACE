@@ -5,13 +5,22 @@
 #include "Async/Async.h"
 #include "Misc/ScopeLock.h"
 #include "Misc/Paths.h"
+#include "Misc/FileHelper.h"
+#include "Misc/SecureHash.h"
+#include "Misc/Guid.h"
+#include "HAL/FileManager.h"
+#include <atomic>
 
 struct FACEWaypointTiles::FWorker
 {
     FCriticalSection Mutex;
-    bool Pending=false,Ready=false,Opened=false,Failed=false;
+    bool Pending=false,Ready=false,Opened=false;
+    std::atomic<bool> Failed{false};
     FIntVector Key;
-    int32 Resolution=256;
+    int32 Resolution=256,ActiveResolution=256;
+    FIntVector ActiveKey=FIntVector::ZeroValue;
+    std::atomic<uint64> Generation{0};
+    bool Cancelled=false;
     TArray<FColor> Result;
     FACEDatDatabase Portal,Cell;
     TUniquePtr<FACEDatTextureResolver> Resolver;
@@ -19,8 +28,56 @@ struct FACEWaypointTiles::FWorker
     TArray<float> Heights;
     TMap<uint64,TArray<FColor>> Blends;
     int64 BlendBytes=0;
-    void Build(const FString& Folder,FIntVector Tile,int32 Size)
+    FString CachePrefix;
+    void Complete(TArray<FColor> Pixels,FIntVector Tile,int32 Size,uint64 JobGeneration)
     {
+        FScopeLock Lock(&Mutex);
+        if(Generation.load()!=JobGeneration)Pixels.Reset();
+        Result=MoveTemp(Pixels);Key=Tile;Resolution=Size;Ready=true;
+    }
+    FString CacheFile(const FString& Folder,FIntVector Tile,int32 Size)
+    {
+        if(CachePrefix.IsEmpty())
+        {
+            FString Identity=FPaths::ConvertRelativePathToFull(Folder)+TEXT("/terrain-v1");
+            for(const TCHAR* Name:{TEXT("client_portal.dat"),TEXT("client_cell_1.dat")})
+            {
+                const FString Path=Folder/Name;
+                Identity+=FString::Printf(TEXT("/%lld/%lld"),IFileManager::Get().FileSize(*Path),IFileManager::Get().GetTimeStamp(*Path).GetTicks());
+            }
+            CachePrefix=FMD5::HashAnsiString(*Identity);
+        }
+        return FPaths::ProjectSavedDir()/TEXT("Waypoint/TileCache")/FString::Printf(TEXT("%s-%d-%d-%d-%d.rgba"),*CachePrefix,Tile.X,Tile.Y,Tile.Z,Size);
+    }
+    void SaveCache(const FString& File,const TArray<FColor>& Pixels)
+    {
+        const FString Directory=FPaths::GetPath(File);
+        IFileManager::Get().MakeDirectory(*Directory,true);
+        const FString Temp=File+TEXT(".")+FGuid::NewGuid().ToString()+TEXT(".tmp");
+        if(!FFileHelper::SaveArrayToFile(TArrayView<const uint8>(reinterpret_cast<const uint8*>(Pixels.GetData()),Pixels.Num()*sizeof(FColor)),*Temp))return;
+        IFileManager::Get().Move(*File,*Temp,true);IFileManager::Get().Delete(*Temp);
+        TArray<FString> Files;IFileManager::Get().FindFiles(Files,*(Directory/TEXT("*.rgba")),true,false);
+        int64 Bytes=0;for(const auto& Name:Files)Bytes+=FMath::Max(int64(0),IFileManager::Get().FileSize(*(Directory/Name)));
+        if(Bytes>64*1024*1024)
+        {
+            Files.Sort([&Directory](const FString& A,const FString& B){return IFileManager::Get().GetTimeStamp(*(Directory/A))<IFileManager::Get().GetTimeStamp(*(Directory/B));});
+            for(const auto& Name:Files)
+            {
+                if(Bytes<=64*1024*1024)break;
+                const FString Path=Directory/Name;const int64 Size=IFileManager::Get().FileSize(*Path);
+                if(IFileManager::Get().Delete(*Path))Bytes-=FMath::Max(int64(0),Size);
+            }
+        }
+    }
+    void Build(const FString& Folder,FIntVector Tile,int32 Size,uint64 JobGeneration)
+    {
+        const FString Cache=CacheFile(Folder,Tile,Size);
+        TArray<uint8> Cached;
+        if(IFileManager::Get().FileExists(*Cache)&&FFileHelper::LoadFileToArray(Cached,*Cache)&&Cached.Num()==Size*Size*sizeof(FColor))
+        {
+            TArray<FColor> Pixels;Pixels.SetNumUninitialized(Size*Size);FMemory::Memcpy(Pixels.GetData(),Cached.GetData(),Cached.Num());
+            Complete(MoveTemp(Pixels),Tile,Size,JobGeneration);return;
+        }
         if(!Opened&&!Failed)
         {
             Opened=Portal.Open(Folder/TEXT("client_portal.dat"))&&Cell.Open(Folder/TEXT("client_cell_1.dat"));Failed=!Opened;
@@ -35,6 +92,7 @@ struct FACEWaypointTiles::FWorker
             const int32 PerBlock=Size/Tile.Z;
             for(int BX=0;BX<Tile.Z;++BX)for(int BY=0;BY<Tile.Z;++BY)
             {
+                if(Generation.load()!=JobGeneration)break;
                 TArray<uint8> Bytes;FACEDatCellLandblock Land;
                 if(!Cell.ReadFile(uint32((Tile.X+BX)<<24)|uint32((Tile.Y+BY)<<16)|0xffff,Bytes))continue;
                 FACEDatCursor Cur(Bytes);if(!ACEDatUnpack::UnpackCellLandblock(Cur,Land))continue;
@@ -66,16 +124,17 @@ struct FACEWaypointTiles::FWorker
                 }
             }
         }
-        FScopeLock Lock(&Mutex);Result=MoveTemp(Pixels);Key=Tile;Resolution=Size;Ready=true;
+        if(Generation.load()==JobGeneration&&!Pixels.IsEmpty())SaveCache(Cache,Pixels);
+        Complete(MoveTemp(Pixels),Tile,Size,JobGeneration);
     }
 };
 FACEWaypointTiles::FACEWaypointTiles()=default;
-FACEWaypointTiles::~FACEWaypointTiles()=default;
+FACEWaypointTiles::~FACEWaypointTiles(){if(Worker)Worker->Generation.fetch_add(1);}
 FBox2D FACEWaypointTiles::Bounds(FIntVector K)
 {return FBox2D(FVector2D(K.X*.8-101.95,K.Y*.8-101.95),FVector2D((K.X+K.Z)*.8-101.95,(K.Y+K.Z)*.8-101.95));}
 FIntPoint FACEWaypointTiles::Detail(double Scale)
 {
-    int32 Span=32,Resolution=256;
+    int32 Span=8,Resolution=256;
     while(Span>1&&Span*.8*Scale>Resolution)Span/=2;
     while(Resolution<1024&&Span*.8*Scale>Resolution)Resolution*=2;
     return {Span,Resolution};
@@ -83,8 +142,9 @@ FIntPoint FACEWaypointTiles::Detail(double Scale)
 void FACEWaypointTiles::Update(const FString& Directory,const FBox2D& Visible,double Scale)
 {
     ++Frame;
+    const auto Lod=Detail(Scale);const int Span=Lod.X,Resolution=Lod.Y;
     bool Pending=false;
-    if(Source!=Directory||!Worker){Source=Directory;Worker=MakeShared<FWorker,ESPMode::ThreadSafe>();Tiles.Reset();}
+    if(Source!=Directory||!Worker){if(Worker)Worker->Generation.fetch_add(1);Source=Directory;Worker=MakeShared<FWorker,ESPMode::ThreadSafe>();Tiles.Reset();}
     {
         FScopeLock Lock(&Worker->Mutex);
         if(Worker->Ready)
@@ -100,13 +160,21 @@ void FACEWaypointTiles::Update(const FString& Directory,const FBox2D& Visible,do
             Worker->Ready=false;Worker->Pending=false;Worker->Result.Reset();
         }
         Pending=Worker->Pending;
-        if(Worker->Failed||Scale<2||!Visible.Intersect(Bounds({0,0,256}))){Loading=false;return;}
+        if(Pending&&!Worker->Cancelled&&(Scale<8||Worker->ActiveKey.Z!=Span||Worker->ActiveResolution!=Resolution||!Bounds(Worker->ActiveKey).Intersect(Visible)))
+        {Worker->Generation.fetch_add(1);Worker->Cancelled=true;}
+        // The retail overview is already adequate below this density.
+        if(Worker->Failed||Scale<8||!Visible.Intersect(Bounds({0,0,256}))){Loading=false;return;}
     }
-    const auto Lod=Detail(Scale);const int Span=Lod.X,Resolution=Lod.Y;
-    const int MinX=FMath::Clamp(FMath::FloorToInt((Visible.Min.X+101.95)/.8/Span)*Span,0,256-Span);
-    const int MinY=FMath::Clamp(FMath::FloorToInt((Visible.Min.Y+101.95)/.8/Span)*Span,0,256-Span);
-    const int MaxX=FMath::Clamp(FMath::FloorToInt((Visible.Max.X+101.95)/.8/Span)*Span,0,256-Span);
-    const int MaxY=FMath::Clamp(FMath::FloorToInt((Visible.Max.Y+101.95)/.8/Span)*Span,0,256-Span);
+    int MinX=FMath::Clamp(FMath::FloorToInt((Visible.Min.X+101.95)/.8/Span)*Span,0,256-Span);
+    int MinY=FMath::Clamp(FMath::FloorToInt((Visible.Min.Y+101.95)/.8/Span)*Span,0,256-Span);
+    int MaxX=FMath::Clamp(FMath::FloorToInt((Visible.Max.X+101.95)/.8/Span)*Span,0,256-Span);
+    int MaxY=FMath::Clamp(FMath::FloorToInt((Visible.Max.Y+101.95)/.8/Span)*Span,0,256-Span);
+    // Keep requests within the bounded resident working set. The overview
+    // remains outside it instead of continuously rebuilding evicted tiles.
+    const int CenterX=FMath::FloorToInt((Visible.GetCenter().X+101.95)/.8/Span)*Span;
+    const int CenterY=FMath::FloorToInt((Visible.GetCenter().Y+101.95)/.8/Span)*Span;
+    MinX=FMath::Max(MinX,CenterX-4*Span);MaxX=FMath::Min(MaxX,CenterX+3*Span);
+    MinY=FMath::Max(MinY,CenterY-4*Span);MaxY=FMath::Min(MaxY,CenterY+3*Span);
     FIntVector Next(-1,-1,Span);double Nearest=MAX_dbl;
     for(int X=MinX;X<=MaxX;X+=Span)for(int Y=MinY;Y<=MaxY;Y+=Span)
     {
@@ -119,5 +187,10 @@ void FACEWaypointTiles::Update(const FString& Directory,const FBox2D& Visible,do
     // At most 32 MiB RGBA base levels (~43 MiB with mips), including high-DPI tiles.
     while(Tiles.Num()>64||Pixels>8*1024*1024){int Oldest=0;for(int I=1;I<Tiles.Num();++I)if(Tiles[I]->Used<Tiles[Oldest]->Used)Oldest=I;Pixels-=int64(Tiles[Oldest]->Resolution)*Tiles[Oldest]->Resolution;Tiles.RemoveAt(Oldest);}
     Loading=Next.X>=0;
-    if(Loading&&!Pending){FScopeLock Lock(&Worker->Mutex);Worker->Pending=true;Async(EAsyncExecution::ThreadPool,[W=Worker,Directory,Next,Resolution](){W->Build(Directory,Next,Resolution);});}
+    if(Loading&&!Pending)
+    {
+        FScopeLock Lock(&Worker->Mutex);Worker->Pending=true;Worker->Cancelled=false;Worker->ActiveKey=Next;Worker->ActiveResolution=Resolution;
+        const uint64 JobGeneration=Worker->Generation.load();
+        Async(EAsyncExecution::ThreadPool,[W=Worker,Directory,Next,Resolution,JobGeneration](){W->Build(Directory,Next,Resolution,JobGeneration);});
+    }
 }

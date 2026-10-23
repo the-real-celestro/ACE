@@ -70,10 +70,16 @@ bool FACELedgerTest::RunTest(const FString&)
     TestEqual(TEXT("Out-of-stock item remains tracked"),Entries.Num(),1);
 
     auto* GI=NewObject<UGameInstance>();GI->Init();
-    TestTrue(TEXT("Retail DAT loads for visual verification"),GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")));
+    FString DatDirectory=TEXT("C:/Turbine/Asheron's Call");
+    FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),DatDirectory);
+    TestTrue(TEXT("Retail DAT loads for visual verification"),GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(DatDirectory));
     auto* H=GI->GetSubsystem<UACEPluginSubsystem>();
     auto* Manager=GI->GetSubsystem<UACEClientSubsystem>()->GetUIElementManager();Manager->SetUiLocked(false);
     H->StorageRoot=FPaths::ProjectSavedDir()/TEXT("Automation/Ledgers");H->Settings=MakeShared<FJsonObject>();
+    // The pixel, font, bevel and fixed chrome expectations below describe Original.
+    const FString PreviousTheme=FACEPluginStyle::ThemeName();
+    ON_SCOPE_EXIT { FACEPluginStyle::SetTheme(PreviousTheme); };
+    H->Settings->SetStringField(TEXT("_theme"),TEXT("original"));H->ApplyPluginTheme();
     const auto Session=GI->GetSubsystem<UACEClientSubsystem>()->GetSession();
     {
         auto P=H->Find(TEXT("ucm"));const bool WasEnabled=P->Enabled;P->Enabled=true;
@@ -137,7 +143,9 @@ bool FACELedgerTest::RunTest(const FString&)
     GI->GetSubsystem<UACEClientSubsystem>()->SelectObject(11);H->EditSupplySelection(true);
     TestEqual(TEXT("Adding the selected item retains its actual inventory icon"),H->GetSupplies()[0].Icon,0x0600262A);
     TestEqual(TEXT("Native ledger refreshes from inventory revisions"),H->GetSupplies()[0].Count,int64(49));
-    H->ToggleSupplyName(0);
+    H->SetSupplyNamesVisible(false);
+    H->SetSupplyNamesVisible(false);
+    TestFalse(TEXT("Explicit names setting is idempotent"),H->AreSupplyNamesVisible());
     Session->PlayerGuid=2;H->UpdateLedgers();TestEqual(TEXT("Second character has a separate list"),H->GetSupplies().Num(),0);
     Session->PlayerGuid=1;H->UpdateLedgers();TestEqual(TEXT("Returning to a character restores its list"),H->GetSupplies().Num(),1);
     FString Saved;TestTrue(TEXT("Supply selection persists to disk"),FFileHelper::LoadFileToString(Saved,*(H->StorageRoot/TEXT("settings.json"))));
@@ -154,6 +162,16 @@ bool FACELedgerTest::RunTest(const FString&)
     }
     H->SavePluginWindowPosition(TEXT("huntledger.size"),FVector2D(290,180));
     auto Dock=SNew(SACEPluginDesktop).Host(H);Dock->Tick(FGeometry::MakeRoot(FVector2D(1400,900),FSlateLayoutTransform()),1,.016f);
+    TFunction<bool(TSharedRef<SWidget>,FName)> HasTag=[&](TSharedRef<SWidget> Widget,FName Tag)
+    {
+        if(Widget->GetTag()==Tag)return true;
+        auto* Children=Widget->GetChildren();
+        for(int32 I=0;I<Children->Num();++I)if(HasTag(Children->GetChildAt(I),Tag))return true;
+        return false;
+    };
+    for(const TCHAR* Id:{TEXT("supplyledger"),TEXT("huntledger")})
+        TestTrue(TEXT("Ledger frame displays its plugin icon"),HasTag(Dock->Windows[Id].Widget.ToSharedRef(),TEXT("PluginFrameIcon")));
+    TestTrue(TEXT("Supply names setting is discoverable in window controls"),HasTag(H->MakePluginWindowControls(TEXT("supplyledger")),TEXT("SupplyShowNames")));
     TestEqual(TEXT("Legacy fixed Hunt Ledger height adapts to current rows without duplicate editor chrome"),Dock->DisplaySize(Dock->Windows[TEXT("huntledger")]).Y,H->LedgerSize(TEXT("huntledger")).Y);
     TestTrue(TEXT("Saved HUD visibility restores without UCM running"),Dock->IsOpen(TEXT("supplyledger"))&&Dock->IsOpen(TEXT("huntledger")));
     TestEqual(TEXT("Supply HUD defaults to a compact width"),Dock->DisplaySize(Dock->Windows[TEXT("supplyledger")]).X,200.);
@@ -344,7 +362,7 @@ bool FACELedgerTest::RunTest(const FString&)
         TestEqual(TEXT("Unpinning preserves inner background opacity"),SupplyStyle->Background.TintColor.GetSpecifiedColor().A,PinnedBackground);
         H->SetPluginWindowPinned(TEXT("supplyledger"),true);Manager->SetQuickShowUi(true);Draw();
         Dock->Resize(TEXT("supplyledger"),FVector2D(-10000,-10000),true);
-        TestEqual(TEXT("Supply supports a narrow icon counter"),Dock->Windows[TEXT("supplyledger")].Size.X,72.);
+        TestEqual(TEXT("Supply supports a narrow icon counter"),Dock->Windows[TEXT("supplyledger")].Size.X,88.);
         Dock->Windows[TEXT("supplyledger")].Position=FVector2D(80,80);H->ToggleSupplyName(0);H->LedgerSupplies[0].Count=8544;
         Manager->SetQuickShowUi(false);Draw();
         auto CompactCount=FindTagged(Dock,TEXT("SupplyCount.0"));
@@ -353,6 +371,59 @@ bool FACELedgerTest::RunTest(const FString&)
         TestTrue(TEXT("Compact count is fully allocated"),CounterBounds.GetLocalSize().X>=CompactCount->GetDesiredSize().X);
         const auto ListBounds=FindTagged(Dock,TEXT("SupplyRows"))->GetCachedGeometry();
         TestTrue(TEXT("Scrollbar never covers digits in the narrow ledger"),CounterBounds.GetAbsolutePosition().X+CounterBounds.GetAbsoluteSize().X<=ListBounds.GetAbsolutePosition().X+ListBounds.GetAbsoluteSize().X);
+        // Codex must preserve the same compact icon/count layout despite its wider frame padding.
+        H->SetPluginTheme(TEXT("codex"));
+        auto CodexDock=SNew(SACEPluginDesktop).Host(H);
+        const auto Gear=FindTagged(CodexDock->Windows[TEXT("huntledger")].Widget.ToSharedRef(),TEXT("PluginFrameSettings"));
+        if(TestTrue(TEXT("Plugin title has a settings gear"),Gear.IsValid()))Click(Gear);
+        TestEqual(TEXT("Settings gear selects its owning plugin"),H->PluginManagerSelection,FString(TEXT("huntledger")));
+        auto DetailPanel=H->MakePanel();
+        TestFalse(TEXT("Plugin details omit global appearance controls"),HasTag(DetailPanel,TEXT("PluginGlobalAppearanceContent")));
+        for(int32 Pass=0;Pass<3;++Pass){++GFrameCounter;Renderer.DrawWidget(Target,DetailPanel,Size,0);FlushRenderingCommands();}
+        PNG.Reset();FImageUtils::PNGCompressImageArray(Target->SizeX,Target->SizeY,[&]{TArray<FColor> Pixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);return Pixels;}(),PNG);
+        FFileHelper::SaveArrayToFile(PNG,*(H->StorageRoot/TEXT("plugin-settings-detail.png")));
+        H->PluginManagerSelection=TEXT("__appearance");
+        auto AppearancePanel=H->MakePanel();
+        TestTrue(TEXT("Global appearance has one dedicated page"),HasTag(AppearancePanel,TEXT("PluginGlobalAppearanceContent")));
+        TestTrue(TEXT("Codex plugin bar shares plugin window chrome"),FindTagged(CodexDock,TEXT("PluginBarCodexChrome")).IsValid());
+        CodexDock->Windows[TEXT("supplyledger")].Position=FVector2D(80,80);
+        for(int32 Pass=0;Pass<6;++Pass){++GFrameCounter;Renderer.DrawWidget(Target,CodexDock,Size,0);FlushRenderingCommands();}
+        const auto CodexCount=FindTagged(CodexDock,TEXT("SupplyCount.0"));
+        const auto CodexList=FindTagged(CodexDock,TEXT("SupplyRows"))->GetCachedGeometry();
+        const auto CodexBounds=CodexCount->GetCachedGeometry();
+        TestTrue(TEXT("Codex compact count clears the scrollbar"),CodexBounds.GetAbsolutePosition().X+CodexBounds.GetAbsoluteSize().X<=CodexList.GetAbsolutePosition().X+CodexList.GetAbsoluteSize().X);
+        PNG.Reset();FImageUtils::PNGCompressImageArray(Target->SizeX,Target->SizeY,[&]{TArray<FColor> Pixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);return Pixels;}(),PNG);
+        FFileHelper::SaveArrayToFile(PNG,*(H->StorageRoot/TEXT("plugin-windows-codex-compact.png")));
+        H->SetPluginBarHorizontal(true);CodexDock->Refresh();
+        for(int32 Pass=0;Pass<3;++Pass){++GFrameCounter;Renderer.DrawWidget(Target,CodexDock,Size,0);FlushRenderingCommands();}
+        TestTrue(TEXT("Horizontal Codex plugin bar retains themed chrome"),FindTagged(CodexDock,TEXT("PluginBarCodexChrome")).IsValid());
+        PNG.Reset();FImageUtils::PNGCompressImageArray(Target->SizeX,Target->SizeY,[&]{TArray<FColor> Pixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);return Pixels;}(),PNG);
+        FFileHelper::SaveArrayToFile(PNG,*(H->StorageRoot/TEXT("plugin-bar-codex-horizontal.png")));
+        H->SetPluginBarMinimized(true);CodexDock->Refresh();
+        for(int32 Pass=0;Pass<3;++Pass){++GFrameCounter;Renderer.DrawWidget(Target,CodexDock,Size,0);FlushRenderingCommands();}
+        TestTrue(TEXT("Minimized Codex bar keeps its expand control"),FindTagged(CodexDock,TEXT("PluginBarMinimize")).IsValid());
+        H->SetPluginBarMinimized(false);H->SetPluginBarHorizontal(false);
+        for(const FVector2D MapSize:{FVector2D(560,620),FVector2D(900,760)})
+        {
+            auto MapPanel=H->MakePanel(TEXT("waypoint"));
+            auto* MapTarget=FWidgetRenderer::CreateTargetFor(MapSize,TF_Bilinear,true);
+            for(int32 Pass=0;Pass<6;++Pass){++GFrameCounter;Renderer.DrawWidget(MapTarget,MapPanel,MapSize,0);FlushRenderingCommands();}
+            const auto MapView=FindTagged(MapPanel,TEXT("WaypointMapViewport"));
+            if(TestTrue(TEXT("Waypoint opens directly to its map"),MapView.IsValid()))
+                TestTrue(TEXT("Map gets most of the window height"),MapView->GetCachedGeometry().GetLocalSize().Y>MapSize.Y*.65);
+            TestTrue(TEXT("Secondary map settings are behind a menu"),FindTagged(MapPanel,TEXT("WaypointMapSettings")).IsValid());
+            PNG.Reset();FImageUtils::PNGCompressImageArray(MapTarget->SizeX,MapTarget->SizeY,[&]{TArray<FColor> Pixels;MapTarget->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);return Pixels;}(),PNG);
+            FFileHelper::SaveArrayToFile(PNG,*(H->StorageRoot/FString::Printf(TEXT("waypoint-map-%d.png"),int32(MapSize.X))));
+            MapTarget->ReleaseResource();
+        }
+        auto CraftPanel=H->MakePanel(TEXT("autocraft"));
+        for(int32 Pass=0;Pass<3;++Pass){++GFrameCounter;Renderer.DrawWidget(Target,CraftPanel,Size,0);FlushRenderingCommands();}
+        for(const TCHAR* Action:{TEXT("AutoCraft.Make"),TEXT("AutoCraft.Stop")})
+        {
+            const auto Control=FindTagged(CraftPanel,Action);
+            if(TestTrue(TEXT("Craft action remains available"),Control.IsValid()))TestTrue(TEXT("Craft action fits its label instead of stretching"),Control->GetCachedGeometry().GetLocalSize().X<180);
+        }
+        H->SetPluginTheme(TEXT("original"));Draw();
         // Sample empty space inside the actual pinned window, away from item artwork
         // and controls, so a visible backdrop is verified beyond brush properties.
         auto BackgroundAlpha=[&](float Opacity)
@@ -414,7 +485,7 @@ bool FACELedgerTest::RunTest(const FString&)
         TestEqual(TEXT("Window indoor zoom survives disk reload"),H->WaypointMapZoom(false,true),6.);
         auto DiskDock=SNew(SACEPluginDesktop).Host(H);
         TestEqual(TEXT("Disk reload restores window position"),DiskDock->Windows[TEXT("supplyledger")].Position,SavedPosition);
-        TestEqual(TEXT("Disk reload restores compact width"),DiskDock->DisplaySize(DiskDock->Windows[TEXT("supplyledger")]).X,72.);
+        TestEqual(TEXT("Disk reload restores compact width"),DiskDock->DisplaySize(DiskDock->Windows[TEXT("supplyledger")]).X,88.);
         TestTrue(TEXT("Plugin bar has an options gear"),FindTagged(DiskDock,TEXT("PluginOptions")).IsValid());
         auto Icons=SNew(SHorizontalBox);
         for(const TCHAR* Id:{TEXT("plugin.options"),TEXT("ucm"),TEXT("ucmmicro"),TEXT("looteditor"),TEXT("itemtools"),TEXT("waypoint"),TEXT("waypoint.map"),TEXT("ucm.log"),TEXT("supplyledger"),TEXT("huntledger"),TEXT("transmog"),TEXT("custom")})

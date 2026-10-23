@@ -92,7 +92,9 @@ void UACEPluginSubsystem::EditSupplySelection(bool Add)
 void UACEPluginSubsystem::RemoveSupply(int32 Index)
 {if(LedgerSupplies.IsValidIndex(Index)){LedgerSupplies.RemoveAt(Index);SaveSupplies();}}
 void UACEPluginSubsystem::ToggleSupplyName(int32 Index)
-{if(LedgerSupplies.IsValidIndex(Index)){SupplyNamesVisible=!SupplyNamesVisible;SaveSupplies(false);}}
+{if(LedgerSupplies.IsValidIndex(Index))SetSupplyNamesVisible(!SupplyNamesVisible);}
+void UACEPluginSubsystem::SetSupplyNamesVisible(bool Visible)
+{if(SupplyNamesVisible!=Visible){SupplyNamesVisible=Visible;SaveSupplies(false);}}
 bool UACEPluginSubsystem::LedgerOption(const FString& Id,const FString& Key,bool Default) const
 {bool V;return Settings&&Settings->TryGetBoolField(Id+TEXT(".")+Key,V)?V:Default;}
 void UACEPluginSubsystem::SetLedgerOption(const FString& Id,const FString& Key,bool Value)
@@ -221,7 +223,7 @@ namespace
                     if(!Locked)Row->AddSlot().AutoWidth().Padding(4,0)[Button(TEXT("-"),TEXT("Remove this item from the ledger"),[H=Host,I]{if(H.IsValid())H->RemoveSupply(I);})];
                     Rows->AddSlot().AutoHeight().Padding(2,2)[Row];
                 }
-                Body->AddSlot().FillHeight(1)[SNew(SScrollBox).ScrollBarThickness(FVector2D(4,4)).ScrollBarPadding(0)+SScrollBox::Slot()[Rows]];
+                Body->AddSlot().FillHeight(1)[SNew(SScrollBox).ScrollBarThickness(FVector2D(4,4)).ScrollBarPadding(0)+SScrollBox::Slot().Padding(0,0,6,0)[Rows]];
                 Body->SetToolTip(FACEPluginStyle::Tooltip(FText::FromString(Locked?TEXT("Use the game UI lock or hold Quick-show pinned windows to move and edit this HUD."):TEXT("Track selected items across your inventory."))));
                 if(!Locked||LedgerSupplies.IsEmpty())
                 {

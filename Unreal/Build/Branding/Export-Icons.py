@@ -8,6 +8,9 @@ with Image.open(Path(__file__).with_name('AC-Icon.png')) as source:
     windows = root / 'Build/Windows/Application.ico'
     windows.parent.mkdir(parents=True, exist_ok=True)
     icon.save(windows, sizes=[(n, n) for n in (16, 20, 24, 32, 40, 48, 64, 128, 256)])
+    mac = root / 'Build/Mac/Application.icns'
+    mac.parent.mkdir(parents=True, exist_ok=True)
+    icon.save(mac, format='ICNS')
     # Inno's welcome panel has a 164:314 aspect ratio. Compose the square
     # monogram at its original aspect ratio rather than stretching it.
     banner = Image.new('RGBA', (492, 942), (17, 27, 24, 255))
@@ -23,4 +26,4 @@ with Image.open(Path(__file__).with_name('AC-Icon.png')) as source:
         output = root / 'Build/Android/res' / density / 'icon.png'
         output.parent.mkdir(parents=True, exist_ok=True)
         icon.resize((size, size), Image.Resampling.LANCZOS).save(output)
-    print(f'Exported Windows and Android launcher icons from {icon.width} x {icon.height} RGBA artwork.')
+    print(f'Exported Mac, Windows and Android launcher icons from {icon.width} x {icon.height} RGBA artwork.')

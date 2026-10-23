@@ -5,7 +5,7 @@
 #include "Serialization/JsonSerializer.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEWaypointRouteTest,"ACE.Plugins.Waypoint.Route",
-    EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
 bool FACEWaypointRouteTest::RunTest(const FString&)
 {
     auto Profile=MakeShared<FJsonObject>();TArray<TSharedPtr<FJsonValue>> Points;
@@ -98,7 +98,7 @@ bool FACEWaypointCoordinatesTest::RunTest(const FString&)
 #include "ImageUtils.h"
 #include "RenderingThread.h"
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEWaypointTilesTest,"ACE.Plugins.Waypoint.TerrainTiles",
-    EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
 bool FACEWaypointTilesTest::RunTest(const FString&)
 {
     const auto A=FACEWaypointTiles::Bounds({124,100,2}),B=FACEWaypointTiles::Bounds({126,100,2});
@@ -109,17 +109,23 @@ bool FACEWaypointTilesTest::RunTest(const FString&)
     {
         const auto Detail=FACEWaypointTiles::Detail(Scale);
         TestTrue(TEXT("LOD has at least one texel per display pixel"),Detail.X*.8*Scale<=Detail.Y);
-        TestTrue(TEXT("LOD stays within source detail and upload budget"),Detail.X>=1&&Detail.X<=32&&Detail.Y<=1024);
+        TestTrue(TEXT("LOD stays within source detail and upload budget"),Detail.X>=1&&Detail.X<=8&&Detail.Y<=1024);
     }
     if(!FParse::Param(FCommandLine::Get(),TEXT("WaypointRender")))return true;
+    FString DatDirectory=TEXT("C:/Turbine/Asheron's Call");FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),DatDirectory);
     FACEWaypointTiles Tiles;const auto View=FBox2D(A.Min+FVector2D(.01,.01),A.Max-FVector2D(.01,.01));
     const double Begin=FPlatformTime::Seconds();double MaxUpdate=0;
-    do {const double Before=FPlatformTime::Seconds();Tiles.Update(TEXT("C:/Turbine/Asheron's Call"),View,100);MaxUpdate=FMath::Max(MaxUpdate,FPlatformTime::Seconds()-Before);FPlatformProcess::Sleep(.01f);}
+    do {const double Before=FPlatformTime::Seconds();Tiles.Update(DatDirectory,View,100);MaxUpdate=FMath::Max(MaxUpdate,FPlatformTime::Seconds()-Before);FPlatformProcess::Sleep(.01f);}
     while(Tiles.GetTiles().IsEmpty()&&FPlatformTime::Seconds()-Begin<20);
     TestEqual(TEXT("Real DAT produces one visible high-detail tile"),Tiles.GetTiles().Num(),1);
     AddInfo(FString::Printf(TEXT("Terrain tile ready in %.2f sec; maximum game-thread update %.2f ms"),FPlatformTime::Seconds()-Begin,MaxUpdate*1000));
     if(Tiles.GetTiles().IsEmpty())return false;
-    for(int I=0;I<10;++I)Tiles.Update(TEXT("C:/Turbine/Asheron's Call"),View,100);
+    FACEWaypointTiles CachedTiles;const double CachedBegin=FPlatformTime::Seconds();
+    do {CachedTiles.Update(DatDirectory,View,100);FPlatformProcess::Sleep(.005f);}
+    while(CachedTiles.GetTiles().IsEmpty()&&FPlatformTime::Seconds()-CachedBegin<5);
+    TestEqual(TEXT("New map instance reuses the disk tile cache"),CachedTiles.GetTiles().Num(),1);
+    AddInfo(FString::Printf(TEXT("Cached terrain tile ready in %.2f ms"),(FPlatformTime::Seconds()-CachedBegin)*1000));
+    for(int I=0;I<10;++I)Tiles.Update(DatDirectory,View,100);
     TestEqual(TEXT("Unchanged map reuses texture"),Tiles.GetTiles().Num(),1);
     auto Widget=SNew(SImage).Image(&Tiles.GetTiles()[0]->Brush);FWidgetRenderer Renderer(false,true);
     auto* Target=FWidgetRenderer::CreateTargetFor({512,512},TF_Bilinear,true);
@@ -130,7 +136,7 @@ bool FACEWaypointTilesTest::RunTest(const FString&)
     const auto FineBounds=FACEWaypointTiles::Bounds({124,100,1});
     const FBox2D FineView(FineBounds.Min+FVector2D(.01,.01),FineBounds.Max-FVector2D(.01,.01));
     const double FineBegin=FPlatformTime::Seconds();
-    do {Tiles.Update(TEXT("C:/Turbine/Asheron's Call"),FineView,1000);FPlatformProcess::Sleep(.01f);}
+    do {Tiles.Update(DatDirectory,FineView,1000);FPlatformProcess::Sleep(.01f);}
     while(Tiles.IsLoading()&&FPlatformTime::Seconds()-FineBegin<20);
     TestFalse(TEXT("High-DPI terrain request completes"),Tiles.IsLoading());
     TestTrue(TEXT("High-DPI zoom receives real 1024-pixel DAT tile"),Tiles.GetTiles().ContainsByPredicate([](const auto& T){return T->Resolution==1024&&T->Texture.IsValid()&&T->Texture->GetSizeX()==1024;}));

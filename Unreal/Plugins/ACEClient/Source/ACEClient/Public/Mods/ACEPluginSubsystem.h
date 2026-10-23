@@ -140,6 +140,7 @@ public:
     void EditSupplySelection(bool Add);
     void RemoveSupply(int32 Index);
     void ToggleSupplyName(int32 Index);
+    void SetSupplyNamesVisible(bool Visible);
     bool AreSupplyNamesVisible() const { return SupplyNamesVisible; }
     void ResetHuntLedger();
     bool LedgerOption(const FString& Id,const FString& Key,bool Default=false) const;
@@ -238,6 +239,8 @@ public:
     uint32 GetPluginOrderRevision() const { return PluginOrderRevision; }
     bool IsPluginBarUnlocked() const;
     void TogglePanel();
+    void OpenPluginSettings(const FString& WindowId);
+    FString PluginManagerSelection;
     bool IsManagerOpen() const { return DesktopPanel.IsValid(); }
     TSharedRef<SWidget> MakeUCMPanel(const FString& InitialPage=FString(), bool bShowTitle=true);
     TSharedRef<SWidget> MakeUCMMicroPanel();

@@ -152,6 +152,8 @@ namespace ACEUCMPanelPrivate
             if(ImportQueue.Num())ProcessImport();
             const bool Narrow=Geometry.GetLocalSize().X<700;
             if(Narrow!=LootNarrow){LootNarrow=Narrow;if((Page==TEXT("Loot")&&!EditingSalvage)||Page==TEXT("Route")||Page==TEXT("Overview"))Rebuild();}
+            const bool WideBuffs=Geometry.GetLocalSize().X>=850;
+            if(WideBuffs!=BuffColumns){BuffColumns=WideBuffs;if(Page==TEXT("Buffs"))Rebuild();}
             if(RenderedProfile.Pin()!=P())Rebuild();
         }
     private:
@@ -162,7 +164,7 @@ namespace ACEUCMPanelPrivate
         TMap<FString,bool> CollapsedSections;
         int32 HeadingCount=0;
         TArray<TSharedPtr<FSlateBrush>> Brushes;
-        bool ShowTitle=true,EditorOnly=false;FString BuffSearch;
+        bool ShowTitle=true,EditorOnly=false,BuffColumns=false;FString BuffSearch;
         FString Page=TEXT("Overview"),Search,TransitionWhen=TEXT("elapsed"),TransitionTarget;
         double PauseSeconds=5,TransitionValue=60;float JumpCharge=.5;int32 StateIndex=0,ExpandedMonster=INDEX_NONE;
         TSharedPtr<FJsonObject> P()const{return Plugin->Profile;}
@@ -696,9 +698,22 @@ namespace ACEUCMPanelPrivate
             {
                 const FString Key=Bane?TEXT("bane_profile"):TEXT("protection_profile"),Custom=Bane?TEXT("bane_custom"):TEXT("protection_custom");
                 const TArray<FString> Labels=Bane?TArray<FString>{TEXT("Custom"),TEXT("All"),TEXT("None"),TEXT("B"),TEXT("BPS"),TEXT("BPSA"),TEXT("BPSAC"),TEXT("ALFC")}:TArray<FString>{TEXT("Custom"),TEXT("All"),TEXT("None"),TEXT("B"),TEXT("BPS"),TEXT("BPSA"),TEXT("ALFC"),TEXT("BPSAC")};
-                Add(SNew(SACEPluginComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo).ButtonContent()[LiveText([this,Key,Bane,Labels](){return (Bane?TEXT("Banes: "):TEXT("Protections: "))+Labels[FMath::Clamp(int32(Num(P(),*Key,2))-1,0,7)];})]
+                if(FACEPluginStyle::IsCodex()&&!EditorOnly)
+                {
+                    Add(CaptionText(Bane?TEXT("Banes"):TEXT("Protections")));
+                    auto Presets=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(3,3));
+                    for(int32 I=0;I<Labels.Num();++I)
+                        Presets->AddSlot()[ChoiceButton(Labels[I],[this,Key,I](){return FMath::Clamp(int32(Num(P(),*Key,2))-1,0,7)==I;},
+                            [this,Key,I](){P()->SetNumberField(Key,I+1);Save();})];
+                    Add(Presets);
+                }
+                else Add(SNew(SACEPluginComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo).ButtonContent()[LiveText([this,Key,Bane,Labels](){return (Bane?TEXT("Banes: "):TEXT("Protections: "))+Labels[FMath::Clamp(int32(Num(P(),*Key,2))-1,0,7)];})]
                     .OnGetMenuContent_Lambda([this,Key,Labels]()->TSharedRef<SWidget>{auto List=SNew(SVerticalBox);
-                        for(int32 I=0;I<Labels.Num();++I)List->AddSlot().AutoHeight()[MenuButton(Labels[I],[this,Key,I](){P()->SetNumberField(Key,I+1);Save();FSlateApplication::Get().DismissAllMenus();})];return List;}));
+                        for(int32 I=0;I<Labels.Num();++I)
+                        {
+                            List->AddSlot().AutoHeight()[MenuButton(Labels[I],[this,Key,I](){P()->SetNumberField(Key,I+1);Save();FSlateApplication::Get().DismissAllMenus();})];
+                        }
+                        return List;}));
                 Add(SNew(SEditableTextBox).Visibility_Lambda([this,Key](){return Num(P(),*Key,2)==1?EVisibility::Visible:EVisibility::Collapsed;}).Style(&FACEPluginStyle::Current()->Edit).Text(FText::FromString(Str(P(),*Custom,TEXT("ALL")))).HintText(FText::FromString(TEXT("A acid, B bludgeon, C cold, L lightning, F fire, P pierce, S slash")))
                     .OnTextCommitted_Lambda([this,Custom](const FText& Value,ETextCommit::Type){FString Letters=Value.ToString().ToUpper();if(Letters.Len()<=7){P()->SetStringField(Custom,Letters);Save();}}));
             }
@@ -796,6 +811,17 @@ namespace ACEUCMPanelPrivate
             {
                 SectionSelector(TEXT("Character"));
                 Heading(TEXT("Automatic buffing"),TEXT("Uses your highest usable sustained buffs for attributes, trained skills, protections and equipment."));
+                const auto PageBody=Body;
+                TSharedPtr<SVerticalBox> BuffDetails;
+                if(FACEPluginStyle::IsCodex()&&!EditorOnly&&BuffColumns)
+                {
+                    auto Casting=SNew(SVerticalBox);
+                    BuffDetails=SNew(SVerticalBox);
+                    SectionBody->AddSlot().AutoHeight()[SNew(SHorizontalBox)
+                        +SHorizontalBox::Slot().FillWidth(1).Padding(0,0,12,0)[Casting]
+                        +SHorizontalBox::Slot().FillWidth(1).Padding(12,0,0,0)[BuffDetails.ToSharedRef()]];
+                    SectionBody=Casting;
+                }
                 Add(Toggle(TEXT("buffing"),TEXT("Enable Buffs"),TEXT("Maintains buffs while UCM is running."),true));
                 ForceBuffControls();
                 Add(Toggle(TEXT("fast_cast_buffs"),TEXT("Fast buff movement"),TEXT("Shorten eligible buff recoil with a backward press-and-release in one update. The tap does not move your character or wait for a server reply to release."),true));
@@ -805,6 +831,8 @@ namespace ACEUCMPanelPrivate
                 Add(Text(TEXT("Refreshes before timers expire; nearby expirations are grouped during a buff cycle. Saved refresh settings are preserved."),14,Muted));
                 Add(Toggle(TEXT("idle_buff_topoff"),TEXT("Refresh buffs while idle"),TEXT("Tops up buffs after combat and looting when no target is nearby.")));
                 Slider(TEXT("idle_buff_seconds"),TEXT("Idle buff refresh window"),60,3600,1200,Accent,TEXT(" sec"));
+                // Route the remaining sections into the second column without changing their bindings.
+                if(BuffDetails){Body=BuffDetails;SectionBody.Reset();}
                 ProtectionControls();
                 Heading(TEXT("Buff exceptions"),TEXT("Override individual buff families when needed."));
                 Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Text(FText::FromString(BuffSearch)).HintText(FText::FromString(TEXT("Find a buff family; press Enter")))
@@ -827,6 +855,7 @@ namespace ACEUCMPanelPrivate
                         +SHorizontalBox::Slot().AutoWidth()[ChoiceButton(TEXT("Include"),[this,Id](){return Has(TEXT("buffs"),Id);},[this,Id,Cat](){if(Has(TEXT("excluded_buffs"),Cat))ToggleId(TEXT("excluded_buffs"),Cat);ToggleId(TEXT("buffs"),Id);})]
                         +SHorizontalBox::Slot().AutoWidth()[ChoiceButton(TEXT("Exclude"),[this,Cat](){return Has(TEXT("excluded_buffs"),Cat);},[this,Cat](){ToggleId(TEXT("excluded_buffs"),Cat);})]));
                 }
+                Body=PageBody;SectionBody.Reset();
             }
             else if(Page==TEXT("Vendors")){VendorPanel();}
             else if(Page==TEXT("Buff others"))
