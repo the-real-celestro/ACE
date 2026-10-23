@@ -14,6 +14,8 @@ class UScrollBox;
 class UVerticalBox;
 class UBorder;
 class UACELoginWidget;
+class UACELobbyAccountListView;
+class UACELobbyAccountItem;
 
 /** Payload-bearing buttons avoid native popup windows, which do not render in VR. */
 UCLASS()
@@ -23,6 +25,9 @@ class UACELoginActionButton : public UButton
 public:
 	FString Action, Value;
 	bool bAccountDragHandle = false;
+	/** Retail art used for this button (see ACELoginLobby.cpp), and whether it is the active/selected one. */
+	uint8 LobbyStyle = 0;
+	bool bLobbyAccent = false;
 	UPROPERTY() TWeakObjectPtr<UACELoginWidget> Owner;
 	UFUNCTION() void HandleAction();
 protected:
@@ -63,6 +68,9 @@ public:
 	virtual void NativeConstruct() override;
 	virtual void NativeDestruct() override;
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
+	/** Play page keyboard: type to jump, Backspace/Esc edit the search, arrows pick, Enter launches. */
+	virtual FReply NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
+	virtual FReply NativeOnKeyChar(const FGeometry& InGeometry, const FCharacterEvent& InCharEvent) override;
 
 	/** True once EnsureDefaultLayout() has actually populated WidgetTree->RootWidget with our
 	 *  real Canvas/Border/TextBox layout (as opposed to it still being null / a placeholder). */
@@ -114,20 +122,57 @@ protected:
 	FString EditingServerId, BrowserServerId, PendingRemoval;
 	bool bEditingGDLE = false;
 	bool bRefreshingDirectory = false;
-	float LayoutWidth = 0;
+	FVector2D LayoutView = FVector2D::ZeroVector;
+	float LayoutBgScale = 1.f;
 	int32 StyledPage = INDEX_NONE;
 	TSharedPtr<class IHttpRequest, ESPMode::ThreadSafe> DirectoryRequest;
 	UPROPERTY() TObjectPtr<class UWidgetSwitcher> Pages;
 	UPROPERTY() TObjectPtr<class UScaleBox> ResponsiveScale;
-	UPROPERTY() TObjectPtr<class UStackBox> PlayLayout;
 	UPROPERTY() TArray<TObjectPtr<UACELoginActionButton>> NavigationButtons;
-	UPROPERTY() TMap<TObjectPtr<class UImage>, uint32> LobbyArtwork;
+	/** Right-hand column: tabs, status/confirmation and the active page. */
 	UPROPERTY() TObjectPtr<class USizeBox> DashboardSize;
 	UPROPERTY() TObjectPtr<class USizeBox> FooterSize;
+	/** Left-hand column: Your Servers and the Accounts panel. */
 	UPROPERTY() TObjectPtr<class USizeBox> SidebarSize;
-	UPROPERTY() TObjectPtr<class USizeBox> DetailSize;
+	UPROPERTY() TObjectPtr<class USizeBox> ServerListSize;
+	UPROPERTY() TObjectPtr<class USizeBox> PlayWindowSize;
+	UPROPERTY() TObjectPtr<class USizeBox> LaunchSize;
+	UPROPERTY() TObjectPtr<UBorder> PlayWindow;
+	UPROPERTY() TObjectPtr<UBorder> SelectedAccountRow;
+	UPROPERTY() TObjectPtr<class UImage> LobbyBackground;
+	UPROPERTY() TObjectPtr<UTextBlock> LobbySubtitle;
+	UPROPERTY() TObjectPtr<UTextBlock> LobbyBrand;
 	UPROPERTY() TObjectPtr<UScrollBox> ServerList;
-	UPROPERTY() TObjectPtr<UScrollBox> AccountList;
+	/** Play page account picker: pinned favourites, then everything else (virtualised). */
+	UPROPERTY() TObjectPtr<UACELobbyAccountListView> AccountList;
+	UPROPERTY() TObjectPtr<UACELobbyAccountListView> FavoriteList;
+	UPROPERTY() TObjectPtr<class USizeBox> FavoriteSize;
+	UPROPERTY() TObjectPtr<UWidget> FavoriteHeader;
+	UPROPERTY() TObjectPtr<UEditableTextBox> AccountSearchBox;
+	UPROPERTY() TObjectPtr<UWidget> AccountSearchClear;
+	UPROPERTY() TObjectPtr<UTextBlock> AccountsHeading;
+	UPROPERTY() TObjectPtr<UTextBlock> AccountsEmpty;
+	UPROPERTY() TObjectPtr<UTextBlock> SelectedAccountName;
+	UPROPERTY() TObjectPtr<UTextBlock> LastLaunchedText;
+	UPROPERTY() TObjectPtr<UWidget> AccountScrollUp;
+	UPROPERTY() TObjectPtr<UWidget> AccountScrollDown;
+	UPROPERTY() TArray<TObjectPtr<UACELoginActionButton>> SortButtons;
+	UPROPERTY() TMap<FString, TObjectPtr<UACELobbyAccountItem>> AccountItems;
+	TArray<TWeakPtr<class SWidget>> LobbyFrames;
+	/** Account IDs in on-screen order (favourites first) for arrow-key selection. */
+	TArray<FString> VisibleAccountOrder;
+	bool bLobbyArtApplied = false;
+	bool bSelectedAccountFavorite = false;
+	void ApplyLobbyArt();
+	void LayoutLobby(const FVector2D& View);
+	void RefreshAccountLists();
+	void UpdateSelectedAccountInfo();
+	void MoveAccountSelection(int32 Delta);
+	bool IsLobbyKeyboardActive() const;
+	UFUNCTION() void OnAccountSearchChanged(const FText& Text);
+	UFUNCTION() void OnAccountSearchCommitted(const FText& Text, ETextCommit::Type CommitMethod);
+	UTextBlock* Heading(const FString& Text, int32 FancySize = 24);
+	UWidget* Frame(UWidget* Content, const FMargin& Padding);
 	UPROPERTY() TObjectPtr<UScrollBox> ManagedAccountList;
 	UPROPERTY() TObjectPtr<UScrollBox> BrowserList;
 	UPROPERTY() TObjectPtr<UTextBlock> ServerTitle;
@@ -167,6 +212,8 @@ protected:
 	bool bConnectScreenPreview = false; // -ACEConnectScreenPreview (non-shipping): loop the screen without connecting.
 	float ConnectPreviewTime = 0;
 	int32 ConnectPreviewPass = 0;
+	float LobbyShotTime = -1.f;
+	FString LobbyShotAccountId;
 	int32 ConnectPhase = 0; // 0 connecting, 1 connected (left vial filling), 2 updating, 3 both vials done.
 	float ConnectPhaseTime = 0;
 	bool bUpdateDownloadRequested = false, bUpdatePhaseFinished = false;
@@ -202,7 +249,7 @@ protected:
 	bool ValidateGameFiles();
 	UFUNCTION() void OnSearchChanged(const FText& Text);
 	UFUNCTION() void OnDatChanged(const FText& Text);
-	UTextBlock* Label(const FString& Text, int32 Size = 18, bool bMuted = false);
+	UTextBlock* Label(const FString& Text, int32 Size = 18, bool bMuted = false, float BitmapScale = 1.25f);
 	UACELoginActionButton* ActionButton(const FString& Text, const FString& Action, const FString& Value = FString(), bool bAccent = false);
 	UEditableTextBox* Field(UVerticalBox* Parent, const FString& Title, const FName Name, bool bSecret = false);
 	/** CRITICAL: builds WidgetTree->RootWidget BEFORE UUserWidget::RebuildWidget() ever runs.

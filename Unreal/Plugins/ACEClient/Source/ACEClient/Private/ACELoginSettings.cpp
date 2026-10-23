@@ -119,6 +119,7 @@ namespace ACELoginSettings
 			Json->SetStringField(TEXT("selectedAccount"), Settings.SelectedAccountId);
 			Json->SetStringField(TEXT("datDirectory"), Settings.DatDirectory);
 			Json->SetBoolField(TEXT("autoUpdate"), Settings.bAutoUpdate);
+			Json->SetStringField(TEXT("accountSort"), Settings.AccountSort);
 			TArray<TSharedPtr<FJsonValue>> Servers, Accounts;
 			for (const auto& S : Settings.Servers)
 			{
@@ -134,6 +135,9 @@ namespace ACELoginSettings
 				auto J = MakeShared<FJsonObject>();
 				J->SetStringField(TEXT("id"), A.Id);
 				J->SetStringField(TEXT("alias"), A.Alias);
+				// Optional lobby fields; older builds ignore unknown keys.
+				if (A.bFavorite) J->SetBoolField(TEXT("favorite"), true);
+				if (A.LastUsed > 0) J->SetNumberField(TEXT("lastUsed"), double(A.LastUsed));
                 J->SetStringField(TEXT("username"), A.Username); J->SetStringField(TEXT("password"), (PLATFORM_LINUX || PLATFORM_MAC) ? FString() : A.Password);
 				Accounts.Add(MakeShared<FJsonValueObject>(J));
 			}
@@ -229,6 +233,9 @@ namespace ACELoginSettings
 			Json->TryGetStringField(TEXT("datDirectory"), Loaded.DatDirectory);
 			// Missing on existing installations: automatic installation is opt-in.
 			Json->TryGetBoolField(TEXT("autoUpdate"), Loaded.bAutoUpdate);
+			FString Sort;
+			if (Json->TryGetStringField(TEXT("accountSort"), Sort) && (Sort == TEXT("az") || Sort == TEXT("recent") || Sort == TEXT("custom")))
+				Loaded.AccountSort = Sort;
 			const TArray<TSharedPtr<FJsonValue>> *Servers = nullptr, *Accounts = nullptr;
 			if (!Json->TryGetArrayField(TEXT("servers"), Servers) || !Json->TryGetArrayField(TEXT("accounts"), Accounts)
 				|| Servers->Num() > 128 || Accounts->Num() > 512) return false;
@@ -251,6 +258,10 @@ namespace ACELoginSettings
 					|| !(*J)->TryGetStringField(TEXT("username"), A.Username) || !(*J)->TryGetStringField(TEXT("password"), A.Password)) return false;
 				// Optional for existing saved logins; identity remains the entry ID.
 				(*J)->TryGetStringField(TEXT("alias"), A.Alias);
+				(*J)->TryGetBoolField(TEXT("favorite"), A.bFavorite);
+				double LastUsed = 0;
+				if ((*J)->TryGetNumberField(TEXT("lastUsed"), LastUsed) && FMath::IsFinite(LastUsed) && LastUsed > 0 && LastUsed < 4102444800.0)
+					A.LastUsed = int64(LastUsed);
 #if (PLATFORM_LINUX || PLATFORM_MAC)
                 A.Password.Reset();
 #endif

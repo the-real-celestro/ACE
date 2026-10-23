@@ -6,6 +6,7 @@
 #include "ACELoginProfile.h"
 #include "ACELoginSettings.h"
 #include "ACELoginWidget.h"
+#include "ACELobbyAccountList.h"
 #include "ACEUpdateSubsystem.h"
 #include "ACEClientBuild.h"
 #include "ACEPlayerController.h"
@@ -165,7 +166,7 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
     W->RunAction(TEXT("gdle")); W->RunAction(TEXT("saveserver"));
     TestEqual(TEXT("Accounts are shared when switching to a new server"),W->AccountBox->GetText().ToString(),FString(TEXT("Adventurer")));
     TestEqual(TEXT("Server switch retains selected alias"),W->AccountAliasBox->GetText().ToString(),FString(TEXT("Coldeve crafter")));
-    TestEqual(TEXT("Every saved account is offered on each server"),W->AccountList->GetChildrenCount(),2);
+    TestEqual(TEXT("Every saved account is offered on each server"),W->AccountList->GetNumItems(),2);
     W->RunAction(TEXT("accounts"));
     TestEqual(TEXT("Account management has its own page"),W->Pages->GetActiveWidgetIndex(),6);
     TestEqual(TEXT("Account manager lists the same saved accounts"),W->ManagedAccountList->GetChildrenCount(),2);
@@ -175,14 +176,41 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
     TestEqual(TEXT("Switching servers preserves the chosen identity"),W->Profile.SelectedAccountId,SecondAccountId);
     W->RunAction(TEXT("selectaccount"),W->Profile.Accounts[1].Id);
     TestEqual(TEXT("Account selection keeps authentication username rather than alias"),W->Profile.Account,FString(TEXT("Adventurer")));
-    for(auto* List:{W->AccountList.Get(),W->ManagedAccountList.Get()})
+    // Play lists A-Z by default; Custom follows the Accounts tab order.
+    TestEqual(TEXT("Play page sorts accounts A-Z by default"),W->Profile.AccountSort,FString(TEXT("az")));
+    auto PlayItem=[&](int32 Index){ return W->AccountList->GetNumItems()>Index?Cast<UACELobbyAccountItem>(W->AccountList->GetListItems()[Index]):nullptr; };
+    TestTrue(TEXT("A-Z puts Coldeve before Conquest"),PlayItem(0)&&PlayItem(0)->Id==SecondAccountId);
+    W->RunAction(TEXT("sortcustom"));
     {
-        auto* Button=Cast<UACELoginActionButton>(List->GetChildAt(1));
+        auto* Item=PlayItem(1);
+        TestTrue(TEXT("Play rows display alias with username"),Item&&Item->Title==TEXT("Coldeve crafter (Adventurer)"));
+        TestTrue(TEXT("Play rows distinguish duplicate usernames by stable ID"),Item&&Item->Id==SecondAccountId);
+        auto* Button=Cast<UACELoginActionButton>(W->ManagedAccountList->GetChildAt(1));
         auto* Size=Button?Cast<USizeBox>(Button->GetContent()):nullptr;
         auto* Title=Size?Cast<UTextBlock>(Size->GetContent()):nullptr;
-        TestTrue(TEXT("Play and Accounts rows display alias with username"),Title&&Title->GetText().ToString()==TEXT("Coldeve crafter (Adventurer)"));
-        TestTrue(TEXT("Rows distinguish duplicate usernames by stable ID"),Button&&Button->Value==SecondAccountId);
+        TestTrue(TEXT("Accounts rows display alias with username"),Title&&Title->GetText().ToString()==TEXT("Coldeve crafter (Adventurer)"));
+        TestTrue(TEXT("Accounts rows distinguish duplicate usernames by stable ID"),Button&&Button->Value==SecondAccountId);
     }
+    // Favourites pin to their own list, persist, and leave credentials alone.
+    W->RunAction(TEXT("togglefavorite"),SecondAccountId);
+    TestEqual(TEXT("Favorite moves out of the full list"),W->AccountList->GetNumItems(),1);
+    TestEqual(TEXT("Favorite is pinned"),W->FavoriteList->GetNumItems(),1);
+    TestEqual(TEXT("Keyboard order lists favorites first"),W->VisibleAccountOrder.Num()>0?W->VisibleAccountOrder[0]:FString(),SecondAccountId);
+    {
+        FACELoginSettings Saved;
+        TestTrue(TEXT("Favorite and sort are saved"),ACELoginSettings::Load(Saved,W->ProfilePath)&&Saved.AccountSort==TEXT("custom")
+            &&Saved.Accounts.Num()==2&&Saved.Accounts[1].bFavorite&&!Saved.Accounts[0].bFavorite);
+    }
+    W->RunAction(TEXT("togglefavorite"),SecondAccountId);
+    TestEqual(TEXT("Unfavorite returns the account to the full list"),W->AccountList->GetNumItems(),2);
+    // Search narrows both lists and keeps a visible selection.
+    W->AccountSearchBox->SetText(FText::FromString(TEXT("conquest"))); W->OnAccountSearchChanged(W->AccountSearchBox->GetText());
+    TestEqual(TEXT("Search filters accounts case-insensitively"),W->AccountList->GetNumItems(),1);
+    TestEqual(TEXT("Search moves selection to a visible account"),W->Profile.SelectedAccountId,FirstAccountId);
+    W->RunAction(TEXT("clearsearch"));
+    TestEqual(TEXT("Clearing search restores every account"),W->AccountList->GetNumItems(),2);
+    W->MoveAccountSelection(1);
+    TestEqual(TEXT("Arrow keys move the selection"),W->Profile.SelectedAccountId,SecondAccountId);
     W->RunAction(TEXT("accounts"));
     TFunction<TSharedPtr<SWidget>(TSharedRef<SWidget>,FName)> FindTag=[&](TSharedRef<SWidget> Widget,FName Tag)->TSharedPtr<SWidget>
     {
@@ -227,8 +255,8 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
     TestTrue(TEXT("Saved order retains both duplicate identities and selection"),Ordered.Accounts.Num()==2
         && Ordered.Accounts[0].Id==SecondAccountId && Ordered.Accounts[1].Id==FirstAccountId && Ordered.SelectedAccountId==SecondAccountId);
     TestTrue(TEXT("Drag does not save unfinished alias edits"),Ordered.Accounts[0].Alias==TEXT("Coldeve crafter"));
-    for (auto* List:{W->AccountList.Get(),W->ManagedAccountList.Get()})
-        TestEqual(TEXT("Both account lists show the saved order"),CastChecked<UACELoginActionButton>(List->GetChildAt(0))->Value,SecondAccountId);
+    TestEqual(TEXT("Accounts tab shows the saved order"),CastChecked<UACELoginActionButton>(W->ManagedAccountList->GetChildAt(0))->Value,SecondAccountId);
+    TestTrue(TEXT("Custom sort on Play shows the saved order"),W->AccountList->GetNumItems()>0&&CastChecked<UACELobbyAccountItem>(W->AccountList->GetListItems()[0])->Id==SecondAccountId);
     W->AccountAliasBox->SetText(FText::FromString(TEXT("Coldeve crafter")));
     // Restore upward without disturbing selection or any credentials.
     DragAccount(FirstAccountId,SecondAccountId,false);

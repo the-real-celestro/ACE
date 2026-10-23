@@ -13,6 +13,10 @@ struct FACELoginServer
 struct FACELoginAccount
 {
 	FString Id, Username, Password, Alias;
+	/** Lobby presentation only (optional in saved profiles): pinned in Favorites, and the
+	 *  last successful launch (Unix seconds, 0 = never) for the Recent sort. */
+	bool bFavorite = false;
+	int64 LastUsed = 0;
 	/** Alias labels this local entry; authentication always uses Username. */
 	FString DisplayName() const;
 };
@@ -29,6 +33,8 @@ struct FACELoginSettings
 	FString SelectedServerId, SelectedAccountId, DatDirectory;
 	bool bProfileFormat = false;
 	bool bAutoUpdate = false;
+	/** Lobby account sort: "az" (default), "recent", or "custom" (the saved order). */
+	FString AccountSort = TEXT("az");
 	void MigrateLegacy();
 	const FACELoginServer* SelectedServer() const;
 	void RemoveServer(const FString& Id);
