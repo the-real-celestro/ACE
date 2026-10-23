@@ -76,20 +76,20 @@ void UACELoginWidget::HandleState(EACESessionState NewState)
 	case EACESessionState::Connecting:
 		SetStatus(TEXT("Connecting..."));
 		ShowConnectScreen();
-		SetConnectStep(.05f, .25f, TEXT("Connecting to server..."));
+		SetConnectStep(.05f, .45f, TEXT("Connecting to server..."));
 		break;
 	case EACESessionState::AwaitConnectRequest:
 		SetStatus(TEXT("Awaiting ConnectRequest"));
-		SetConnectStep(.25f, .5f, TEXT("Logging in..."));
+		if (ConnectPhase == 0) SetConnectStep(.45f, .9f, TEXT("Logging in..."));
 		break;
 	case EACESessionState::AwaitCharacterList:
 		SetStatus(TEXT("Waiting for the server's character list..."));
-		SetConnectStep(.5f, .8f, TEXT("Receiving character list..."));
+		MarkConnected(); // The server accepted the connection; the update vial runs while the list arrives.
 		break;
 	case EACESessionState::CharacterSelect:
 		// The controller removes this card only once the DAT screen is ready.
 		// Do not overwrite a loading failure set by its character-list handler.
-		SetConnectStep(1.f, 1.f, TEXT("Connected!"));
+		MarkConnected();
 		break;
 	case EACESessionState::EnteringWorld: SetStatus(TEXT("Entering world...")); break;
 	case EACESessionState::InWorld:

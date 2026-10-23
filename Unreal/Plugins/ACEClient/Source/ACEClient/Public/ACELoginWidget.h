@@ -100,6 +100,8 @@ public:
 	 *  Connect/Update progress vials, shown from Login until character selection. */
 	void EndConnectScreen();
 	bool IsConnectScreenVisible() const;
+	/** True while the connect screen is still filling its vials; character select waits for it. */
+	bool IsConnectScreenHoldingCharacterSelect() const;
 
 protected:
 	friend class FACEMissingDatLoginTest;
@@ -164,10 +166,17 @@ protected:
 	bool bSuppressConnectDisconnect = false;
 	bool bConnectScreenPreview = false; // -ACEConnectScreenPreview (non-shipping): loop the screen without connecting.
 	float ConnectPreviewTime = 0;
+	int32 ConnectPreviewPass = 0;
+	int32 ConnectPhase = 0; // 0 connecting, 1 connected (left vial filling), 2 updating, 3 both vials done.
+	float ConnectPhaseTime = 0;
+	bool bUpdateDownloadRequested = false, bUpdatePhaseFinished = false;
+	void MarkConnected();
+	void BeginUpdatePhase();
+	void TickUpdatePhase(float& Target, FString& Text);
+	void TickConnectPreview(float DeltaTime);
 	void ShowConnectScreen();
 	void SetConnectStep(float Base, float Cap, const FString& Text);
 	void TickConnectScreen(float DeltaTime);
-	float UpdateVialTarget(FString& Text) const;
 	void LoadVialArt();
 	UPROPERTY() TObjectPtr<UACELoginActionButton> UpdateNavButton;
 	UPROPERTY() TObjectPtr<UButton> CheckUpdateButton;

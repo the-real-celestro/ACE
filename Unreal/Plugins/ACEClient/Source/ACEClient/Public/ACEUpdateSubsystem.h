@@ -44,6 +44,12 @@ public:
     EACEAutoUpdateAction PollAutoUpdate(bool bVR);
     bool IsBusy() const;
     bool CanUseLobby() const;
+    /** Connect screen, retail order (connect, then patch): like Check/Download, but also allowed
+     *  while a login is still before the world. Installation still waits for the lobby. */
+    void CheckWhileConnecting();
+    void DownloadWhileConnecting();
+    /** Only platforms with an installer, and only with automatic updates enabled (consent). */
+    bool CanDownloadWhileConnecting() const;
     EACEUpdateState State = EACEUpdateState::Idle;
     FString Message = TEXT("Updates are checked when the launcher opens.");
     FACEUpdateRelease Release;
@@ -60,6 +66,8 @@ private:
     void VerifyDownload(const FString& Path, bool bCached);
     FString CacheDirectory() const;
     FString PayloadPath() const;
+    bool CanStartRequest() const;
+    bool bConnectRequest = false;
     bool bChecked = false;
     bool bAutoUpdateEnabled = false;
     bool bAutoUpdatePaused = false;

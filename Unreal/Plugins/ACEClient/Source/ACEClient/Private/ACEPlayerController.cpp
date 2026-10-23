@@ -5006,6 +5006,11 @@ void AACEPlayerController::TickPendingCharacterSelect()
 	{
 		return;
 	}
+	// Retail order: the connect screen finishes its update vial before character select opens.
+	if (LoginWidget && LoginWidget->IsConnectScreenHoldingCharacterSelect())
+	{
+		return;
+	}
 	if (!TryPrefetchCharacterSelectAssets())
 	{
 		if (LoginWidget)

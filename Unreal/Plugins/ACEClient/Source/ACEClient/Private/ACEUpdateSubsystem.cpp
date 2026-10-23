@@ -137,6 +137,30 @@ bool UACEUpdateSubsystem::CanUseLobby() const
     const auto Session = Client ? Client->GetSession() : nullptr;
     return !Session || Session->GetState() == EACESessionState::Disconnected || Session->GetState() == EACESessionState::Failed;
 }
+bool UACEUpdateSubsystem::CanStartRequest() const
+{
+    if (CanUseLobby()) return true;
+    if (!bConnectRequest) return false;
+    const auto* Client = GetGameInstance() ? GetGameInstance()->GetSubsystem<UACEClientSubsystem>() : nullptr;
+    const auto Session = Client ? Client->GetSession() : nullptr;
+    const EACESessionState S = Session ? Session->GetState() : EACESessionState::Disconnected;
+    return S == EACESessionState::Connecting || S == EACESessionState::AwaitConnectRequest
+        || S == EACESessionState::AwaitCharacterList || S == EACESessionState::CharacterSelect;
+}
+void UACEUpdateSubsystem::CheckWhileConnecting() { TGuardValue<bool> Guard(bConnectRequest, true); Check(); }
+void UACEUpdateSubsystem::DownloadWhileConnecting()
+{
+    if (!CanDownloadWhileConnecting()) return;
+    TGuardValue<bool> Guard(bConnectRequest, true); Download();
+}
+bool UACEUpdateSubsystem::CanDownloadWhileConnecting() const
+{
+#if PLATFORM_WINDOWS || PLATFORM_LINUX || PLATFORM_ANDROID
+    return bAutoUpdateEnabled && !bAutoUpdatePaused && Release.Number > ACEClientBuild::ReleaseNumber;
+#else
+    return false; // No payload or installer for this platform (macOS): the version is reported only.
+#endif
+}
 float UACEUpdateSubsystem::Progress() const { return Stream && Release.Bytes > 0 ? FMath::Clamp(float(double(Stream->Received()) / Release.Bytes), 0.f, 1.f) : 0.f; }
 void UACEUpdateSubsystem::Fail(const FString& Reason) { bAutoUpdatePaused = true; State = EACEUpdateState::Error; Message = Reason; }
 void UACEUpdateSubsystem::ResetRequest()
@@ -236,7 +260,7 @@ FString UACEUpdateSubsystem::PayloadPath() const { return CacheDirectory() / (PL
 
 void UACEUpdateSubsystem::Check(bool bAutomatic)
 {
-    if (IsBusy() || State == EACEUpdateState::Checking || !CanUseLobby()) return;
+    if (IsBusy() || State == EACEUpdateState::Checking || !CanStartRequest()) return;
     const double Now = FPlatformTime::Seconds();
     if (bAutomatic && (GIsEditor || FApp::IsUnattended() || bAutoUpdatePaused
         || (bChecked && (!bAutoUpdateEnabled || Now < NextAutomaticCheck)))) return;
@@ -266,7 +290,7 @@ void UACEUpdateSubsystem::Check(bool bAutomatic)
 
 void UACEUpdateSubsystem::Download()
 {
-    if (IsBusy() || !CanUseLobby() || Release.Number <= ACEClientBuild::ReleaseNumber) return;
+    if (IsBusy() || !CanStartRequest() || Release.Number <= ACEClientBuild::ReleaseNumber) return;
     ResetRequest(); State = EACEUpdateState::Downloading; Message = TEXT("Downloading update...");
     IFileManager::Get().MakeDirectory(*CacheDirectory(), true);
     uint64 Total = 0, Free = 0;

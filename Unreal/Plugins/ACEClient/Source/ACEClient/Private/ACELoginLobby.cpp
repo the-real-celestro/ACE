@@ -907,6 +907,8 @@ void UACELoginWidget::RunAction(const FString& Action, const FString& Value)
 	{
 		// Drops the half-open session (the server is told to disconnect) and returns to the lobby.
 		const auto Session=Client?Client->GetSession():nullptr;
+		// A download started by the connect screen is part of this login; stop it too.
+		if (bUpdateDownloadRequested && Updater && Updater->IsBusy()) Updater->Cancel();
 		EndConnectScreen(); bConnectScreenPreview=false;
 		if(Session && Session->GetState()!=EACESessionState::Disconnected) Session->Disconnect();
 		SetStatus(TEXT("Connection cancelled."));
@@ -1060,8 +1062,9 @@ void UACELoginWidget::ShowConnectScreen()
 	if (!IsConnectScreenVisible())
 	{
 		// Both vials start empty, like retail, and fill as each stage completes.
-		ConnectFill=UpdateVialFill=0;
-		SetConnectStep(.05f,.25f,TEXT("Connecting to server..."));
+		ConnectFill=UpdateVialFill=0; ConnectPhase=0; ConnectPhaseTime=0; bUpdateDownloadRequested=bUpdatePhaseFinished=false;
+		SetConnectStep(.05f,.45f,TEXT("Connecting to server..."));
+		if (ConnectUpdateLabel) ConnectUpdateLabel->SetText(FText::FromString(TEXT("Update progress")));
 		ConnectDetail->SetText(FText::GetEmpty());
 		ConnectCancelButton->SetVisibility(ESlateVisibility::Visible);
 		ConnectScreen->SetVisibility(ESlateVisibility::Visible);
@@ -1071,7 +1074,7 @@ void UACELoginWidget::ShowConnectScreen()
 
 void UACELoginWidget::EndConnectScreen()
 {
-	ConnectFailTime=-1;
+	ConnectFailTime=-1; ConnectPhase=0;
 	if (ConnectScreen) ConnectScreen->SetVisibility(ESlateVisibility::Collapsed);
 }
 
@@ -1081,48 +1084,91 @@ void UACELoginWidget::SetConnectStep(float Base, float Cap, const FString& Text)
 	if (ConnectLabel && ConnectLabel->GetText().ToString()!=Text) ConnectLabel->SetText(FText::FromString(Text));
 }
 
-float UACELoginWidget::UpdateVialTarget(FString& Text) const
+namespace { constexpr float ConnectMinPhase=.7f; } // Each vial is seen filling, without a noticeable delay.
+
+bool UACELoginWidget::IsConnectScreenHoldingCharacterSelect() const
 {
-	if (!Updater) { Text=TEXT("Update progress"); return 0.f; }
+	return IsConnectScreenVisible() && ConnectFailTime<0 && ConnectPhase<3;
+}
+
+void UACELoginWidget::MarkConnected()
+{
+	if (ConnectPhase!=0) return;
+	ConnectPhase=1; ConnectPhaseTime=0;
+	SetConnectStep(1.f,1.f,TEXT("Connected!"));
+}
+
+void UACELoginWidget::BeginUpdatePhase()
+{
+	ConnectPhase=2; ConnectPhaseTime=0; bUpdateDownloadRequested=bUpdatePhaseFinished=false;
+	if (bConnectScreenPreview || !Updater) return;
+	// Await a launcher check that is still in flight, and keep an already verified download.
+	if (Updater->State!=EACEUpdateState::Checking && Updater->State!=EACEUpdateState::Ready && !Updater->IsBusy())
+		Updater->CheckWhileConnecting();
+}
+
+void UACELoginWidget::TickUpdatePhase(float& Target, FString& Text)
+{
+	bUpdatePhaseFinished=false;
+	const float Checking=.35f*(1.f-FMath::Exp(-ConnectPhaseTime/.8f));
+	if (bConnectScreenPreview)
+	{
+		if (ConnectPhaseTime<1.2f) { Text=TEXT("Checking for updates..."); Target=Checking; }
+		else { Text=TEXT("Patching Done!"); Target=1; bUpdatePhaseFinished=true; }
+		return;
+	}
+	if (!Updater) { Text=TEXT("Updates not checked"); Target=0; bUpdatePhaseFinished=true; return; }
+	const int32 Number=Updater->Release.Number;
 	switch (Updater->State)
 	{
-	case EACEUpdateState::Checking: Text=TEXT("Checking for updates..."); return .6f;
-	case EACEUpdateState::Current: Text=TEXT("Patching Done!"); return 1.f; // Retail wording.
+	case EACEUpdateState::Checking: Text=TEXT("Checking for updates..."); Target=Checking; return;
+	case EACEUpdateState::Current: Text=TEXT("Patching Done!"); Target=1; break; // Retail wording.
 	case EACEUpdateState::Available:
-		Text=Updater->Release.Version.IsEmpty()?FString(TEXT("Update available")):FString::Printf(TEXT("Update %s available"),*Updater->Release.Version);
-		return 1.f;
-	case EACEUpdateState::Downloading: Text=FString::Printf(TEXT("Downloading update %.0f%%"),Updater->Progress()*100); return Updater->Progress();
-	case EACEUpdateState::Verifying: Text=TEXT("Verifying update..."); return FMath::Max(Updater->Progress(),.95f);
-	case EACEUpdateState::Ready: Text=TEXT("Update ready to install"); return 1.f;
+		if (!bUpdateDownloadRequested && Updater->CanDownloadWhileConnecting())
+		{
+			bUpdateDownloadRequested=true; Updater->DownloadWhileConnecting();
+			if (Updater->State!=EACEUpdateState::Available) { Text=TEXT("Downloading update 0%"); Target=0; return; }
+		}
+		// Updates need consent (automatic updates) and an installer; macOS has neither, so only report it.
+		Text=Number>0?FString::Printf(TEXT("Update available (v%d)"),Number):FString(TEXT("Update available")); Target=1; break;
+	case EACEUpdateState::Downloading: Text=FString::Printf(TEXT("Downloading update %.0f%%"),Updater->Progress()*100); Target=Updater->Progress(); return;
+	case EACEUpdateState::Verifying: Text=TEXT("Verifying update..."); Target=FMath::Max(Updater->Progress(),.97f); return;
+	// Installing closes the game, so it waits for the lobby (the existing automatic install, or Install on the Updates page).
+	case EACEUpdateState::Ready: Text=Number>0?FString::Printf(TEXT("Update v%d ready to install"),Number):FString(TEXT("Update ready to install")); Target=1; break;
 	case EACEUpdateState::InstallNotice:
-	case EACEUpdateState::Installing: Text=TEXT("Installing update..."); return 1.f;
-	case EACEUpdateState::Error: Text=TEXT("Could not check for updates"); return 0.f;
-	default: Text=TEXT("Updates not checked"); return 0.f;
+	case EACEUpdateState::Installing: Text=TEXT("Installing update..."); Target=1; break;
+	case EACEUpdateState::Error: Text=bUpdateDownloadRequested?TEXT("Update download failed"):TEXT("Could not check for updates"); Target=0; break;
+	default: Text=TEXT("Updates not checked"); Target=0; break;
 	}
+	bUpdatePhaseFinished=true;
+}
+
+void UACELoginWidget::TickConnectPreview(float Dt)
+{
+	// Walk the real sequence every 7 seconds: connect fills, then the update vial.
+	const float Previous=ConnectPreviewTime; ConnectPreviewTime=FMath::Fmod(ConnectPreviewTime+Dt,7.f);
+	if (ConnectPreviewTime<Previous)
+	{
+		++ConnectPreviewPass; ConnectFill=UpdateVialFill=0; ConnectPhase=0; ConnectPhaseTime=0;
+		SetConnectStep(.05f,.45f,TEXT("Connecting to server..."));
+	}
+	else if (Previous<.4f && ConnectPreviewTime>=.4f) SetConnectStep(.45f,.9f,TEXT("Logging in..."));
+	else if (Previous<.8f && ConnectPreviewTime>=.8f) MarkConnected();
+#if !UE_BUILD_SHIPPING
+	// -ACEConnectScreenPreviewShot: capture (with UI) on the second pass, once the DAT art is in.
+	if (ConnectPreviewPass==1 && FParse::Param(FCommandLine::Get(),TEXT("ACEConnectScreenPreviewShot")))
+	{
+		if (Previous<2.2f && ConnectPreviewTime>=2.2f) FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir()/TEXT("Screenshots/ConnectPreview_Checking.png"),true,false);
+		if (Previous<6.f && ConnectPreviewTime>=6.f) FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir()/TEXT("Screenshots/ConnectPreview_Done.png"),true,false);
+	}
+#endif
 }
 
 void UACELoginWidget::TickConnectScreen(float Dt)
 {
 	if (!IsConnectScreenVisible()) return;
-	ConnectStepTime+=Dt;
-	if (bConnectScreenPreview)
-	{
-		// Walk the real stage sequence every 12 seconds.
-		const float Previous=ConnectPreviewTime; ConnectPreviewTime=FMath::Fmod(ConnectPreviewTime+Dt,12.f);
-		if (ConnectPreviewTime<Previous) { ConnectFill=UpdateVialFill=0; SetConnectStep(.05f,.25f,TEXT("Connecting to server...")); }
-		else if (Previous<2.f && ConnectPreviewTime>=2.f) SetConnectStep(.25f,.5f,TEXT("Logging in..."));
-		else if (Previous<4.f && ConnectPreviewTime>=4.f) SetConnectStep(.5f,.8f,TEXT("Receiving character list..."));
-		else if (Previous<6.f && ConnectPreviewTime>=6.f) SetConnectStep(1.f,1.f,TEXT("Connected!"));
-#if !UE_BUILD_SHIPPING
-		// -ACEConnectScreenPreviewShot: capture (with UI) mid-fill and full on the second pass, once the DAT art is in.
-		static int32 PreviewPass=0; if (ConnectPreviewTime<Previous) ++PreviewPass;
-		if (PreviewPass==1 && FParse::Param(FCommandLine::Get(),TEXT("ACEConnectScreenPreviewShot")))
-		{
-			if (Previous<3.f && ConnectPreviewTime>=3.f) FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir()/TEXT("Screenshots/ConnectPreview_Filling.png"),true,false);
-			if (Previous<9.f && ConnectPreviewTime>=9.f) FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir()/TEXT("Screenshots/ConnectPreview_Connected.png"),true,false);
-		}
-#endif
-	}
+	ConnectStepTime+=Dt; ConnectPhaseTime+=Dt;
+	if (bConnectScreenPreview) TickConnectPreview(Dt);
 	float Target;
 	if (ConnectFailTime>=0)
 	{
@@ -1130,11 +1176,17 @@ void UACELoginWidget::TickConnectScreen(float Dt)
 		// Drain, let the reason be read, then return to the lobby (which shows it too).
 		if (ConnectFailTime>3.f && ConnectFill<.01f) { EndConnectScreen(); return; }
 	}
+	else if (ConnectPhase>=1) Target=1; // Connected: fill straight to the top.
 	else // Creep toward the next stage while waiting so a slow server still looks alive.
-		Target=ConnectStepBase+(ConnectStepCap-ConnectStepBase)*.8f*(1.f-FMath::Exp(-ConnectStepTime/3.f));
-	ConnectFill=FMath::FInterpTo(ConnectFill,Target,Dt,ConnectFailTime>=0?2.f:4.f);
-	FString UpdateTextValue; const float UpdateTarget=UpdateVialTarget(UpdateTextValue);
-	UpdateVialFill=FMath::FInterpTo(UpdateVialFill,UpdateTarget,Dt,Updater&&Updater->State==EACEUpdateState::Checking?.6f:4.f);
+		Target=ConnectStepBase+(ConnectStepCap-ConnectStepBase)*.8f*(1.f-FMath::Exp(-ConnectStepTime/1.5f));
+	ConnectFill=FMath::FInterpTo(ConnectFill,Target,Dt,ConnectFailTime>=0?2.f:6.f);
+	// Retail order: the update vial stays empty until the connection vial is full.
+	if (ConnectPhase==1 && ConnectFailTime<0 && ConnectFill>.98f && ConnectPhaseTime>=ConnectMinPhase) BeginUpdatePhase();
+	float UpdateTarget=0; FString UpdateTextValue=TEXT("Update progress");
+	if (ConnectPhase>=2) TickUpdatePhase(UpdateTarget,UpdateTextValue);
+	UpdateVialFill=FMath::FInterpTo(UpdateVialFill,UpdateTarget,Dt,6.f);
+	if (ConnectPhase==2 && ConnectFailTime<0 && bUpdatePhaseFinished && FMath::Abs(UpdateVialFill-UpdateTarget)<.02f && ConnectPhaseTime>=ConnectMinPhase)
+		ConnectPhase=3; // Character select may open now (once the character list is in).
 	if (ConnectUpdateLabel && ConnectUpdateLabel->GetText().ToString()!=UpdateTextValue) ConnectUpdateLabel->SetText(FText::FromString(UpdateTextValue));
 }
 
