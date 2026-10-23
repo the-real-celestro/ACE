@@ -10,6 +10,7 @@
 #include "Widgets/SWindow.h"
 #include "ACEDesktopPointer.h"
 #include "HAL/IConsoleManager.h"
+#include "UnrealClient.h"
 #include "VR/ACEVRComponent.h"
 #include "ACEClientBuild.h"
 #include "ACERuntimeOptions.h"
@@ -992,6 +993,45 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		{
 			DestroyGameHUD();
 		}
+		// Object hover only polls in the world. A name tip showing when the session leaves it
+		// (logout to character select) would otherwise stay on screen over the next menu.
+		if (bHoverTooltipVisible || (HoverTooltipWidget && HoverTooltipWidget->GetVisibility() != ESlateVisibility::Collapsed))
+		{
+			bHoverTooltipVisible = false;
+			HoverTooltipText.Reset();
+			if (HoverTooltipWidget) HoverTooltipWidget->SetVisibility(ESlateVisibility::Collapsed);
+		}
+#if !UE_BUILD_SHIPPING
+		// -ACECharSelectPreview: open character select with sample characters and no server, so its
+		// layout can be reviewed without logging in. -ACECharSelectShot[=Name] captures it and quits.
+		if (IsLocalController() && FParse::Param(FCommandLine::Get(), TEXT("ACECharSelectPreview")))
+		{
+			static bool bCharSelectPreviewQueued = false;
+			static float CharSelectShotTime = -1.f;
+			if (!bCharSelectPreviewQueued && LoginWidget && !DatCharSelectBinder)
+			{
+				bCharSelectPreviewQueued = true;
+				bPendingCharSelect = true;
+				PendingCharSelectServerName = TEXT("Coldeve");
+				PendingCharSelectCharacters.Reset();
+				const TCHAR* Names[] = {TEXT("Dustworks"), TEXT("Battle Mage"), TEXT("Tinker Void"), TEXT("Red Riding Hood")};
+				for (int32 I = 0; I < UE_ARRAY_COUNT(Names); ++I)
+				{
+					FACECharacterInfo Info; Info.CharacterId = 0x50000001 + I; Info.Name = Names[I];
+					PendingCharSelectCharacters.Add(Info);
+				}
+			}
+			FString ShotName;
+			if (DatCharSelectBinder && FParse::Value(FCommandLine::Get(), TEXT("ACECharSelectShot="), ShotName))
+			{
+				const float Previous = FMath::Max(0.f, CharSelectShotTime);
+				CharSelectShotTime = Previous + DeltaTime;
+				if (Previous < 3.f && CharSelectShotTime >= 3.f)
+					FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir() / TEXT("Screenshots") / (ShotName + TEXT(".png")), true, false);
+				if (Previous < 4.5f && CharSelectShotTime >= 4.5f) FPlatformMisc::RequestExit(false);
+			}
+		}
+#endif
 		TickPendingCharacterSelect();
 		if (Client && Client->GetSessionState() == EACESessionState::CharacterSelect && bUseEnterWorldLoadScreen)
 			PreparePortalScreen();

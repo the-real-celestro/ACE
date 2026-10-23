@@ -5,6 +5,7 @@
 #include "Widgets/SLeafWidget.h"
 
 class UACEDatSubsystem;
+class UTexture2D;
 
 /**
  * Retail launcher artwork, decoded once from client_portal.dat after it loads and shared by
@@ -42,10 +43,19 @@ namespace ACELobbyArt
 	/** Decodes the art once the DAT is ready (cheap no-op afterwards). Returns Get(). */
 	const FACELobbyArt* Load(UACEDatSubsystem* Dat);
 
+	/** A soft, darkened copy of a DAT backdrop for the margins around a scaled 800x600 screen.
+	 *  Decoded once per image and kept for the session; null if the DAT is not ready or the image fails. */
+	UTexture2D* BlurredBackdrop(UACEDatSubsystem* Dat, uint32 ImageId);
+
 	extern const FLinearColor Gold;      // headings, retail orange-gold
 	extern const FLinearColor Cream;     // body text
 	extern const FLinearColor Muted;     // secondary text
 	extern const FLinearColor Highlight; // search matches
+	// Character-select text colors (layout 0x21000004), shared so the lobby reads as the same screen.
+	extern const FLinearColor CaptionText; // 0xFFFFB219 red-plate button captions
+	extern const FLinearColor RowText;     // 0xFFFFF2CC character / account rows
+	extern const FLinearColor WorldText;   // 0xFFD8AF5B world name
+	extern const FLinearColor EnterText;   // 0xFFFFF27F round Enter caption
 }
 
 /** Gold DAT list frame around a translucent panel; a flat gold outline before the art loads. */

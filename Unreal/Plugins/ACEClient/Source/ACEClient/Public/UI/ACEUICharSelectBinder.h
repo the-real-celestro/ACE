@@ -90,6 +90,8 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UBorder> LetterboxFill = nullptr;
+	/** Brush last given to LetterboxFill (its blurred backdrop texture is rooted by ACELobbyArt). */
+	FSlateBrush LetterboxBrush;
 	UPROPERTY()
 	TObjectPtr<UBorder> WorldNameImage = nullptr;
 	UPROPERTY()

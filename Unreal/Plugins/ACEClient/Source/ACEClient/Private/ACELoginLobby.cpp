@@ -169,7 +169,9 @@ namespace
 		Button->SetStyle(Style);
 		if (auto* Size=Cast<USizeBox>(Button->GetContent()))
 			if (auto* Caption=Cast<UTextBlock>(Size->GetContent()))
-				Caption->SetColorAndOpacity(Kind==LobbyRing?ACELobbyArt::Gold:Accent&&Kind!=LobbyRow?ACELobbyArt::Highlight:Accent?FLinearColor(1.f,.95f,.82f,1):ACELobbyArt::Cream);
+				// Same caption colors as character select: Enter, red plates, and slot rows.
+				Caption->SetColorAndOpacity(Kind==LobbyRing?ACELobbyArt::EnterText:Kind==LobbyRow?(Accent?FLinearColor(1.f,.98f,.9f,1):ACELobbyArt::RowText)
+					:Accent?ACELobbyArt::Highlight:ACELobbyArt::CaptionText);
 	}
 	void AddLine(UVerticalBox* Box, UWidget* Child, float Bottom = 12)
 	{
@@ -323,7 +325,15 @@ UACELoginActionButton* UACELoginWidget::ActionButton(const FString& Title, const
 	B->LobbyStyle = LobbyStyleFor(Action);
 	B->OnClicked.AddDynamic(B, &UACELoginActionButton::HandleAction);
 	const bool bSmall=B->LobbyStyle==LobbySmall;
-	auto* T = Label(Title, bSmall?14:16, false, 1.15f); T->SetAutoWrapText(false); T->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
+	const bool bRow=B->LobbyStyle==LobbyRow;
+	auto* T = Label(Title, bSmall?14:16, false, bRow?1.1f:1.f); T->SetAutoWrapText(false); T->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
+	// Character select draws its buttons in sansfont20 and its slot rows in sansfont16.
+	if (auto* Retail=Cast<UACERetailTextBlock>(T))
+	{
+		Retail->SetFontOverride(ACEUIFontStyles::FontIdForStyleName(bSmall||bRow?TEXT("sansfont16"):TEXT("sansfont20")));
+		Retail->SetRetailElement(UiResources(this),nullptr,Retail->GetBitmapScale(),0,false);
+		if (!bRow) { Retail->SetShadowOffset(FVector2D(1,1)); Retail->SetShadowColorAndOpacity(FLinearColor(0,0,0,.85f)); }
+	}
 	T->SetJustification(ETextJustify::Center);
 	auto* Size = WidgetTree->ConstructWidget<USizeBox>(); Size->SetMinDesiredHeight(bSmall?18:26);
 	Size->SetContent(T); Cast<USizeBoxSlot>(T->Slot)->SetVerticalAlignment(VAlign_Center);
@@ -1013,7 +1023,13 @@ void UACELoginWidget::RefreshServers()
 		// Name, then type and address: enough to tell similar servers apart.
 		auto* Lines=WidgetTree->ConstructWidget<UVerticalBox>();
 		auto* Name=Label(S.Name,16,false,1.f); Name->SetAutoWrapText(false); Name->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
-		Name->SetColorAndOpacity(bSelected?FLinearColor(1.f,.95f,.82f,1):ACELobbyArt::Cream);
+		// The world name reads like character select's World box (sansfont20, 0xFFD8AF5B).
+		if (auto* Retail=Cast<UACERetailTextBlock>(Name))
+		{
+			Retail->SetFontOverride(ACEUIFontStyles::FontIdForStyleName(TEXT("sansfont20")));
+			Retail->SetRetailElement(UiResources(this),nullptr,Retail->GetBitmapScale(),0,false);
+		}
+		Name->SetColorAndOpacity(bSelected?ACELobbyArt::Highlight:ACELobbyArt::WorldText);
 		auto* Detail=Label(FString::Printf(TEXT("%s  /  %s:%d"),S.bGDLE?TEXT("GDLE"):TEXT("ACE"),*S.Host,S.Port),13,true,1.f);
 		Detail->SetAutoWrapText(false); Detail->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
 		Lines->AddChildToVerticalBox(Name); Lines->AddChildToVerticalBox(Detail)->SetPadding(FMargin(0,2,0,0));

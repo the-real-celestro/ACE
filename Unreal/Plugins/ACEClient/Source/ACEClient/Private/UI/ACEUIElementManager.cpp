@@ -206,7 +206,22 @@ FIntRect UACEUIElementManager::GetCanvasViewportRect(FVector2D ViewportSize) con
 
 FVector2D UACEUIElementManager::GetCanvasScale(FVector2D ViewportSize) const
 {
-	// Retail bitmaps and glyphs are physical pixels, including the centered login panels.
+	// Retail bitmaps and glyphs are physical pixels in the game HUD and character creation.
+	// Character select instead fits its whole 800x600 layout to the window with one uniform
+	// scale (centered by ApplyEdgeAnchoredLayout), as the launcher before it does, so the
+	// two screens read as one. UI textures are bilinear, so the art stays smooth.
+	for (const TSharedPtr<FACEUIElement>& Root : Roots)
+	{
+		if (Root.IsValid() && Root->ElementName == TEXT("CharacterManagementField"))
+		{
+			float S = FMath::Min(static_cast<float>(ViewportSize.X) / ACEUI::ReferenceWidth,
+				static_cast<float>(ViewportSize.Y) / ACEUI::ReferenceHeight);
+			// Keep native pixels when the window is (almost) exactly the authored size.
+			if (FMath::Abs(S - 1.f) < .02f) S = 1.f;
+			S = FMath::Max(.25f, S);
+			return FVector2D(S, S);
+		}
+	}
 	return FVector2D(1.f, 1.f);
 }
 

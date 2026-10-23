@@ -205,7 +205,8 @@ TSharedRef<SWidget> UACEUICanvasWidget::RebuildWidget()
 	RootCanvas = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("ACEUIRoot"));
 	WidgetTree->RootWidget = RootCanvas;
 	CharacterBackdrop=WidgetTree->ConstructWidget<UBorder>();
-	CharacterBackdrop->SetBrush(FSlateColorBrush(FLinearColor::Black));
+	// Character screens sit on retail's dark night blue rather than pure black.
+	CharacterBackdrop->SetBrush(FSlateColorBrush(FLinearColor(.006f, .012f, .03f, 1.f)));
 	CharacterBackdrop->SetVisibility(ESlateVisibility::Collapsed);
 	RootCanvas->AddChild(CharacterBackdrop);
 	if (auto* BackdropSlot=Cast<UCanvasPanelSlot>(CharacterBackdrop->Slot))
@@ -510,7 +511,7 @@ void UACEUICanvasWidget::ApplyPaintState(UBorder* Border, uint32 InstanceId, UTe
 		State.Color = Color;
 		Border->SetBrushColor(Color);
 	}
-	if (State.X != X || State.Y != Y || bSizeChanged || State.Z != Z)
+	if (State.X != X || State.Y != Y || bSizeChanged || bTilingChanged || State.Z != Z)
 	{
 		// Clip the full image through a parent viewport. Resizing the image to the
 		// visible rectangle stretches cropped art and changes tiled-border phase.
@@ -524,7 +525,17 @@ void UACEUICanvasWidget::ApplyPaintState(UBorder* Border, uint32 InstanceId, UTe
 		if (UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(Border->Slot))
 		{
 			CanvasSlot->SetPosition(FVector2D(ImageRect.Min.X - X, ImageRect.Min.Y - Y));
-			CanvasSlot->SetSize(FVector2D(ImageRect.Width(), ImageRect.Height()));
+			// Slate tiles one texel per layout unit and ignores the brush size. On a scaled
+			// canvas (character select) lay tiled art out at authored size and scale the widget,
+			// so repeats and crops keep retail's proportions.
+			const FVector2D TileScale = TileType != ESlateBrushTileType::NoTile
+				? FVector2D(FMath::Max(KINDA_SMALL_NUMBER, LastScaleX), FMath::Max(KINDA_SMALL_NUMBER, LastScaleY)) : FVector2D(1.f, 1.f);
+			CanvasSlot->SetSize(FVector2D(ImageRect.Width(), ImageRect.Height()) / TileScale);
+			if (!Border->GetRenderTransform().Scale.Equals(TileScale))
+			{
+				Border->SetRenderTransformPivot(FVector2D::ZeroVector);
+				Border->SetRenderScale(TileScale);
+			}
 		}
 		State.ImageRect = ImageRect;
 		State.X = X;
@@ -823,8 +834,11 @@ void UACEUICanvasWidget::SyncElementRecursive(
 		{
 			const float TexW = FMath::Max(1.f, static_cast<float>(Tex->GetSizeX()) * LastScaleX);
 			const float TexH = FMath::Max(1.f, static_cast<float>(Tex->GetSizeY()) * LastScaleY);
-			const bool bTileX = !FMath::IsNearlyEqual(static_cast<float>(ElX1 - ElX0), TexW);
-			const bool bTileY = !FMath::IsNearlyEqual(static_cast<float>(ElY1 - ElY0), TexH);
+			// A scaled canvas rounds element edges to whole pixels; that rounding is not a tile.
+			const float TolX = FMath::IsNearlyEqual(LastScaleX, 1.f) ? KINDA_SMALL_NUMBER : FMath::Max(1.f, LastScaleX);
+			const float TolY = FMath::IsNearlyEqual(LastScaleY, 1.f) ? KINDA_SMALL_NUMBER : FMath::Max(1.f, LastScaleY);
+			const bool bTileX = !FMath::IsNearlyEqual(static_cast<float>(ElX1 - ElX0), TexW, TolX);
+			const bool bTileY = !FMath::IsNearlyEqual(static_cast<float>(ElY1 - ElY0), TexH, TolY);
 			if (bTileX && bTileY)
 			{
 				TileType = ESlateBrushTileType::Both;

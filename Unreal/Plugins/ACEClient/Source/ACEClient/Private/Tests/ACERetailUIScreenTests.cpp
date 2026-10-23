@@ -443,7 +443,8 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     auto* Manager=NewObject<UACEUIElementManager>(); Manager->Initialize();
     auto* Layout=NewObject<UACEUILayoutResolver>(); Layout->Initialize(Dat,Manager);
     if (!Layout->LoadLayout(0x21000004)) return false;
-    TestEqual(TEXT("Character selection remains unscaled on larger screens"),Manager->GetCanvasScale(FVector2D(2560,1440)),FVector2D(1,1));
+    TestEqual(TEXT("Character selection fits the window with one uniform scale"),Manager->GetCanvasScale(FVector2D(2560,1440)),FVector2D(2.4,2.4));
+    TestEqual(TEXT("Character selection keeps native pixels at its authored size"),Manager->GetCanvasScale(FVector2D(800,600)),FVector2D(1,1));
     const auto Enter=Manager->FindElementByName(TEXT("EnterGameButton"));
     if (!TestTrue(TEXT("Character-select Enter element exists"),Enter.IsValid())) return false;
     TestEqual(TEXT("Enter pressed state retains retail smaller font"),Enter->States[3].FontId,0x40000011u);

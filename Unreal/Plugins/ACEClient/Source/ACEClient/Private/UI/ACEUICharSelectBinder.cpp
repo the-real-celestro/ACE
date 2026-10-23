@@ -15,6 +15,7 @@
 #include "Components/Widget.h"
 #include "Engine/Texture2D.h"
 #include "Styling/SlateBrush.h"
+#include "ACELobbyArt.h"
 
 namespace
 {
@@ -55,8 +56,30 @@ namespace
 
 	// gmCharacterManagementUI sizes rows from the server character-slot limit.
 	constexpr int32 CharSelectOverlayZ = 200;
-	/** Opaque surround for the native-size character-selection panel. */
+	/** Opaque surround while the credits roll (retail black). */
 	const FLinearColor LetterboxBlack = FLinearColor::Black;
+	/** Surround for the scaled panel until its blurred backdrop is ready: retail night blue. */
+	const FLinearColor LetterboxNight = FLinearColor(.006f, .012f, .03f, 1.f);
+
+	/** The full-screen 800x600 backdrop image in the character-management layout. */
+	uint32 FindBackdropImage(const TSharedPtr<FACEUIElement>& El, int32 Depth = 0)
+	{
+		if (!El.IsValid() || Depth > 3) return 0;
+		if (El->Width >= ACEUI::ReferenceWidth && El->Height >= ACEUI::ReferenceHeight)
+		{
+			if ((El->ImageFileId >> 24) == 0x06) return El->ImageFileId;
+			for (const auto& Pair : El->States) if ((Pair.Value.ImageFileId >> 24) == 0x06) return Pair.Value.ImageFileId;
+		}
+		for (const TSharedPtr<FACEUIElement>& Child : El->Children)
+			if (const uint32 Id = FindBackdropImage(Child, Depth + 1)) return Id;
+		return 0;
+	}
+
+	FSlateBrush ColorFill(const FLinearColor& Color)
+	{
+		FSlateBrush Fill; Fill.DrawAs = ESlateBrushDrawType::Box; Fill.TintColor = FSlateColor(Color);
+		return Fill;
+	}
 
 	bool ElementIsOrUnder(const TSharedPtr<FACEUIElement>& Needle, const TSharedPtr<FACEUIElement>& Hay)
 	{
@@ -567,10 +590,8 @@ void UACEUICharSelectBinder::EnsureOverlays()
 	{
 		LetterboxFill = Canvas->WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
 		LetterboxFill->SetPadding(FMargin(0.f));
-		FSlateBrush Fill;
-		Fill.DrawAs = ESlateBrushDrawType::Box;
-		Fill.TintColor = FSlateColor(LetterboxBlack);
-		LetterboxFill->SetBrush(Fill);
+		LetterboxBrush = ColorFill(LetterboxNight);
+		LetterboxFill->SetBrush(LetterboxBrush);
 		LetterboxFill->SetVisibility(ESlateVisibility::HitTestInvisible);
 		Canvas->GetElementLayer()->AddChild(LetterboxFill);
 	}
@@ -614,6 +635,11 @@ void UACEUICharSelectBinder::RefreshOverlays()
 		for (auto& Array : {&CharNameImages, &CharSlotTops, &CharSlotMiddles, &CharSlotBottoms, &ListFrameParts})
 			for (auto& Widget : *Array) if (Widget) Widget->SetVisibility(ESlateVisibility::Collapsed);
 		for (auto& Pair : ButtonTextImages) Pair.Value->SetVisibility(ESlateVisibility::Collapsed);
+		if (LetterboxFill && !(LetterboxBrush == ColorFill(LetterboxBlack)))
+		{
+			LetterboxBrush = ColorFill(LetterboxBlack);
+			LetterboxFill->SetBrush(LetterboxBrush);
+		}
 		return;
 	}
 
@@ -635,6 +661,30 @@ void UACEUICharSelectBinder::RefreshOverlays()
 			Slot->SetPosition(FVector2D::ZeroVector);
 			Slot->SetSize(FVector2D(FMath::Max(1.f, Size.X), FMath::Max(1.f, Size.Y)));
 			Slot->SetZOrder(0);
+		}
+		// The panel scales to fit the window; fill the margins with a soft, dark copy of its own
+		// backdrop, cropped to the window's aspect, so the screen reads as full-window art.
+		FSlateBrush Fill = ColorFill(LetterboxNight);
+		UACEDatSubsystem* Dat = Canvas->GetGameInstance() ? Canvas->GetGameInstance()->GetSubsystem<UACEDatSubsystem>() : nullptr;
+		TSharedPtr<FACEUIElement> Root = Manager->FindElementByName(TEXT("CharacterManagementField"));
+		if (!Root.IsValid()) Root = Manager->GetSyntheticRoot();
+		if (UTexture2D* Blur = Dat && Size.X >= 1.f && Size.Y >= 1.f ? ACELobbyArt::BlurredBackdrop(Dat, FindBackdropImage(Root)) : nullptr)
+		{
+			Fill = FSlateBrush();
+			Fill.DrawAs = ESlateBrushDrawType::Image;
+			Fill.SetResourceObject(Blur);
+			Fill.ImageSize = FVector2D(Blur->GetSizeX(), Blur->GetSizeY());
+			const float PanelAspect = float(ACEUI::ReferenceWidth) / ACEUI::ReferenceHeight;
+			const float ViewAspect = float(Size.X / Size.Y);
+			const float Crop = ViewAspect > PanelAspect ? PanelAspect / ViewAspect : ViewAspect / PanelAspect;
+			Fill.SetUVRegion(ViewAspect > PanelAspect
+				? FBox2f(FVector2f(0.f, (1.f - Crop) * .5f), FVector2f(1.f, (1.f + Crop) * .5f))
+				: FBox2f(FVector2f((1.f - Crop) * .5f, 0.f), FVector2f((1.f + Crop) * .5f, 1.f)));
+		}
+		if (!(Fill == LetterboxBrush))
+		{
+			LetterboxBrush = Fill;
+			LetterboxFill->SetBrush(LetterboxBrush);
 		}
 	}
 

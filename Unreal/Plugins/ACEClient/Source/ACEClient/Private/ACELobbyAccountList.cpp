@@ -88,7 +88,8 @@ TSharedRef<SWidget> UACELobbyAccountRow::RebuildWidget()
 		StarSlot->SetVerticalAlignment(VAlign_Center); StarSlot->SetPadding(FMargin(0, 0, 6, 0));
 		Name = WidgetTree->ConstructWidget<UACERetailTextBlock>();
 		Name->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 13));
-		Name->SetFontOverride(ACEUIFontStyles::FontIdForStyleName(TEXT("basefont16")));
+		// Character select's slot-row font, so accounts and characters read alike.
+		Name->SetFontOverride(ACEUIFontStyles::FontIdForStyleName(TEXT("sansfont16")));
 		Name->SetAutoWrapText(false);
 		Name->SetClipping(EWidgetClipping::ClipToBounds);
 		Name->SetVisibility(ESlateVisibility::HitTestInvisible);
@@ -116,7 +117,7 @@ void UACELobbyAccountRow::Refresh()
 	if (!Name->GetBitmapFont())
 		if (UACEDatSubsystem* Dat = GetGameInstance() ? GetGameInstance()->GetSubsystem<UACEDatSubsystem>() : nullptr; Dat && Dat->IsDatReady())
 			Name->SetRetailElement(Dat->GetUiResources(), nullptr, FVector2D(1.1f), 0, false);
-	const FLinearColor Base = Item->bSelected ? FLinearColor(1.f, .93f, .74f, 1) : ACELobbyArt::Cream;
+	const FLinearColor Base = Item->bSelected ? FLinearColor(1.f, .98f, .9f, 1) : ACELobbyArt::RowText;
 	Name->SetColorAndOpacity(Base);
 	TArray<FLinearColor> Colors;
 	if (Item->MatchStart != INDEX_NONE && Item->MatchLen > 0)

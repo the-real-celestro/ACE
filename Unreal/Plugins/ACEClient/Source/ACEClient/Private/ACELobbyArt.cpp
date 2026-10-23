@@ -14,6 +14,10 @@ namespace ACELobbyArt
 	const FLinearColor Cream = FLinearColor(FColor(239, 227, 196));
 	const FLinearColor Muted = FLinearColor(FColor(191, 174, 136));
 	const FLinearColor Highlight = FLinearColor(FColor(255, 215, 106));
+	const FLinearColor CaptionText = FLinearColor(FColor(255, 178, 25));
+	const FLinearColor RowText = FLinearColor(FColor(255, 242, 204));
+	const FLinearColor WorldText = FLinearColor(FColor(216, 175, 91));
+	const FLinearColor EnterText = FLinearColor(FColor(255, 242, 127));
 }
 
 namespace
@@ -148,6 +152,57 @@ namespace
 }
 
 const FACELobbyArt* ACELobbyArt::Get() { return GArt; }
+
+UTexture2D* ACELobbyArt::BlurredBackdrop(UACEDatSubsystem* Dat, uint32 ImageId)
+{
+	static TMap<uint32, UTexture2D*> Cache;
+	if (UTexture2D** Found = Cache.Find(ImageId)) return *Found;
+	if (!ImageId || !Dat || !Dat->IsDatReady() || !Dat->GetTextureResolver()) return nullptr;
+	FImg Src;
+	if (!Decode(Dat->GetTextureResolver(), ImageId, Src)) { Cache.Add(ImageId, nullptr); return nullptr; }
+	// Average 4x4 blocks, then three box-blur passes (close to a Gaussian). The result keeps
+	// the art's colours but none of its detail, so a stretched copy never reads as a seam.
+	constexpr int32 Down = 4, Radius = 3, Passes = 3;
+	const int32 W = FMath::Max(1, Src.W / Down), H = FMath::Max(1, Src.H / Down);
+	TArray<FVector3f> A, B; A.SetNumZeroed(W * H); B.SetNumZeroed(W * H);
+	for (int32 Y = 0; Y < H; ++Y) for (int32 X = 0; X < W; ++X)
+	{
+		FVector3f Sum(0);
+		for (int32 J = 0; J < Down; ++J) for (int32 I = 0; I < Down; ++I)
+		{
+			const FColor& C = Src.At(FMath::Min(Src.W - 1, X * Down + I), FMath::Min(Src.H - 1, Y * Down + J));
+			Sum += FVector3f(C.R, C.G, C.B);
+		}
+		A[Y * W + X] = Sum / float(Down * Down);
+	}
+	auto Blur = [&](const TArray<FVector3f>& In, TArray<FVector3f>& Out, bool bHorizontal)
+	{
+		const int32 N = bHorizontal ? W : H, Lines = bHorizontal ? H : W;
+		for (int32 L = 0; L < Lines; ++L) for (int32 P = 0; P < N; ++P)
+		{
+			FVector3f Sum(0);
+			for (int32 K = -Radius; K <= Radius; ++K)
+			{
+				const int32 Q = FMath::Clamp(P + K, 0, N - 1);
+				Sum += In[bHorizontal ? L * W + Q : Q * W + L];
+			}
+			Out[bHorizontal ? L * W + P : P * W + L] = Sum / float(2 * Radius + 1);
+		}
+	};
+	for (int32 Pass = 0; Pass < Passes; ++Pass) { Blur(A, B, true); Blur(B, A, false); }
+	// Darken toward the night blue behind the panel so the live screen stays the focus.
+	const FVector3f Night(2.f, 5.f, 14.f);
+	FImg Out; Out.W = W; Out.H = H; Out.Px.SetNumUninitialized(W * H);
+	for (int32 I = 0; I < W * H; ++I)
+	{
+		const FVector3f C = A[I] * .5f + Night * .5f;
+		Out.Px[I] = FColor(uint8(FMath::Clamp(FMath::RoundToInt(C.X), 0, 255)), uint8(FMath::Clamp(FMath::RoundToInt(C.Y), 0, 255)),
+			uint8(FMath::Clamp(FMath::RoundToInt(C.Z), 0, 255)), 255);
+	}
+	UTexture2D* Texture = MakeUi(Out);
+	Cache.Add(ImageId, Texture);
+	return Texture;
+}
 
 const FACELobbyArt* ACELobbyArt::Load(UACEDatSubsystem* Dat)
 {
