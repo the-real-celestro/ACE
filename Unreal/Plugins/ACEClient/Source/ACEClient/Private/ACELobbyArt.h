@@ -27,17 +27,44 @@ struct FACELobbyArt
 	FSlateBrush Row[3];
 	/** 0x06004D26 window: brown title bar with the silver ring emblem over a blue body. */
 	FSlateBrush Window;
+	/** The same window split for any size: header left (80) / stretched middle / right (60), and the
+	 *  530-row body tiled rather than stretched (tinted copies via ACELobbyArt::TintedWindowBody). */
+	FSlateBrush WindowHeader[3];
+	/** 0x06001343 title crest, black backing keyed out. */
+	FSlateBrush Crest;
+	/** 0x06004CA3/CA4 wide primary plate (idle, hover). */
+	FSlateBrush Primary[2];
+	/** 0x06004D64 retail world-name frame; [1] is the brightened hover copy. */
+	FSlateBrush Plaque[2];
+	/** Generated masks: screen vignette (black), soft radial glow (white), launch halo ring (white),
+	 *  soft drop shadow and inner shadow (black, 9-slice). */
+	FSlateBrush Vignette, Glow, Halo, Shadow, InnerShadow;
 	/** 0x060060F6 idle / 0x060060F9 focused search field. */
 	FSlateBrush Search[2];
 	/** Retail scrollbar: chain track 0x06004C5F, thumb C60/C63/C66 (hover C61/C64/C67), arrows C6A/C6D (hover C6B/C6E). */
 	FSlateBrush Track, Thumb[2], ArrowUp[2], ArrowDown[2];
 
 	static constexpr float ButtonShadow = 7.f;
-	static constexpr float WindowHeader = 66.f;
+	static constexpr float WindowHeaderH = 66.f;
+};
+
+/** Per-server page tint: a hue/saturation/brightness shift of the blue retail art plus panel colours. */
+struct FACELobbyTint
+{
+	const TCHAR* Name;
+	float Hue, Saturation, Brightness;
+	FLinearColor Gem, Pane, Pane2, PopTop, PopBottom;
 };
 
 namespace ACELobbyArt
 {
+	int32 NumTints();
+	/** Palette entry (index wraps); 0 is the untouched retail blue. */
+	const FACELobbyTint& Tint(int32 Index);
+	/** Tinted copies of the backdrop, window body and Launch hover glow, built on first use. Null before Load. */
+	const FSlateBrush* TintedBackground(int32 Index);
+	const FSlateBrush* TintedWindowBody(int32 Index);
+	const FSlateBrush* TintedRingHot(int32 Index);
 	/** The shared art, or null until the DAT has loaded and decoding has succeeded. */
 	const FACELobbyArt* Get();
 	/** Decodes the art once the DAT is ready (cheap no-op afterwards). Returns Get(). */
@@ -76,25 +103,66 @@ namespace ACELobbyArt
 class SACELobbyFrame : public SLeafWidget
 {
 public:
-	SLATE_BEGIN_ARGS(SACELobbyFrame) : _Fill(FLinearColor(.008f, .02f, .06f, .55f)) {}
-		SLATE_ARGUMENT(FLinearColor, Fill)
+	SLATE_BEGIN_ARGS(SACELobbyFrame) : _Fill(FLinearColor(.008f, .02f, .06f, .55f)), _Shadow(false) {}
+		SLATE_ATTRIBUTE(FLinearColor, Fill)
+		/** Optional top colour: the fill becomes a vertical gradient FillTop -> Fill. */
+		SLATE_ATTRIBUTE(FLinearColor, FillTop)
+		SLATE_ARGUMENT(bool, Shadow)
 	SLATE_END_ARGS()
 	void Construct(const FArguments& Args);
 	virtual FVector2D ComputeDesiredSize(float) const override { return FVector2D(80, 80); }
 	virtual int32 OnPaint(const FPaintArgs& Args, const FGeometry& Geometry, const FSlateRect& Culling,
 		FSlateWindowElementList& Out, int32 Layer, const FWidgetStyle& Style, bool bParentEnabled) const override;
 private:
-	FLinearColor Fill;
+	TAttribute<FLinearColor> Fill, FillTop;
+	bool bShadow = false;
+};
+
+/** Retail window (0x06004D26) at any size: header pieces, tiled tinted body, border, shadows. */
+class SACELobbyWindow : public SLeafWidget
+{
+public:
+	SLATE_BEGIN_ARGS(SACELobbyWindow) {}
+		SLATE_ATTRIBUTE(int32, Tint)
+	SLATE_END_ARGS()
+	void Construct(const FArguments& Args);
+	virtual FVector2D ComputeDesiredSize(float) const override { return FVector2D(200, 120); }
+	virtual int32 OnPaint(const FPaintArgs& Args, const FGeometry& Geometry, const FSlateRect& Culling,
+		FSlateWindowElementList& Out, int32 Layer, const FWidgetStyle& Style, bool bParentEnabled) const override;
+private:
+	TAttribute<int32> Tint;
+};
+
+/** Gradient strokes and washes: horizontal rule (Kind Rule = left-weighted, Centered = faded both ends),
+ *  vertical-tab backgrounds, insertion line. Everything is attribute-driven so it can follow hover state. */
+class SACELobbyDecor : public SLeafWidget
+{
+public:
+	enum class EKind : uint8 { Rule, CenteredRule, NavItem, Gem, Halo, Glow, Badge };
+	SLATE_BEGIN_ARGS(SACELobbyDecor) : _Kind(EKind::Rule) {}
+		SLATE_ARGUMENT(EKind, Kind)
+		SLATE_ATTRIBUTE(FLinearColor, Color)
+		/** NavItem: 0 idle, 1 hover, 2 active. Gem: 1 brightens. */
+		SLATE_ATTRIBUTE(int32, State)
+	SLATE_END_ARGS()
+	void Construct(const FArguments& Args);
+	virtual FVector2D ComputeDesiredSize(float) const override;
+	virtual int32 OnPaint(const FPaintArgs& Args, const FGeometry& Geometry, const FSlateRect& Culling,
+		FSlateWindowElementList& Out, int32 Layer, const FWidgetStyle& Style, bool bParentEnabled) const override;
+private:
+	EKind Kind = EKind::Rule;
+	TAttribute<FLinearColor> Color;
+	TAttribute<int32> State;
 };
 
 /** Small vector glyphs drawn with Slate lines so they never depend on a font: favourite star,
- *  magnifier, and clear cross. */
+ *  magnifier, clear cross, chevrons, check, grip dots, row pointer and status marks. */
 class SACELobbyGlyph : public SLeafWidget
 {
 public:
-	enum class EKind : uint8 { Star, Magnifier, Cross };
+	enum class EKind : uint8 { Star, Magnifier, Cross, ChevronDown, ChevronUp, Diamond, Check, Grip, Pointer, Plus, Bang, Spinner, Eye, Lock };
 	SLATE_BEGIN_ARGS(SACELobbyGlyph) : _Kind(EKind::Star), _Size(16.f) {}
-		SLATE_ARGUMENT(EKind, Kind)
+		SLATE_ATTRIBUTE(EKind, Kind)
 		SLATE_ARGUMENT(float, Size)
 		SLATE_ATTRIBUTE(FLinearColor, Color)
 		SLATE_ATTRIBUTE(bool, Filled)
@@ -104,7 +172,7 @@ public:
 	virtual int32 OnPaint(const FPaintArgs& Args, const FGeometry& Geometry, const FSlateRect& Culling,
 		FSlateWindowElementList& Out, int32 Layer, const FWidgetStyle& Style, bool bParentEnabled) const override;
 private:
-	EKind Kind = EKind::Star;
+	TAttribute<EKind> Kind;
 	float Size = 16.f;
 	TAttribute<FLinearColor> Color;
 	TAttribute<bool> Filled;

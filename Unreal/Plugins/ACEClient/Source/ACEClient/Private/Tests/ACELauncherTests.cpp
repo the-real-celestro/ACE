@@ -168,7 +168,7 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
     TestEqual(TEXT("Server switch retains selected alias"),W->AccountAliasBox->GetText().ToString(),FString(TEXT("Coldeve crafter")));
     TestEqual(TEXT("Every saved account is offered on each server"),W->AccountList->GetNumItems(),2);
     W->RunAction(TEXT("accounts"));
-    TestEqual(TEXT("Account management has its own page"),W->Pages->GetActiveWidgetIndex(),6);
+    TestEqual(TEXT("Accounts is the home page"),W->Pages->GetActiveWidgetIndex(),0);
     TestTrue(TEXT("Manage Account edits the selected account"),W->AccountBox->GetText().ToString()==TEXT("Adventurer"));
     W->RunAction(TEXT("play"));
     TestTrue(TEXT("Selected GDLE type stored"),W->Profile.SelectedServer()->bGDLE);
@@ -183,7 +183,7 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
     W->RunAction(TEXT("sortcustom"));
     {
         auto* Item=PlayItem(1);
-        TestTrue(TEXT("Play rows display alias with username"),Item&&Item->Title==TEXT("Coldeve crafter (Adventurer)"));
+        TestTrue(TEXT("Account rows display alias over username"),Item&&Item->Title==TEXT("Coldeve crafter")&&Item->Username==TEXT("Adventurer"));
         TestTrue(TEXT("Play rows distinguish duplicate usernames by stable ID"),Item&&Item->Id==SecondAccountId);
     }
     // Favourites pin to their own list, persist, and leave credentials alone.
@@ -341,7 +341,7 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
             CheckActions(W->FooterSize,Size.Y);
             if(W->Pages->GetActiveWidgetIndex()==0)
             {
-                TestTrue(TEXT("Saved server list retains room for a row"),W->ServerList->GetCachedGeometry().GetAbsoluteSize().Y>=25);
+                TestTrue(TEXT("World plaque names the selected server"),W->ServerTitle->GetCachedGeometry().GetAbsoluteSize().Y>=10);
                 TestTrue(TEXT("Saved account list retains room for a row"),W->AccountList->GetCachedGeometry().GetAbsoluteSize().Y>=25);
             }
             TArray<FColor> Pixels; FReadSurfaceDataFlags ReadFlags; ReadFlags.SetLinearToGamma(true); Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,ReadFlags);

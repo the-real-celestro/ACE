@@ -27,6 +27,8 @@ class ACECLIENT_API UACELobbyAccountItem : public UObject
 	GENERATED_BODY()
 public:
 	FString Id, Title;
+	/** Second line (login name when an alias is shown) and the short last-launch time; empty when unknown. */
+	FString Username, When;
 	bool bFavorite = false;
 	bool bSelected = false;
 	/** Search match highlighted in the name, in characters of Title. */
@@ -40,7 +42,8 @@ class ACECLIENT_API UACELobbyAccountRow : public UUserWidget, public IUserObject
 {
 	GENERATED_BODY()
 public:
-	static constexpr float RowHeight = 26.f;
+	static constexpr float RowHeight = 56.f;
+	static constexpr float RowGap = 8.f;
 	/** Re-applies selection, favourite and search-highlight state without regenerating rows. */
 	void Refresh();
 	UACELobbyAccountItem* GetItem() const { return Item; }
@@ -52,6 +55,9 @@ protected:
 	UPROPERTY() TObjectPtr<UButton> RowButton;
 	UPROPERTY() TObjectPtr<UButton> StarButton;
 	UPROPERTY() TObjectPtr<UACERetailTextBlock> Name;
+	UPROPERTY() TObjectPtr<class UTextBlock> UserLine;
+	UPROPERTY() TObjectPtr<class UTextBlock> WhenText;
+	UPROPERTY() TObjectPtr<class UWidget> Pointer;
 	UPROPERTY() TObjectPtr<UACELobbyAccountItem> Item;
 	bool bStarFilled = false;
 	bool bStarHot = false;

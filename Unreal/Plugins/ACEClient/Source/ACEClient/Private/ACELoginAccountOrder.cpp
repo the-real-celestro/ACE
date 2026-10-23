@@ -3,6 +3,9 @@
 #include "Framework/Application/SlateApplication.h"
 #include "Input/DragAndDrop.h"
 #include "Rendering/DrawElements.h"
+#include "Brushes/SlateRoundedBoxBrush.h"
+#include "Widgets/SOverlay.h"
+#include "ACELobbyArt.h"
 #include "Styling/CoreStyle.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Layout/SBorder.h"
@@ -53,18 +56,19 @@ namespace
     public:
         SLATE_BEGIN_ARGS(SAccountGripIcon):_Compact(false),_Tint(FLinearColor::White) {} SLATE_ARGUMENT(bool,Compact) SLATE_ATTRIBUTE(FLinearColor,Tint) SLATE_END_ARGS()
         void Construct(const FArguments& Args) { Compact=Args._Compact; Tint=Args._Tint; SetVisibility(EVisibility::HitTestInvisible); }
-        FVector2D ComputeDesiredSize(float) const override { return Compact?FVector2D(10,16):FVector2D(18,26); }
+        FVector2D ComputeDesiredSize(float) const override { return Compact?FVector2D(10,15):FVector2D(18,26); }
         int32 OnPaint(const FPaintArgs&,const FGeometry& G,const FSlateRect&,FSlateWindowElementList& Out,
             int32 Layer,const FWidgetStyle& Style,bool Enabled) const override
         {
             const auto Effect=ShouldBeEnabled(Enabled)?ESlateDrawEffect::None:ESlateDrawEffect::DisabledEffect;
             const FVector2D Box=ComputeDesiredSize(1);
             const float Dot=Compact?2.f:3.f, Pitch=Compact?5.f:7.f, Inset=Compact?2.f:4.f;
+            if (Tint.Get().A<=.01f) return Layer;
             const auto Offset=(G.GetLocalSize()-Box)*.5;
             for (int32 Y=0;Y<3;++Y) for (int32 X=0;X<2;++X)
                 FSlateDrawElement::MakeBox(Out,Layer,G.ToPaintGeometry(FVector2D(Dot,Dot),
                     FSlateLayoutTransform(Offset+FVector2D(Inset+X*Pitch,Inset+Y*Pitch))),FCoreStyle::Get().GetBrush("WhiteBrush"),
-                    Effect,FLinearColor(.88f,.85f,.77f)*Tint.Get()*Style.GetColorAndOpacityTint());
+                    Effect,FLinearColor(FColor(0xd7,0xb0,0x6a))*Tint.Get()*Style.GetColorAndOpacityTint());
             return Layer;
         }
     private:
@@ -91,7 +95,7 @@ namespace
             SetTag(FName(*(TEXT("AccountOrderRow.")+Id.Get())));
             ChildSlot
             [SNew(SHorizontalBox)
-                +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,3,0)
+                +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,2,0)
                 [SAssignNew(Grip,SButton).Tag(FName(*(TEXT("AccountOrderGrip.")+Id.Get())))
                     .ButtonStyle(&GripStyle).ContentPadding(FMargin(3,5)).IsFocusable(false)
                     .AllowDragDrop(true).Cursor(EMouseCursor::GrabHand)
@@ -104,7 +108,7 @@ namespace
                         return FReply::Handled().BeginDragDrop(FAccountOrderDrag::New(Host,Id.Get(),Title.Get(),Event.GetScreenSpacePosition()));
                     })
                     [SNew(SAccountGripIcon).Compact(true)
-                        .Tint_Lambda([this]{ return FLinearColor(1,1,1,Grip.IsValid()&&Grip->IsHovered()?.95f:.45f); })]]
+                        .Tint_Lambda([this]{ const bool bGrip=Grip.IsValid()&&Grip->IsHovered(); return FLinearColor(1,1,1,bGrip?1.f:IsHovered()?.8f:0.f); })]]
                 +SHorizontalBox::Slot().FillWidth(1)[Args._Content.Widget]];
         }
         FReply OnDragOver(const FGeometry& G,const FDragDropEvent& E) override
@@ -133,9 +137,28 @@ namespace
 #endif
             if (bLine)
             {
-                const float Y=bBelow?G.GetLocalSize().Y-1:1;
-                FSlateDrawElement::MakeLines(Out,++Layer,G.ToPaintGeometry(),{FVector2D(0,Y),FVector2D(G.GetLocalSize().X,Y)},
-                    ESlateDrawEffect::None,FLinearColor(.94f,.68f,.26f)*Style.GetColorAndOpacityTint(),true,2.f);
+                // Codex Hall insertion line: 3px gold gradient with a soft glow and end dots,
+                // centred in the 8px gap between rows.
+                const FLinearColor Mod=Style.GetColorAndOpacityTint();
+                const FLinearColor Edge(FColor(0xf0,0xad,0x42)), Mid(FColor(0xff,0xd7,0x7a));
+                const float X0=14.f, W=FMath::Max(10.f,float(G.GetLocalSize().X)-X0);
+                const float Y=bBelow?G.GetLocalSize().Y+4.f:-4.f;
+                auto Band=[&](float H, float Alpha, int32 L)
+                {
+                    auto A=[&](FLinearColor C, float K){ C.A*=K*Alpha; return C*Mod; };
+                    TArray<FSlateGradientStop> Stops;
+                    Stops.Add(FSlateGradientStop(FVector2D(0,0),A(Edge,0)));
+                    Stops.Add(FSlateGradientStop(FVector2D(W*.08f,0),A(Edge,1)));
+                    Stops.Add(FSlateGradientStop(FVector2D(W*.5f,0),A(Mid,1)));
+                    Stops.Add(FSlateGradientStop(FVector2D(W*.92f,0),A(Edge,1)));
+                    Stops.Add(FSlateGradientStop(FVector2D(W,0),A(Edge,0)));
+                    FSlateDrawElement::MakeGradient(Out,L,G.ToPaintGeometry(FVector2D(W,H),FSlateLayoutTransform(FVector2D(X0,Y-H*.5f))),Stops,Orient_Vertical);
+                };
+                Band(11.f,.18f,++Layer);
+                Band(3.f,1.f,++Layer);
+                static const FSlateRoundedBoxBrush Dot(FLinearColor::White,4.5f);
+                for (const float X:{X0+2.f,X0+W-11.f})
+                    FSlateDrawElement::MakeBox(Out,Layer,G.ToPaintGeometry(FVector2D(9,9),FSlateLayoutTransform(FVector2D(X,Y-4.5f))),&Dot,ESlateDrawEffect::None,Mid*Mod);
             }
             return Layer;
         }

@@ -148,6 +148,35 @@ protected:
 	/** Mirrored copy left of the backdrop for windows wider than it covers (as character select). */
 	UPROPERTY() TObjectPtr<class UImage> LobbyBackgroundSide;
 	UPROPERTY() TObjectPtr<UTextBlock> LobbySubtitle;
+	/** Codex Hall lobby: generated vignette and tint wash over the backdrop, the DAT crest, and the
+	 *  World plaque whose popover holds everything about servers. */
+	UPROPERTY() TObjectPtr<class UImage> LobbyVignette;
+	UPROPERTY() TObjectPtr<class UImage> LobbyWash;
+	UPROPERTY() TObjectPtr<class UImage> LobbyCrest;
+	UPROPERTY() TObjectPtr<UACELoginActionButton> WorldPlaque;
+	UPROPERTY() TObjectPtr<UWidget> WorldPopover;
+	UPROPERTY() TObjectPtr<UWidget> WorldScrim;
+	UPROPERTY() TObjectPtr<UWidget> WorldNub;
+	UPROPERTY() TObjectPtr<UTextBlock> WorldCount;
+	UPROPERTY() TObjectPtr<UTextBlock> PopoverName;
+	UPROPERTY() TObjectPtr<UTextBlock> PopoverTag;
+	UPROPERTY() TObjectPtr<UTextBlock> PopoverAddress;
+	UPROPERTY() TObjectPtr<UTextBlock> LaunchCaption;
+	UPROPERTY() TArray<TObjectPtr<UACELoginActionButton>> TintButtons;
+	/** Palette index (ACELobbyArt::Tint) of the selected server, applied to backdrop, windows and panels. */
+	int32 PageTint = 0;
+	/** Edit-server swatch choice; -1 keeps the server's automatic default. */
+	int32 EditingTint = -1;
+	/** 0 none, 1 ok, 2 error, 3 working: the status line's icon. */
+	int32 StatusKind = 0;
+	double StatusSetTime = 0.0;
+	bool bUpdateAvailable = false;
+	bool IsWorldMenuOpen() const;
+	void SetWorldMenuOpen(bool bOpen);
+	/** The server's saved tint, or its automatic default (Coldeve blue, Reefcull teal, then unused colours). */
+	int32 TintFor(const FString& ServerId) const;
+	void ApplyPageTint();
+	void RefreshTintButtons();
 	UPROPERTY() TObjectPtr<UTextBlock> LobbyBrand;
 	UPROPERTY() TObjectPtr<UScrollBox> ServerList;
 	/** Play page account picker: pinned favourites, then everything else (virtualised). */
@@ -174,6 +203,8 @@ protected:
 	void LayoutLobby(const FVector2D& View);
 	void RefreshAccountLists();
 	void UpdateSelectedAccountInfo();
+	/** Launch is enabled only with a world and an existing account selected, and no update running. */
+	void RefreshLaunchState();
 	void MoveAccountSelection(int32 Delta);
 	bool IsLobbyKeyboardActive() const;
 	UFUNCTION() void OnAccountSearchChanged(const FText& Text);
@@ -222,7 +253,7 @@ protected:
 	float ConnectPreviewTime = 0;
 	int32 ConnectPreviewPass = 0;
 	float LobbyShotTime = -1.f;
-	FString LobbyShotAccountId;
+	FString LobbyShotAccountId, LobbyShotServerId;
 	int32 ConnectPhase = 0; // 0 connecting, 1 connected (left vial filling), 2 updating, 3 both vials done.
 	float ConnectPhaseTime = 0;
 	bool bUpdateDownloadRequested = false, bUpdatePhaseFinished = false;

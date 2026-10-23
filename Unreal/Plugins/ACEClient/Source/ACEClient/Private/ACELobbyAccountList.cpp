@@ -14,6 +14,11 @@
 #include "Components/NativeWidgetHost.h"
 #include "Components/SizeBox.h"
 #include "Components/SizeBoxSlot.h"
+#include "Components/TextBlock.h"
+#include "Components/VerticalBox.h"
+#include "Components/VerticalBoxSlot.h"
+#include "Components/Overlay.h"
+#include "Components/OverlaySlot.h"
 #include "Engine/GameInstance.h"
 #include "Widgets/Views/SListView.h"
 
@@ -34,7 +39,7 @@ namespace
 			Style.SetPressed(FSlateRoundedBoxBrush(FLinearColor(.02f, .03f, .06f, 1), 2.f, ACELobbyArt::Highlight, 1.f));
 			Style.SetDisabled(Style.Normal);
 		}
-		Style.SetNormalPadding(FMargin(6, 0, 8, 0)).SetPressedPadding(FMargin(6, 0, 8, 0));
+		Style.SetNormalPadding(FMargin(9, 0, 14, 0)).SetPressedPadding(FMargin(9, 0, 14, 0));
 		return Style;
 	}
 
@@ -57,7 +62,19 @@ TSharedRef<SWidget> UACELobbyAccountRow::RebuildWidget()
 		RowButton = WidgetTree->ConstructWidget<UACELobbyPlainButton>();
 		RowButton->SetStyle(RowStyle(false));
 		RowButton->OnClicked.AddDynamic(this, &UACELobbyAccountRow::HandleClicked);
-		Height->SetContent(RowButton);
+		// The selected row's gold pointer sits just past its right edge.
+		auto* Layers = WidgetTree->ConstructWidget<UOverlay>();
+		Height->SetContent(Layers);
+		auto* RowSlot = Layers->AddChildToOverlay(RowButton);
+		RowSlot->SetHorizontalAlignment(HAlign_Fill); RowSlot->SetVerticalAlignment(VAlign_Fill); RowSlot->SetPadding(FMargin(0, 0, 10, 0));
+		auto* PointerHost = WidgetTree->ConstructWidget<UNativeWidgetHost>();
+		PointerHost->SetContent(SNew(SACELobbyGlyph).Kind(SACELobbyGlyph::EKind::Pointer).Size(10.f).Color(FLinearColor(FColor(0xf2, 0xc4, 0x5c))));
+		auto* PointerSize = WidgetTree->ConstructWidget<USizeBox>();
+		PointerSize->SetWidthOverride(10); PointerSize->SetHeightOverride(10); PointerSize->SetContent(PointerHost);
+		PointerSize->SetVisibility(ESlateVisibility::Hidden);
+		auto* PointerSlot = Layers->AddChildToOverlay(PointerSize);
+		PointerSlot->SetHorizontalAlignment(HAlign_Right); PointerSlot->SetVerticalAlignment(VAlign_Center);
+		Pointer = PointerSize;
 		auto* Line = WidgetTree->ConstructWidget<UHorizontalBox>();
 		RowButton->SetContent(Line);
 		if (auto* ContentSlot = Cast<UButtonSlot>(Line->Slot))
@@ -71,21 +88,23 @@ TSharedRef<SWidget> UACELobbyAccountRow::RebuildWidget()
 		auto* Star = WidgetTree->ConstructWidget<UNativeWidgetHost>();
 		TWeakObjectPtr<UACELobbyAccountRow> Weak(this);
 		TWeakObjectPtr<UButton> WeakStar(StarButton);
-		Star->SetContent(SNew(SACELobbyGlyph).Kind(SACELobbyGlyph::EKind::Star).Size(16.f)
+		Star->SetContent(SNew(SACELobbyGlyph).Kind(SACELobbyGlyph::EKind::Star).Size(15.f)
 			.Filled_Lambda([Weak]() { return Weak.IsValid() && Weak->bStarFilled; })
 			.Color_Lambda([Weak, WeakStar]()
 			{
 				const bool bFav = Weak.IsValid() && Weak->bStarFilled;
 				const bool bHot = WeakStar.IsValid() && WeakStar->IsHovered();
-				return bFav ? (bHot ? ACELobbyArt::Highlight : ACELobbyArt::Gold)
-					: (bHot ? ACELobbyArt::Gold : FLinearColor(.55f, .5f, .4f, .55f));
+				// Mockup: on #f6c445, off #6e5c38.
+				return bFav ? (bHot ? FLinearColor(FColor(0xff, 0xdd, 0x77)) : FLinearColor(FColor(0xf6, 0xc4, 0x45)))
+					: (bHot ? FLinearColor(FColor(0xc9, 0xa0, 0x52)) : FLinearColor(FColor(0x6e, 0x5c, 0x38)));
 			}));
 		auto* StarSize = WidgetTree->ConstructWidget<USizeBox>();
-		StarSize->SetWidthOverride(20); StarSize->SetHeightOverride(20);
+		StarSize->SetWidthOverride(18); StarSize->SetHeightOverride(18);
 		StarSize->SetContent(Star);
 		StarButton->SetContent(StarSize);
 		auto* StarSlot = Line->AddChildToHorizontalBox(StarButton);
-		StarSlot->SetVerticalAlignment(VAlign_Center); StarSlot->SetPadding(FMargin(0, 0, 6, 0));
+		StarSlot->SetVerticalAlignment(VAlign_Center); StarSlot->SetPadding(FMargin(0, 0, 11, 0));
+		auto* Lines = WidgetTree->ConstructWidget<UVerticalBox>();
 		Name = WidgetTree->ConstructWidget<UACERetailTextBlock>();
 		Name->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 13));
 		// Character select's slot-row font, so accounts and characters read alike.
@@ -94,9 +113,26 @@ TSharedRef<SWidget> UACELobbyAccountRow::RebuildWidget()
 		Name->SetClipping(EWidgetClipping::ClipToBounds);
 		Name->SetVisibility(ESlateVisibility::HitTestInvisible);
 		UACEDatSubsystem* Dat = GetGameInstance() ? GetGameInstance()->GetSubsystem<UACEDatSubsystem>() : nullptr;
-		Name->SetRetailElement(Dat && Dat->IsDatReady() ? Dat->GetUiResources() : nullptr, nullptr, FVector2D(1.1f), 0, false);
-		auto* NameSlot = Line->AddChildToHorizontalBox(Name);
-		NameSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); NameSlot->SetVerticalAlignment(VAlign_Center);
+		Name->SetRetailElement(Dat && Dat->IsDatReady() ? Dat->GetUiResources() : nullptr, nullptr, FVector2D(1.3f), 0, false);
+		Name->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
+		Name->SetShadowOffset(FVector2D(1, 1)); Name->SetShadowColorAndOpacity(FLinearColor(0, 0, 0, .85f));
+		Lines->AddChildToVerticalBox(Name);
+		auto MakeText = [this](float Px)
+		{
+			auto* T = WidgetTree->ConstructWidget<UTextBlock>();
+			T->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), FMath::RoundToInt(Px * .75f)));
+			T->SetShadowOffset(FVector2D(1, 1)); T->SetShadowColorAndOpacity(FLinearColor(0, 0, 0, .8f));
+			T->SetVisibility(ESlateVisibility::HitTestInvisible); T->SetClipping(EWidgetClipping::ClipToBounds);
+			T->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
+			return T;
+		};
+		UserLine = MakeText(12.5f); UserLine->SetColorAndOpacity(FLinearColor(FColor(0x9f, 0x90, 0x70)));
+		Lines->AddChildToVerticalBox(UserLine)->SetPadding(FMargin(1, 0, 0, 0));
+		auto* LinesSlot = Line->AddChildToHorizontalBox(Lines);
+		LinesSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); LinesSlot->SetVerticalAlignment(VAlign_Center);
+		WhenText = MakeText(12.f);
+		auto* WhenSlot = Line->AddChildToHorizontalBox(WhenText);
+		WhenSlot->SetVerticalAlignment(VAlign_Center); WhenSlot->SetPadding(FMargin(10, 0, 0, 0));
 	}
 	// Rows are recycled, so the grip and drop target read the current item each time.
 	TWeakObjectPtr<UACELobbyAccountRow> Self(this);
@@ -122,8 +158,19 @@ void UACELobbyAccountRow::Refresh()
 	// The DAT may have finished loading after this row was built.
 	if (!Name->GetBitmapFont())
 		if (UACEDatSubsystem* Dat = GetGameInstance() ? GetGameInstance()->GetSubsystem<UACEDatSubsystem>() : nullptr; Dat && Dat->IsDatReady())
-			Name->SetRetailElement(Dat->GetUiResources(), nullptr, FVector2D(1.1f), 0, false);
-	const FLinearColor Base = Item->bSelected ? FLinearColor(1.f, .98f, .9f, 1) : ACELobbyArt::RowText;
+			Name->SetRetailElement(Dat->GetUiResources(), nullptr, FVector2D(1.3f), 0, false);
+	const FLinearColor Base = Item->bSelected ? FLinearColor(FColor(0xff, 0xf7, 0xd6)) : FLinearColor(FColor(0xe9, 0xdc, 0xb8));
+	if (UserLine)
+	{
+		if (UserLine->GetText().ToString() != Item->Username) UserLine->SetText(FText::FromString(Item->Username));
+		UserLine->SetVisibility(Item->Username.IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
+	}
+	if (WhenText)
+	{
+		if (WhenText->GetText().ToString() != Item->When) WhenText->SetText(FText::FromString(Item->When));
+		WhenText->SetColorAndOpacity(Item->bSelected ? FLinearColor(FColor(0xe4, 0xcf, 0x9c)) : FLinearColor(FColor(0x8f, 0x81, 0x66)));
+	}
+	if (Pointer) Pointer->SetVisibility(Item->bSelected ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Hidden);
 	Name->SetColorAndOpacity(Base);
 	TArray<FLinearColor> Colors;
 	if (Item->MatchStart != INDEX_NONE && Item->MatchLen > 0)
@@ -156,7 +203,7 @@ UACELobbyAccountListView::UACELobbyAccountListView(const FObjectInitializer& Obj
 	bIsFocusable = false; // Keyboard stays with the launcher (type-to-jump, arrows, Enter).
 	// No setter is exposed for the spacing in UE 5.8; it is a plain reflected float.
 	if (FFloatProperty* Spacing = FindFProperty<FFloatProperty>(UListView::StaticClass(), TEXT("VerticalEntrySpacing")))
-		Spacing->SetPropertyValue_InContainer(this, 3.f);
+		Spacing->SetPropertyValue_InContainer(this, UACELobbyAccountRow::RowGap);
 	WidgetStyle.SetBackgroundBrush(FSlateNoResource());
 	ScrollBarStyle = FScrollBarStyle()
 		.SetVerticalBackgroundImage(FSlateRoundedBoxBrush(FLinearColor(0, 0, 0, .35f), 2.f))

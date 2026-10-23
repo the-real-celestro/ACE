@@ -128,6 +128,7 @@ namespace ACELoginSettings
 				J->SetStringField(TEXT("host"), S.Host); J->SetNumberField(TEXT("port"), S.Port);
 				J->SetBoolField(TEXT("gdle"), S.bGDLE); J->SetStringField(TEXT("description"), S.Description);
 				J->SetStringField(TEXT("website"), S.Website); J->SetStringField(TEXT("discord"), S.Discord);
+				if (S.Tint >= 0) J->SetNumberField(TEXT("tint"), S.Tint); // Optional; older builds ignore it.
 				Servers.Add(MakeShared<FJsonValueObject>(J));
 			}
 			for (const auto& A : Settings.Accounts)
@@ -248,6 +249,8 @@ namespace ACELoginSettings
 					|| !(*J)->TryGetNumberField(TEXT("port"), S.Port) || !(*J)->TryGetBoolField(TEXT("gdle"), S.bGDLE)) return false;
 				(*J)->TryGetStringField(TEXT("description"), S.Description); (*J)->TryGetStringField(TEXT("website"), S.Website);
 				(*J)->TryGetStringField(TEXT("discord"), S.Discord); FString Error;
+				int32 Tint = -1;
+				if ((*J)->TryGetNumberField(TEXT("tint"), Tint) && Tint >= 0 && Tint < 32) S.Tint = Tint;
 				if (!ACELoginProfile::ValidateServer(S, Error)) return false;
 				ServerIds.Add(S.Id); Loaded.Servers.Add(MoveTemp(S));
 			}

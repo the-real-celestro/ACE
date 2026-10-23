@@ -247,5 +247,13 @@ void UACELoginWidget::SetStatus(const FString& Msg)
 		StatusText->SetText(FText::FromString(Msg));
 		if (auto* Container=Cast<UBorder>(StatusText->GetParent()))
 			Container->SetVisibility(Msg.IsEmpty()?ESlateVisibility::Collapsed:ESlateVisibility::Visible);
+		// Icon: 2 problem, 3 in progress, otherwise 1 (done). The lobby clears it after 8 seconds.
+		const FString Lower=Msg.ToLower();
+		const bool bProblem=Lower.Contains(TEXT("could not"))||Lower.Contains(TEXT("fail"))||Lower.Contains(TEXT("error"))||Lower.Contains(TEXT("missing"))
+			||Lower.Contains(TEXT("unavailable"))||Lower.Contains(TEXT("required"))||Lower.Contains(TEXT("invalid"))||Lower.Contains(TEXT("already"))
+			||Lower.StartsWith(TEXT("enter "))||Lower.StartsWith(TEXT("choose "))||Lower.StartsWith(TEXT("select "))||Lower.StartsWith(TEXT("remove an"));
+		const bool bBusy=Lower.StartsWith(TEXT("connecting"))||Lower.StartsWith(TEXT("refreshing"))||Lower.StartsWith(TEXT("waiting"))||Lower.StartsWith(TEXT("awaiting"));
+		StatusKind=Msg.IsEmpty()?0:bProblem?2:bBusy?3:1;
+		StatusSetTime=Msg.IsEmpty()?0.0:FPlatformTime::Seconds();
 	}
 }

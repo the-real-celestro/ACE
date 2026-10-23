@@ -8,6 +8,8 @@ struct FACELoginServer
 	int32 Port = 9000;
 	bool bGDLE = false;
 	FString Description, Website, Discord;
+	/** Lobby page tint (ACELobbyArt palette index); -1 until a default is assigned. */
+	int32 Tint = -1;
 };
 
 struct FACELoginAccount
