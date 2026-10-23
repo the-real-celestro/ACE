@@ -11,6 +11,7 @@
 #include "ACEClientSubsystem.h"
 #include "ACEDatSubsystem.h"
 #include "ACESession.h"
+#include "UnrealClient.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Border.h"
 #include "Components/CanvasPanel.h"
@@ -535,6 +536,10 @@ void UACELoginWidget::NativeConstruct()
 	AutoUpdateCheckBox->SetIsChecked(Profile.bAutoUpdate);
 	if (Updater) { Updater->SetAutoUpdateEnabled(Profile.bAutoUpdate); Updater->Check(true); }
 	RefreshUpdateControls();
+#if !UE_BUILD_SHIPPING
+	// Lets the connect screen be reviewed and captured without any account or server.
+	if (FParse::Param(FCommandLine::Get(),TEXT("ACEConnectScreenPreview"))) { bConnectScreenPreview=true; ShowConnectScreen(); }
+#endif
 	ForceLayoutPrepass();
 }
 
@@ -902,7 +907,7 @@ void UACELoginWidget::RunAction(const FString& Action, const FString& Value)
 	{
 		// Drops the half-open session (the server is told to disconnect) and returns to the lobby.
 		const auto Session=Client?Client->GetSession():nullptr;
-		EndConnectScreen();
+		EndConnectScreen(); bConnectScreenPreview=false;
 		if(Session && Session->GetState()!=EACESessionState::Disconnected) Session->Disconnect();
 		SetStatus(TEXT("Connection cancelled."));
 		return;
@@ -1100,6 +1105,24 @@ void UACELoginWidget::TickConnectScreen(float Dt)
 {
 	if (!IsConnectScreenVisible()) return;
 	ConnectStepTime+=Dt;
+	if (bConnectScreenPreview)
+	{
+		// Walk the real stage sequence every 12 seconds.
+		const float Previous=ConnectPreviewTime; ConnectPreviewTime=FMath::Fmod(ConnectPreviewTime+Dt,12.f);
+		if (ConnectPreviewTime<Previous) { ConnectFill=UpdateVialFill=0; SetConnectStep(.05f,.25f,TEXT("Connecting to server...")); }
+		else if (Previous<2.f && ConnectPreviewTime>=2.f) SetConnectStep(.25f,.5f,TEXT("Logging in..."));
+		else if (Previous<4.f && ConnectPreviewTime>=4.f) SetConnectStep(.5f,.8f,TEXT("Receiving character list..."));
+		else if (Previous<6.f && ConnectPreviewTime>=6.f) SetConnectStep(1.f,1.f,TEXT("Connected!"));
+#if !UE_BUILD_SHIPPING
+		// -ACEConnectScreenPreviewShot: capture (with UI) mid-fill and full on the second pass, once the DAT art is in.
+		static int32 PreviewPass=0; if (ConnectPreviewTime<Previous) ++PreviewPass;
+		if (PreviewPass==1 && FParse::Param(FCommandLine::Get(),TEXT("ACEConnectScreenPreviewShot")))
+		{
+			if (Previous<3.f && ConnectPreviewTime>=3.f) FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir()/TEXT("Screenshots/ConnectPreview_Filling.png"),true,false);
+			if (Previous<9.f && ConnectPreviewTime>=9.f) FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir()/TEXT("Screenshots/ConnectPreview_Connected.png"),true,false);
+		}
+#endif
+	}
 	float Target;
 	if (ConnectFailTime>=0)
 	{

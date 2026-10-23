@@ -162,6 +162,8 @@ protected:
 	float ConnectFill = 0, ConnectStepBase = 0, ConnectStepCap = 0, ConnectStepTime = 0, ConnectFailTime = -1;
 	float UpdateVialFill = 0, UpdatePageFill = 0, UpdatePageTarget = 0;
 	bool bSuppressConnectDisconnect = false;
+	bool bConnectScreenPreview = false; // -ACEConnectScreenPreview (non-shipping): loop the screen without connecting.
+	float ConnectPreviewTime = 0;
 	void ShowConnectScreen();
 	void SetConnectStep(float Base, float Cap, const FString& Text);
 	void TickConnectScreen(float DeltaTime);
