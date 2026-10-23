@@ -2,6 +2,7 @@
 #include "ACEDatSubsystem.h"
 #include "Dat/ACEDatTextureResolver.h"
 #include "Brushes/SlateRoundedBoxBrush.h"
+#include "Brushes/SlateNoResource.h"
 #include "Engine/Texture2D.h"
 #include "Rendering/DrawElements.h"
 #include "Styling/CoreStyle.h"
@@ -18,6 +19,33 @@ namespace ACELobbyArt
 	const FLinearColor RowText = FLinearColor(FColor(255, 242, 204));
 	const FLinearColor WorldText = FLinearColor(FColor(216, 175, 91));
 	const FLinearColor EnterText = FLinearColor(FColor(255, 242, 127));
+	const FLinearColor RowAccent = FLinearColor(FColor(0xe0, 0xb8, 0x6a));
+
+	FButtonStyle QuietRowStyle(bool bSelected, const FMargin& Padding)
+	{
+		auto C = [](uint32 Rgb, float A) { FLinearColor L(FColor((Rgb >> 16) & 255, (Rgb >> 8) & 255, Rgb & 255)); L.A = A; return L; };
+		const FSlateRoundedBoxBrush Idle(FLinearColor(.006f, .008f, .016f, .42f), 2.f, C(0x6b5630, .5f), 1.f);
+		const FSlateRoundedBoxBrush Hover(FLinearColor(.03f, .026f, .018f, .55f), 2.f, C(0x9a7a3e, .7f), 1.f);
+		const FSlateRoundedBoxBrush Picked(FLinearColor(.06f, .046f, .024f, .62f), 2.f, C(0xc9a056, .85f), 1.f);
+		const FSlateRoundedBoxBrush PickedHover(FLinearColor(.075f, .058f, .03f, .66f), 2.f, C(0xd7b06a, .95f), 1.f);
+		FButtonStyle Style;
+		Style.SetNormal(bSelected ? Picked : Idle).SetHovered(bSelected ? PickedHover : Hover).SetPressed(Picked).SetDisabled(Idle);
+		Style.SetNormalPadding(Padding).SetPressedPadding(Padding);
+		return Style;
+	}
+
+	FScrollBarStyle QuietScrollBar(float Thickness)
+	{
+		const FSlateNoResource None;
+		return FScrollBarStyle()
+			.SetVerticalBackgroundImage(FSlateRoundedBoxBrush(FLinearColor(0, 0, 0, .22f), Thickness * .5f))
+			.SetHorizontalBackgroundImage(FSlateRoundedBoxBrush(FLinearColor(0, 0, 0, .22f), Thickness * .5f))
+			.SetVerticalTopSlotImage(None).SetVerticalBottomSlotImage(None).SetHorizontalTopSlotImage(None).SetHorizontalBottomSlotImage(None)
+			.SetNormalThumbImage(FSlateRoundedBoxBrush(FLinearColor(FColor(0x6b, 0x56, 0x30)), Thickness * .5f))
+			.SetHoveredThumbImage(FSlateRoundedBoxBrush(FLinearColor(FColor(0x9a, 0x7a, 0x3e)), Thickness * .5f))
+			.SetDraggedThumbImage(FSlateRoundedBoxBrush(FLinearColor(FColor(0xc9, 0xa0, 0x56)), Thickness * .5f))
+			.SetThickness(Thickness);
+	}
 }
 
 namespace
@@ -730,7 +758,7 @@ const FACELobbyArt* ACELobbyArt::Load(UACEDatSubsystem* Dat)
 
 void SACELobbyFrame::Construct(const FArguments& Args)
 {
-	Fill = Args._Fill; FillTop = Args._FillTop; bShadow = Args._Shadow;
+	Fill = Args._Fill; FillTop = Args._FillTop; bShadow = Args._Shadow; bHairline = Args._Hairline;
 	SetVisibility(EVisibility::HitTestInvisible);
 }
 
@@ -749,6 +777,19 @@ int32 SACELobbyFrame::OnPaint(const FPaintArgs&, const FGeometry& G, const FSlat
 	if (bShadow && Art)
 		Box(&Art->Shadow, FVector2D(-30, -12), S + FVector2D(60, 60), FLinearColor(1, 1, 1, .85f), Layer);
 	const FLinearColor Bottom = Fill.Get();
+	if (bHairline)
+	{
+		// Quiet panel: the page colour at low opacity, a 1px muted-gold hairline, no art, no glow.
+		const FSlateBrush* White = FCoreStyle::Get().GetBrush("WhiteBrush");
+		const FLinearColor Pane(Bottom.R, Bottom.G, Bottom.B, FMath::Min(Bottom.A, .6f));
+		const FLinearColor Line(FLinearColor(FColor(0x8a, 0x6c, 0x36)).CopyWithNewOpacity(.7f));
+		Box(White, FVector2D(3, 3), S - FVector2D(6, 6), Pane, Layer);
+		Box(White, FVector2D(3, 3), FVector2D(S.X - 6, 1), Line, Layer + 1);
+		Box(White, FVector2D(3, S.Y - 4), FVector2D(S.X - 6, 1), Line, Layer + 1);
+		Box(White, FVector2D(3, 4), FVector2D(1, S.Y - 8), Line, Layer + 1);
+		Box(White, FVector2D(S.X - 4, 4), FVector2D(1, S.Y - 8), Line, Layer + 1);
+		return Layer + 1;
+	}
 	if (FillTop.IsSet())
 	{
 		const FLinearColor Top = FillTop.Get();

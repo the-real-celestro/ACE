@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Styling/SlateBrush.h"
+#include "Styling/SlateTypes.h"
 #include "Widgets/SLeafWidget.h"
 
 class UACEDatSubsystem;
@@ -88,6 +89,14 @@ namespace ACELobbyArt
 	UTexture2D* KeyedOverBlack(UACEDatSubsystem* Dat, uint32 ImageId);
 	UTexture2D* ExtendedBackdrop(UACEDatSubsystem* Dat, uint32 ImageId, int32 ExtX, int32 ExtY, int32 Spread = 0, int32 SplitX = 212);
 
+	/** Quiet list row (the left nav's family): dark translucent fill, 1px muted-gold hairline,
+	 *  gentle hover brighten; selected rows get a brighter hairline and a slight lift. No art, no glow. */
+	FButtonStyle QuietRowStyle(bool bSelected, const FMargin& Padding);
+	/** Slim hairline scrollbar for lists. */
+	FScrollBarStyle QuietScrollBar(float Thickness = 6.f);
+	/** Thin gold accent drawn on the left edge of a selected row. */
+	extern const FLinearColor RowAccent;
+
 	extern const FLinearColor Gold;      // headings, retail orange-gold
 	extern const FLinearColor Cream;     // body text
 	extern const FLinearColor Muted;     // secondary text
@@ -103,11 +112,13 @@ namespace ACELobbyArt
 class SACELobbyFrame : public SLeafWidget
 {
 public:
-	SLATE_BEGIN_ARGS(SACELobbyFrame) : _Fill(FLinearColor(.008f, .02f, .06f, .55f)), _Shadow(false) {}
+	SLATE_BEGIN_ARGS(SACELobbyFrame) : _Fill(FLinearColor(.008f, .02f, .06f, .55f)), _Shadow(false), _Hairline(false) {}
 		SLATE_ATTRIBUTE(FLinearColor, Fill)
 		/** Optional top colour: the fill becomes a vertical gradient FillTop -> Fill. */
 		SLATE_ATTRIBUTE(FLinearColor, FillTop)
 		SLATE_ARGUMENT(bool, Shadow)
+		/** Draw a single 1px muted-gold hairline instead of the retail gold frame art. */
+		SLATE_ARGUMENT(bool, Hairline)
 	SLATE_END_ARGS()
 	void Construct(const FArguments& Args);
 	virtual FVector2D ComputeDesiredSize(float) const override { return FVector2D(80, 80); }
@@ -116,6 +127,7 @@ public:
 private:
 	TAttribute<FLinearColor> Fill, FillTop;
 	bool bShadow = false;
+	bool bHairline = false;
 };
 
 /** Retail window (0x06004D26) at any size: header pieces, tiled tinted body, border, shadows. */

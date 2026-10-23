@@ -137,12 +137,11 @@ namespace
 #endif
             if (bLine)
             {
-                // Codex Hall insertion line: 3px gold gradient with a soft glow and end dots,
-                // centred in the 8px gap between rows.
+                // Insertion line: a 2px gold hairline with small end dots, centred in the gap between rows.
                 const FLinearColor Mod=Style.GetColorAndOpacityTint();
                 const FLinearColor Edge(FColor(0xf0,0xad,0x42)), Mid(FColor(0xff,0xd7,0x7a));
                 const float X0=14.f, W=FMath::Max(10.f,float(G.GetLocalSize().X)-X0);
-                const float Y=bBelow?G.GetLocalSize().Y+4.f:-4.f;
+                const float Y=bBelow?G.GetLocalSize().Y+2.f:-2.f;
                 auto Band=[&](float H, float Alpha, int32 L)
                 {
                     auto A=[&](FLinearColor C, float K){ C.A*=K*Alpha; return C*Mod; };
@@ -154,11 +153,10 @@ namespace
                     Stops.Add(FSlateGradientStop(FVector2D(W,0),A(Edge,0)));
                     FSlateDrawElement::MakeGradient(Out,L,G.ToPaintGeometry(FVector2D(W,H),FSlateLayoutTransform(FVector2D(X0,Y-H*.5f))),Stops,Orient_Vertical);
                 };
-                Band(11.f,.18f,++Layer);
-                Band(3.f,1.f,++Layer);
-                static const FSlateRoundedBoxBrush Dot(FLinearColor::White,4.5f);
-                for (const float X:{X0+2.f,X0+W-11.f})
-                    FSlateDrawElement::MakeBox(Out,Layer,G.ToPaintGeometry(FVector2D(9,9),FSlateLayoutTransform(FVector2D(X,Y-4.5f))),&Dot,ESlateDrawEffect::None,Mid*Mod);
+                Band(2.f,1.f,++Layer);
+                static const FSlateRoundedBoxBrush Dot(FLinearColor::White,3.f);
+                for (const float X:{X0+2.f,X0+W-8.f})
+                    FSlateDrawElement::MakeBox(Out,Layer,G.ToPaintGeometry(FVector2D(6,6),FSlateLayoutTransform(FVector2D(X,Y-3.f))),&Dot,ESlateDrawEffect::None,Mid*Mod);
             }
             return Layer;
         }

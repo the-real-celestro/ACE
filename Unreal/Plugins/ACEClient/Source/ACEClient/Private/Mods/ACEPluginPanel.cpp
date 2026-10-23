@@ -28,6 +28,17 @@
 #include "Widgets/Input/SMultiLineEditableTextBox.h"
 #include "Widgets/Input/SSpinBox.h"
 #include "Widgets/Text/STextBlock.h"
+#include "Brushes/SlateRoundedBoxBrush.h"
+
+namespace
+{
+    /** Plugin card: quiet dark translucent panel with a 1px muted-gold hairline (no glow, no heavy frame). */
+    const FSlateBrush& PluginCardBrush()
+    {
+        static const FSlateRoundedBoxBrush Brush(FLinearColor(.006f,.008f,.016f,.42f),3.f,FLinearColor(FColor(0x6b,0x56,0x30,0x90)),1.f);
+        return Brush;
+    }
+}
 #include "Styling/CoreStyle.h"
 #include "Brushes/SlateRoundedBoxBrush.h"
 
@@ -192,8 +203,8 @@ namespace ACEPluginPanelPrivate
                         .IsEnabled_Lambda([P](){return P->Enabled;})
                         .OnClicked_Lambda([this,PluginId=P->Id](){Open(PluginId);return FReply::Handled();})[Label(TEXT("Open"),16)]];
                     RowsById.Add(P->Id,SNew(SACEPluginOrderTarget).Host(Host.Get()).Id(P->Id).LockId(TEXT("__manager")).Tag(FName(*(TEXT("PluginManagerOrder.")+P->Id)))
-                        [SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(.06f,.035f,.014f))
-                        .Padding(12).ToolTip(FACEPluginStyle::Tooltip(TAttribute<FText>::CreateLambda([P]{return FText::FromString(P->DisplayTitle()+TEXT(" ")+P->Version);})))
+                        [SNew(SBorder).BorderImage(&PluginCardBrush())
+                        .Padding(FMargin(12,10)).ToolTip(FACEPluginStyle::Tooltip(TAttribute<FText>::CreateLambda([P]{return FText::FromString(P->DisplayTitle()+TEXT(" ")+P->Version);})))
                         [SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight()[Row]
                             // Align settings with the title, after the grip and icon columns.
                             +SVerticalBox::Slot().AutoHeight().Padding(58,8,0,0)[Host->MakePluginWindowControls(P->Id)]]]);

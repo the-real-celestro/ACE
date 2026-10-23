@@ -21,26 +21,14 @@
 #include "Components/OverlaySlot.h"
 #include "Engine/GameInstance.h"
 #include "Widgets/Views/SListView.h"
+#include "Widgets/Layout/SBorder.h"
+#include "Styling/CoreStyle.h"
 
 namespace
 {
 	FButtonStyle RowStyle(bool bSelected)
 	{
-		FButtonStyle Style;
-		if (const FACELobbyArt* Art = ACELobbyArt::Get())
-		{
-			Style.SetNormal(Art->Row[bSelected ? 2 : 0]).SetHovered(Art->Row[bSelected ? 2 : 1]).SetPressed(Art->Row[2]).SetDisabled(Art->Row[0]);
-		}
-		else
-		{
-			const FLinearColor Edge = bSelected ? ACELobbyArt::Highlight : FLinearColor(.3f, .24f, .14f, 1);
-			Style.SetNormal(FSlateRoundedBoxBrush(FLinearColor(.03f, .05f, .1f, .8f), 2.f, Edge, 1.f));
-			Style.SetHovered(FSlateRoundedBoxBrush(FLinearColor(.06f, .08f, .14f, .9f), 2.f, ACELobbyArt::Gold, 1.f));
-			Style.SetPressed(FSlateRoundedBoxBrush(FLinearColor(.02f, .03f, .06f, 1), 2.f, ACELobbyArt::Highlight, 1.f));
-			Style.SetDisabled(Style.Normal);
-		}
-		Style.SetNormalPadding(FMargin(9, 0, 14, 0)).SetPressedPadding(FMargin(9, 0, 14, 0));
-		return Style;
+		return ACELobbyArt::QuietRowStyle(bSelected, FMargin(10, 0, 12, 0));
 	}
 
 	FButtonStyle GlyphButtonStyle()
@@ -62,19 +50,18 @@ TSharedRef<SWidget> UACELobbyAccountRow::RebuildWidget()
 		RowButton = WidgetTree->ConstructWidget<UACELobbyPlainButton>();
 		RowButton->SetStyle(RowStyle(false));
 		RowButton->OnClicked.AddDynamic(this, &UACELobbyAccountRow::HandleClicked);
-		// The selected row's gold pointer sits just past its right edge.
+		// Selected rows carry a thin gold accent on their left edge.
 		auto* Layers = WidgetTree->ConstructWidget<UOverlay>();
 		Height->SetContent(Layers);
 		auto* RowSlot = Layers->AddChildToOverlay(RowButton);
-		RowSlot->SetHorizontalAlignment(HAlign_Fill); RowSlot->SetVerticalAlignment(VAlign_Fill); RowSlot->SetPadding(FMargin(0, 0, 10, 0));
-		auto* PointerHost = WidgetTree->ConstructWidget<UNativeWidgetHost>();
-		PointerHost->SetContent(SNew(SACELobbyGlyph).Kind(SACELobbyGlyph::EKind::Pointer).Size(10.f).Color(FLinearColor(FColor(0xf2, 0xc4, 0x5c))));
-		auto* PointerSize = WidgetTree->ConstructWidget<USizeBox>();
-		PointerSize->SetWidthOverride(10); PointerSize->SetHeightOverride(10); PointerSize->SetContent(PointerHost);
-		PointerSize->SetVisibility(ESlateVisibility::Hidden);
-		auto* PointerSlot = Layers->AddChildToOverlay(PointerSize);
-		PointerSlot->SetHorizontalAlignment(HAlign_Right); PointerSlot->SetVerticalAlignment(VAlign_Center);
-		Pointer = PointerSize;
+		RowSlot->SetHorizontalAlignment(HAlign_Fill); RowSlot->SetVerticalAlignment(VAlign_Fill); RowSlot->SetPadding(FMargin(0, 0, 4, 0));
+		auto* AccentHost = WidgetTree->ConstructWidget<UNativeWidgetHost>();
+		AccentHost->SetContent(SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(ACELobbyArt::RowAccent).Padding(0));
+		auto* AccentSize = WidgetTree->ConstructWidget<USizeBox>(); AccentSize->SetWidthOverride(2); AccentSize->SetContent(AccentHost);
+		AccentSize->SetVisibility(ESlateVisibility::Hidden);
+		auto* AccentSlot = Layers->AddChildToOverlay(AccentSize);
+		AccentSlot->SetHorizontalAlignment(HAlign_Left); AccentSlot->SetVerticalAlignment(VAlign_Fill); AccentSlot->SetPadding(FMargin(0, 1, 0, 1));
+		Accent = AccentSize;
 		auto* Line = WidgetTree->ConstructWidget<UHorizontalBox>();
 		RowButton->SetContent(Line);
 		if (auto* ContentSlot = Cast<UButtonSlot>(Line->Slot))
@@ -88,7 +75,7 @@ TSharedRef<SWidget> UACELobbyAccountRow::RebuildWidget()
 		auto* Star = WidgetTree->ConstructWidget<UNativeWidgetHost>();
 		TWeakObjectPtr<UACELobbyAccountRow> Weak(this);
 		TWeakObjectPtr<UButton> WeakStar(StarButton);
-		Star->SetContent(SNew(SACELobbyGlyph).Kind(SACELobbyGlyph::EKind::Star).Size(15.f)
+		Star->SetContent(SNew(SACELobbyGlyph).Kind(SACELobbyGlyph::EKind::Star).Size(12.f)
 			.Filled_Lambda([Weak]() { return Weak.IsValid() && Weak->bStarFilled; })
 			.Color_Lambda([Weak, WeakStar]()
 			{
@@ -99,38 +86,34 @@ TSharedRef<SWidget> UACELobbyAccountRow::RebuildWidget()
 					: (bHot ? FLinearColor(FColor(0xc9, 0xa0, 0x52)) : FLinearColor(FColor(0x6e, 0x5c, 0x38)));
 			}));
 		auto* StarSize = WidgetTree->ConstructWidget<USizeBox>();
-		StarSize->SetWidthOverride(18); StarSize->SetHeightOverride(18);
+		StarSize->SetWidthOverride(14); StarSize->SetHeightOverride(14);
 		StarSize->SetContent(Star);
 		StarButton->SetContent(StarSize);
 		auto* StarSlot = Line->AddChildToHorizontalBox(StarButton);
-		StarSlot->SetVerticalAlignment(VAlign_Center); StarSlot->SetPadding(FMargin(0, 0, 11, 0));
+		StarSlot->SetVerticalAlignment(VAlign_Center); StarSlot->SetPadding(FMargin(0, 0, 10, 0));
 		auto* Lines = WidgetTree->ConstructWidget<UVerticalBox>();
-		Name = WidgetTree->ConstructWidget<UACERetailTextBlock>();
-		Name->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 13));
-		// Character select's slot-row font, so accounts and characters read alike.
-		Name->SetFontOverride(ACEUIFontStyles::FontIdForStyleName(TEXT("sansfont16")));
-		Name->SetAutoWrapText(false);
-		Name->SetClipping(EWidgetClipping::ClipToBounds);
-		Name->SetVisibility(ESlateVisibility::HitTestInvisible);
-		UACEDatSubsystem* Dat = GetGameInstance() ? GetGameInstance()->GetSubsystem<UACEDatSubsystem>() : nullptr;
-		Name->SetRetailElement(Dat && Dat->IsDatReady() ? Dat->GetUiResources() : nullptr, nullptr, FVector2D(1.3f), 0, false);
-		Name->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
-		Name->SetShadowOffset(FVector2D(1, 1)); Name->SetShadowColorAndOpacity(FLinearColor(0, 0, 0, .85f));
-		Lines->AddChildToVerticalBox(Name);
-		auto MakeText = [this](float Px)
+		auto MakeText = [this](float Px, const TCHAR* Weight = TEXT("Regular"))
 		{
 			auto* T = WidgetTree->ConstructWidget<UTextBlock>();
-			T->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), FMath::RoundToInt(Px * .75f)));
-			T->SetShadowOffset(FVector2D(1, 1)); T->SetShadowColorAndOpacity(FLinearColor(0, 0, 0, .8f));
+			T->SetFont(FCoreStyle::GetDefaultFontStyle(Weight, FMath::RoundToInt(Px * .75f)));
+			T->SetShadowOffset(FVector2D(1, 1)); T->SetShadowColorAndOpacity(FLinearColor(0, 0, 0, .7f));
 			T->SetVisibility(ESlateVisibility::HitTestInvisible); T->SetClipping(EWidgetClipping::ClipToBounds);
 			T->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
 			return T;
 		};
-		UserLine = MakeText(12.5f); UserLine->SetColorAndOpacity(FLinearColor(FColor(0x9f, 0x90, 0x70)));
-		Lines->AddChildToVerticalBox(UserLine)->SetPadding(FMargin(1, 0, 0, 0));
+		// Crisp engine text with a 1px shadow; the name is split so a search match can be lit.
+		auto* NameRow = WidgetTree->ConstructWidget<UHorizontalBox>();
+		Name = MakeText(15.f); NameMatch = MakeText(15.f); NameTail = MakeText(15.f);
+		NameMatch->SetColorAndOpacity(ACELobbyArt::Highlight);
+		NameRow->AddChildToHorizontalBox(Name); NameRow->AddChildToHorizontalBox(NameMatch);
+		NameRow->AddChildToHorizontalBox(NameTail)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+		NameRow->SetClipping(EWidgetClipping::ClipToBounds);
+		Lines->AddChildToVerticalBox(NameRow);
+		UserLine = MakeText(11.5f); UserLine->SetColorAndOpacity(FLinearColor(FColor(0x8f, 0x81, 0x66)));
+		Lines->AddChildToVerticalBox(UserLine)->SetPadding(FMargin(1, -1, 0, 0));
 		auto* LinesSlot = Line->AddChildToHorizontalBox(Lines);
 		LinesSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); LinesSlot->SetVerticalAlignment(VAlign_Center);
-		WhenText = MakeText(12.f);
+		WhenText = MakeText(11.5f);
 		auto* WhenSlot = Line->AddChildToHorizontalBox(WhenText);
 		WhenSlot->SetVerticalAlignment(VAlign_Center); WhenSlot->SetPadding(FMargin(10, 0, 0, 0));
 	}
@@ -152,14 +135,8 @@ void UACELobbyAccountRow::NativeOnListItemObjectSet(UObject* ListItemObject)
 void UACELobbyAccountRow::Refresh()
 {
 	if (!Item || !Name || !RowButton) return;
-	if (Name->GetText().ToString() != Item->Title) Name->SetText(FText::FromString(Item->Title));
-	Name->SetToolTipText(FText::FromString(Item->Title));
 	RowButton->SetToolTipText(FText::FromString(Item->Title));
-	// The DAT may have finished loading after this row was built.
-	if (!Name->GetBitmapFont())
-		if (UACEDatSubsystem* Dat = GetGameInstance() ? GetGameInstance()->GetSubsystem<UACEDatSubsystem>() : nullptr; Dat && Dat->IsDatReady())
-			Name->SetRetailElement(Dat->GetUiResources(), nullptr, FVector2D(1.3f), 0, false);
-	const FLinearColor Base = Item->bSelected ? FLinearColor(FColor(0xff, 0xf7, 0xd6)) : FLinearColor(FColor(0xe9, 0xdc, 0xb8));
+	const FLinearColor Base = Item->bSelected ? FLinearColor(FColor(0xff, 0xf2, 0xcc)) : FLinearColor(FColor(0xdc, 0xcf, 0xab));
 	if (UserLine)
 	{
 		if (UserLine->GetText().ToString() != Item->Username) UserLine->SetText(FText::FromString(Item->Username));
@@ -168,18 +145,21 @@ void UACELobbyAccountRow::Refresh()
 	if (WhenText)
 	{
 		if (WhenText->GetText().ToString() != Item->When) WhenText->SetText(FText::FromString(Item->When));
-		WhenText->SetColorAndOpacity(Item->bSelected ? FLinearColor(FColor(0xe4, 0xcf, 0x9c)) : FLinearColor(FColor(0x8f, 0x81, 0x66)));
+		WhenText->SetColorAndOpacity(Item->bSelected ? FLinearColor(FColor(0xd8, 0xc0, 0x8a)) : FLinearColor(FColor(0x84, 0x77, 0x5e)));
 	}
-	if (Pointer) Pointer->SetVisibility(Item->bSelected ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Hidden);
-	Name->SetColorAndOpacity(Base);
-	TArray<FLinearColor> Colors;
-	if (Item->MatchStart != INDEX_NONE && Item->MatchLen > 0)
+	if (Accent) Accent->SetVisibility(Item->bSelected ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Hidden);
+	// Split the title around the search match (if any) so only the match is lit.
+	FString Head = Item->Title, Match, Tail;
+	if (Item->MatchStart != INDEX_NONE && Item->MatchLen > 0 && Item->MatchStart < Item->Title.Len())
 	{
-		Colors.Init(Base, Item->Title.Len());
-		for (int32 I = Item->MatchStart; I < FMath::Min(Item->Title.Len(), Item->MatchStart + Item->MatchLen); ++I)
-			Colors[I] = ACELobbyArt::Highlight;
+		Head = Item->Title.Left(Item->MatchStart);
+		Match = Item->Title.Mid(Item->MatchStart, Item->MatchLen);
+		Tail = Item->Title.Mid(Item->MatchStart + Item->MatchLen);
 	}
-	Name->SetTextColors(Colors);
+	auto Set = [](UTextBlock* T, const FString& S) { if (T && T->GetText().ToString() != S) T->SetText(FText::FromString(S)); };
+	Set(Name, Head); Set(NameMatch, Match); Set(NameTail, Tail);
+	Name->SetColorAndOpacity(Base); NameTail->SetColorAndOpacity(Base);
+	NameMatch->SetVisibility(Match.IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
 	RowButton->SetStyle(RowStyle(Item->bSelected));
 	bStarFilled = Item->bFavorite;
 	StarButton->SetToolTipText(FText::FromString(Item->bFavorite ? TEXT("Unpin from favorites") : TEXT("Pin to favorites")));
@@ -205,25 +185,13 @@ UACELobbyAccountListView::UACELobbyAccountListView(const FObjectInitializer& Obj
 	if (FFloatProperty* Spacing = FindFProperty<FFloatProperty>(UListView::StaticClass(), TEXT("VerticalEntrySpacing")))
 		Spacing->SetPropertyValue_InContainer(this, UACELobbyAccountRow::RowGap);
 	WidgetStyle.SetBackgroundBrush(FSlateNoResource());
-	ScrollBarStyle = FScrollBarStyle()
-		.SetVerticalBackgroundImage(FSlateRoundedBoxBrush(FLinearColor(0, 0, 0, .35f), 2.f))
-		.SetVerticalTopSlotImage(FSlateNoResource()).SetVerticalBottomSlotImage(FSlateNoResource())
-		.SetHorizontalBackgroundImage(FSlateNoResource()).SetHorizontalTopSlotImage(FSlateNoResource()).SetHorizontalBottomSlotImage(FSlateNoResource())
-		.SetNormalThumbImage(FSlateRoundedBoxBrush(FLinearColor(.36f, .27f, .14f, 1), 3.f))
-		.SetHoveredThumbImage(FSlateRoundedBoxBrush(FLinearColor(.6f, .45f, .22f, 1), 3.f))
-		.SetDraggedThumbImage(FSlateRoundedBoxBrush(FLinearColor(.75f, .56f, .27f, 1), 3.f))
-		.SetThickness(16.f);
-	// Leave room above and below the bar for the retail arrow buttons drawn over the list.
+	ScrollBarStyle = ACELobbyArt::QuietScrollBar(6.f);
 	SetScrollBarPadding(FMargin(4, 16, 0, 16));
 }
 
 void UACELobbyAccountListView::ApplyArt()
 {
-	const FACELobbyArt* Art = ACELobbyArt::Get();
-	if (!Art) return;
-	// SScrollBar keeps pointers into this style, so updating it in place restyles the live bar.
-	ScrollBarStyle.SetVerticalBackgroundImage(Art->Track)
-		.SetNormalThumbImage(Art->Thumb[0]).SetHoveredThumbImage(Art->Thumb[1]).SetDraggedThumbImage(Art->Thumb[1]);
+	// Rows and the slim scrollbar are drawn without DAT art; just restyle what is shown.
 	if (MyListView) MyListView->Invalidate(EInvalidateWidgetReason::Paint);
 	RefreshRows();
 }

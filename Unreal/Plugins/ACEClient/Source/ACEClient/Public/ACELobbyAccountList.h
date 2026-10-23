@@ -36,14 +36,14 @@ public:
 	TWeakObjectPtr<UACELoginWidget> Owner;
 };
 
-/** Retail slot row: favourite star and account name. Click selects; the star toggles favourite. */
+/** Quiet list row: favourite star, account name and login.  Click selects; the star toggles favourite. */
 UCLASS()
 class ACECLIENT_API UACELobbyAccountRow : public UUserWidget, public IUserObjectListEntry
 {
 	GENERATED_BODY()
 public:
-	static constexpr float RowHeight = 56.f;
-	static constexpr float RowGap = 8.f;
+	static constexpr float RowHeight = 40.f;
+	static constexpr float RowGap = 4.f;
 	/** Re-applies selection, favourite and search-highlight state without regenerating rows. */
 	void Refresh();
 	UACELobbyAccountItem* GetItem() const { return Item; }
@@ -54,23 +54,26 @@ protected:
 	UFUNCTION() void HandleStarClicked();
 	UPROPERTY() TObjectPtr<UButton> RowButton;
 	UPROPERTY() TObjectPtr<UButton> StarButton;
-	UPROPERTY() TObjectPtr<UACERetailTextBlock> Name;
+	/** The name in three runs so a search match can be lit: before, match, after. */
+	UPROPERTY() TObjectPtr<class UTextBlock> Name;
+	UPROPERTY() TObjectPtr<class UTextBlock> NameMatch;
+	UPROPERTY() TObjectPtr<class UTextBlock> NameTail;
+	UPROPERTY() TObjectPtr<class UWidget> Accent;
 	UPROPERTY() TObjectPtr<class UTextBlock> UserLine;
 	UPROPERTY() TObjectPtr<class UTextBlock> WhenText;
-	UPROPERTY() TObjectPtr<class UWidget> Pointer;
 	UPROPERTY() TObjectPtr<UACELobbyAccountItem> Item;
 	bool bStarFilled = false;
 	bool bStarHot = false;
 };
 
-/** Virtualised account list with the retail chain scrollbar (shown only when it can scroll). */
+/** Virtualised account list with a slim hairline scrollbar (shown only when it can scroll). */
 UCLASS()
 class ACECLIENT_API UACELobbyAccountListView : public UListView
 {
 	GENERATED_BODY()
 public:
 	UACELobbyAccountListView(const FObjectInitializer& ObjectInitializer);
-	/** Switches the scrollbar to DAT art once it has loaded. */
+	/** Re-applies row styling once the DAT art has loaded. */
 	void ApplyArt();
 	bool CanScroll() const;
 	void ScrollBy(float Items);

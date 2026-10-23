@@ -210,12 +210,21 @@ protected:
 	UFUNCTION() void OnAccountSearchChanged(const FText& Text);
 	UFUNCTION() void OnAccountSearchCommitted(const FText& Text, ETextCommit::Type CommitMethod);
 	UTextBlock* Heading(const FString& Text, int32 FancySize = 24);
-	UWidget* Frame(UWidget* Content, const FMargin& Padding);
+	UWidget* Frame(UWidget* Content, const FMargin& Padding, bool bHairline = false);
 	UPROPERTY() TObjectPtr<UScrollBox> BrowserList;
 	UPROPERTY() TObjectPtr<UTextBlock> ServerTitle;
 	UPROPERTY() TObjectPtr<UTextBlock> ServerDetail;
 	UPROPERTY() TObjectPtr<UTextBlock> ServerDescription;
 	UPROPERTY() TObjectPtr<UTextBlock> BrowserDetail;
+	/** Servers page detail column: world name, type and address, and the list's match count. */
+	UPROPERTY() TObjectPtr<UTextBlock> BrowserName;
+	UPROPERTY() TObjectPtr<UTextBlock> BrowserMeta;
+	UPROPERTY() TObjectPtr<UTextBlock> BrowserCount;
+	/** Game Files check: one quiet row per DAT file. */
+	UPROPERTY() TObjectPtr<class UVerticalBox> FileRows;
+	/** Shown only on the Accounts tab (with the Launch ring on the home page). */
+	UPROPERTY() TObjectPtr<UWidget> AccountsWindow;
+	UPROPERTY() TObjectPtr<UWidget> StatusAnchor;
 	UPROPERTY() TObjectPtr<UTextBlock> FileStatus;
 	UPROPERTY() TObjectPtr<UTextBlock> FileProblem;
 	UPROPERTY() TObjectPtr<UEditableTextBox> NameBox;
