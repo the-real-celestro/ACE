@@ -128,7 +128,8 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
     friend class FACEPluginCosmeticsTest;
     friend class FACEActionDeckTest;
 public:
-    void InspectLootItem(int32 Guid);
+    void InspectLootItem(int32 Guid, TSharedPtr<FJsonObject> TestRule=nullptr);
+    void PrintLootInspection(const FACEWorldObject& Item, const TSharedPtr<FJsonObject>& Result=nullptr);
     virtual void Initialize(FSubsystemCollectionBase& Collection) override;
     virtual void Deinitialize() override;
     void Discover();
@@ -334,6 +335,7 @@ private:
     double InspectLootDeadline=0;
     bool InspectLootWaiting=false;
     TSharedPtr<FACEPluginVM> InspectLootVM;
+    TSharedPtr<FJsonObject> InspectLootTestPolicy;
     TWeakPtr<FACESession> InspectLootSession;
     TWeakPtr<FJsonObject> InspectLootProfile;
     bool SaveProfileData(const FString& Id, const FString& Name, TSharedPtr<FJsonObject> Profile, bool bStopRunning);

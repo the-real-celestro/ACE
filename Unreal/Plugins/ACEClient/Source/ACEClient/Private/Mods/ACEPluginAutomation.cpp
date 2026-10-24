@@ -169,6 +169,9 @@ TSharedPtr<FJsonValue> UACEPluginSubsystem::LootItemSnapshot(const FACEWorldObje
             J->SetArrayField(TEXT("spell_names"),SpellNames);
             J->SetArrayField(TEXT("spell_ids"),SpellIds);
         }
+        // Name (1) is public display data. An appraisal may contain a raw template
+        // name; keep advanced Name requirements consistent with the basic filter.
+        Strings->SetStringField(TEXT("1"),ACERetailObjectNames::Name(Item));
         J->SetObjectField(TEXT("int_properties"),Ints);J->SetObjectField(TEXT("float_properties"),Floats);J->SetObjectField(TEXT("string_properties"),Strings);
 
         if(A&&A->bSuccess)

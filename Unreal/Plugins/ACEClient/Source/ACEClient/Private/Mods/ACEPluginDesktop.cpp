@@ -35,6 +35,7 @@ namespace
     FString PanelSizeKey(const FString& Id)
     {
         if(Id==TEXT("thirdeye"))return Id+TEXT(".slim_size");
+        if(Id==TEXT("looteditor"))return Id+TEXT(".simple_size");
         return Id+((Id==TEXT("looteditor")||Id==TEXT("itemtools")||Id==TEXT("autocraft")||Id==TEXT("ucmmicro")||Id==TEXT("ucm.log")||Id==TEXT("thirdeye"))?TEXT(".compact_size"):TEXT(".size"));
     }
     const FButtonStyle& DockButtonStyle(){return FACEPluginStyle::Current()->DockButton;}
@@ -259,20 +260,20 @@ namespace
                 +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(Id==TEXT("ucmmicro")?FMargin(0):FMargin(10,0,6,0))[SNew(SBox)[SNew(SACEPluginText).Text_Lambda([T=Args._Subtitle]{return FText::FromString(T.Get().ToUpper());})
                     .Visibility_Lambda([this,T=Args._Subtitle]{return Id==TEXT("ucmmicro")||T.Get().IsEmpty()||GetCachedGeometry().GetLocalSize().X<480?EVisibility::Collapsed:EVisibility::Visible;})
                     .Font(FCoreStyle::GetDefaultFontStyle("Regular",9)).ColorAndOpacity(FACEPluginStyle::Muted())]];
-            if(Host.IsValid())Title->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,4,0)
-                [SNew(SBox).WidthOverride(34).HeightOverride(32)[SNew(SACEPluginButton).Cursor(EMouseCursor::Default).Tag(TEXT("PluginFrameSettings"))
+            if(Host.IsValid())Title->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0)
+                [SNew(SBox).WidthOverride(28).HeightOverride(30)[SNew(SACEPluginButton).Cursor(EMouseCursor::Default).Tag(TEXT("PluginFrameSettings"))
                     .ContentPadding(FMargin(1)).ButtonStyle(&TitleControlStyle()).IsFocusable(false)
                     .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Plugin settings"))))
                     .OnClicked_Lambda([H=Host,Window=Id]{if(H.IsValid())H->OpenPluginSettings(Window);return FReply::Handled();})
                     [SNew(SScaleBox).Stretch(EStretch::ScaleToFit)[DockIcon(TEXT("plugin.options"))]]]];
-            if(Host.IsValid())Title->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,4,0)
-                [SNew(SBox).WidthOverride(34).HeightOverride(32)[SNew(SACEPluginButton).Cursor(EMouseCursor::Default).ContentPadding(FMargin(0)).Tag(TEXT("PluginFramePin"))
+            if(Host.IsValid())Title->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0)
+                [SNew(SBox).WidthOverride(28).HeightOverride(30)[SNew(SACEPluginButton).Cursor(EMouseCursor::Default).ContentPadding(FMargin(0)).Tag(TEXT("PluginFramePin"))
                 .IsFocusable(false).ButtonStyle(&TitleControlStyle())
                 .ToolTip(FACEPluginStyle::Tooltip(TAttribute<FText>::CreateLambda([H=Host,Window=Id]{return FText::FromString(H.IsValid()&&H->IsPluginWindowPinned(Window)?TEXT("Unpin"):TEXT("Pin and hide frame. Hold Quick-show pinned windows to move or unpin."));})))
                 .OnClicked_Lambda([H=Host,Window=Id]{if(H.IsValid())H->SetPluginWindowPinned(Window,!H->IsPluginWindowPinned(Window));return FReply::Handled();})
                 [Glyph(SACELobbyGlyph::EKind::Lock)]]];
-            if(Args._Close)Title->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,12,0)
-                [SNew(SBox).WidthOverride(34).HeightOverride(32)[SNew(SACEPluginButton).Cursor(EMouseCursor::Default).ContentPadding(FMargin(0)).Tag(TEXT("PluginFrameClose")).IsFocusable(false).ButtonStyle(&TitleControlStyle())
+            if(Args._Close)Title->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,4,0)
+                [SNew(SBox).WidthOverride(28).HeightOverride(30)[SNew(SACEPluginButton).Cursor(EMouseCursor::Default).ContentPadding(FMargin(0)).Tag(TEXT("PluginFrameClose")).IsFocusable(false).ButtonStyle(&TitleControlStyle())
                 .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Hide window (plugin keeps running)"))))
                 .OnClicked_Lambda([Close=Args._Close](){Close();return FReply::Handled();})[Glyph(SACELobbyGlyph::EKind::Cross)]]];
             ChildSlot[SNew(SOverlay)
@@ -393,7 +394,7 @@ FVector2D SACEPluginDesktop::DisplaySize(const FWindow& W) const
     auto Size=W.Size;
     if(W.Id==TEXT("thirdeye")&&Host.IsValid())
         for(const auto& P:Host->Plugins)if(P->Id==W.Id&&P->PanelSize.Y>0)
-            Size.Y=P->PanelSize.Y+ACELedger::ChromeHeaderHeight();
+            Size.Y=FMath::Max(Size.Y,P->PanelSize.Y+ACELedger::ChromeHeaderHeight());
     if(W.Id==TEXT("ucmmicro"))Size.X=FMath::Max(160.,Size.X);
     if(W.Id==TEXT("ucmmicro")&&Size.X<312&&Host.IsValid()&&Host->LedgerOption(TEXT("ucmmicro"),TEXT("condensed")))
         Size.Y=FMath::Max(220.,Size.Y*.5);
@@ -496,6 +497,7 @@ void SACEPluginDesktop::Resize(const FString& Id,FVector2D Delta,bool Save)
      }
      if(Id==TEXT("ucmmicro")&&W->Size.X<312&&Host.IsValid()&&Host->LedgerOption(Id,TEXT("condensed"))&&!FMath::IsNearlyZero(Delta.Y))
          Delta.Y=2*(FMath::Max(220.,W->Size.Y*.5)+Delta.Y)-W->Size.Y;
+     if(Id==TEXT("thirdeye"))W->Size=DisplaySize(*W);
      W->Size+=Delta;const double MinWidth=Id==TEXT("actiondeck")?360.:Id==TEXT("itemtools")?380.:Id==TEXT("ucmmicro")?160.:96.,MinHeight=64.;W->Size.X=FMath::Clamp(W->Size.X,MinWidth,FMath::Max(MinWidth,ViewSize.X));W->Size.Y=FMath::Clamp(W->Size.Y,MinHeight,FMath::Max(MinHeight,ViewSize.Y));Layout(*W);
      if(Save&&Host.IsValid())Host->SavePluginWindowPosition(PanelSizeKey(Id),W->Size);}
 }
@@ -542,6 +544,7 @@ void SACEPluginDesktop::Toggle(const FString& Id)
     if(Id==TEXT("itemtools"))W.Size=Host->GetPluginWindowPosition(TEXT("itemtools.compact_size"),FVector2D(480,380));
     if(Id==TEXT("ucmmicro"))W.Size=Host->GetPluginWindowPosition(PanelSizeKey(Id),FVector2D(360,340));
     if(Id==TEXT("autocraft"))W.Size=Host->GetPluginWindowPosition(PanelSizeKey(Id),FVector2D(520,460));
+    if(Id==TEXT("looteditor"))W.Size=Host->GetPluginWindowPosition(TEXT("looteditor.simple_size"),FVector2D(660,480));
     if(Id==TEXT("thirdeye"))W.Size=Host->GetPluginWindowPosition(TEXT("thirdeye.slim_size"),FVector2D(320,100));
     if(Id==TEXT("actiondeck"))W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(530,203));
     if(Id==TEXT("ucm.log"))W.Size=Host->GetPluginWindowPosition(PanelSizeKey(Id),FVector2D(620,360));

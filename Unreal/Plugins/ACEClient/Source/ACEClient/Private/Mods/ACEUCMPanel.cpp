@@ -183,7 +183,9 @@ namespace ACEUCMPanelPrivate
             }
             RenderedProfile=P();if(ExternalChange)Rebuild();
         }
-        void Add(TSharedRef<SWidget> W){(SectionBody?SectionBody:Body)->AddSlot().AutoHeight().Padding(0,0,0,EditorOnly?4:FACEPluginStyle::IsCodex()?6:10)[W];}
+        void Add(TSharedRef<SWidget> W){
+            if(EditorOnly&&W->GetType()==TEXT("SACEPluginComboButton"))W=SNew(SBox).HAlign(HAlign_Left).MaxDesiredWidth(280)[W];
+            (SectionBody?SectionBody:Body)->AddSlot().AutoHeight().Padding(0,0,0,EditorOnly?4:FACEPluginStyle::IsCodex()?6:10)[W];}
         void Heading(const FString& Title,const FString& Description)
         {
             const FString Key=Page+TEXT("/")+Title;
@@ -279,6 +281,7 @@ namespace ACEUCMPanelPrivate
                 Row->AddSlot().FillWidth(1).VAlign(VAlign_Center)[Text(Section==TEXT("Routes")?TEXT("Route profile"):Section+TEXT(" profile"),13,FACEPluginStyle::Cream())];
                 Row->AddSlot().AutoWidth().VAlign(VAlign_Center)[SNew(SBox).WidthOverride(200)[ProfileChoice(Section)]];
             }
+            else if(EditorOnly)Row->AddSlot().AutoWidth()[SNew(SBox).MaxDesiredWidth(180)[ProfileChoice(Section)]];
             else Row->AddSlot().FillWidth(1)[ProfileChoice(Section)];
             if(Manage&&!HeaderCovers)
             {
@@ -287,6 +290,7 @@ namespace ACEUCMPanelPrivate
                 Row->AddSlot().AutoWidth()[SNew(SBox).IsEnabled(!Name.IsEmpty()&&!Name.Equals(TEXT("Default"),ESearchCase::IgnoreCase))
                     [Button(TEXT("Delete"),[this,Section,Name](){if(!CanLeaveLootRule())return;DeletingSection=Section;DeletingName=Name;CreatingSection.Empty();Rebuild();})]];
             }
+            if(EditorOnly&&Section==TEXT("Loot"))Row->AddSlot().AutoWidth().Padding(6,0)[LootNavigation()];
             if(!HeaderCovers)Add(EditorOnly?StaticCastSharedRef<SWidget>(Row):Tile(Row));
             if(Manage&&CreatingSection==Section)
             {
@@ -1228,6 +1232,13 @@ bool FACEUCMLootEditorTest::RunTest(const FString&)
     const auto Conditions=Rule->GetArrayField(TEXT("conditions"));
     TestEqual(TEXT("Opening editor selects first rule"),Panel->LootEditIndex,0);
     TestTrue(TEXT("Unchanged rule can be switched"),Panel->CanLeaveLootRule());
+    TestFalse(TEXT("Advanced filters are hidden for the simple form"),Panel->ShowLootFilters);
+    Panel->SlatePrepass();
+    TFunction<bool(TSharedRef<SWidget>,FName)> HasTag=[&](TSharedRef<SWidget> W,FName Tag)
+    {if(W->GetTag()==Tag)return true;auto Children=W->GetChildren();for(int I=0;I<Children->Num();++I)if(HasTag(Children->GetChildAt(I),Tag))return true;return false;};
+    TestTrue(TEXT("Basic name field is directly visible without opening advanced filters"),HasTag(Panel,TEXT("LootField.name")));
+    TestFalse(TEXT("Optional rule label stays out of the basic form"),HasTag(Panel,TEXT("LootField.label")));
+
     Panel->SelectLootRequirement(0);
     TestTrue(TEXT("Opening a requirement alone does not dirty it"),Panel->CanLeaveLootRequirement());
     Panel->SelectLootRequirement(0);
@@ -1358,6 +1369,9 @@ bool FACEUCMLootEditorTest::RunTest(const FString&)
                 if(Seen.Contains(&W.Get()))return;Seen.Add(&W.Get());
                 if(!W->GetVisibility().IsVisible())return;
                 if(W->GetTag()==TEXT("UCMTab"))Tabs.Add(W);
+                if(W->GetTag()==TEXT("LootChoice.action")||W->GetTag()==TEXT("LootChoice.name_mode"))
+                    TestTrue(TEXT("Basic dropdowns fit their contents instead of filling the pane"),W->GetCachedGeometry().GetLocalSize().X<=230);
+
                 if(W->GetTag()==TEXT("LootRuleList"))
                 {++Lists;TestTrue(TEXT("Rule list is attached with usable geometry"),W->GetCachedGeometry().GetLocalSize().X>100&&W->GetCachedGeometry().GetLocalSize().Y>150);}
                 if(W->GetTag()==TEXT("LootRuleDetail"))

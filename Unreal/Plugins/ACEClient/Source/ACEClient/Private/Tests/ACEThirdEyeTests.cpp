@@ -7,6 +7,7 @@
 #include "Misc/ScopeExit.h"
 #include "Interfaces/IPluginManager.h"
 #include "Mods/ACEPluginSubsystem.h"
+#include "Mods/ACEWaypoint.h"
 #include "Mods/ACEPluginVM.h"
 #include "Mods/ACEPluginStyle.h"
 #include "ACEClientSubsystem.h"
@@ -202,7 +203,12 @@ bool FACEThirdEyeTest::RunTest(const FString&)
         for(int I=0;I<4;++I){++GFrameCounter;Renderer.DrawWidget(ClickTarget,Panel,FVector2D(320,150),0);FlushRenderingCommands();}
         auto Select=FindTag(Panel,TEXT("ThirdEye.Select.1"));
         if(TestTrue(TEXT("Slim detection is a clickable text row"),Select.IsValid()))
-        {C->SelectObject(0);StaticCastSharedPtr<SButton>(Select)->SimulateClick();TestEqual(TEXT("Native text row selects the real object"),C->GetSelectedObject().Guid,1);}
+        {
+            H->SetEnabled(TEXT("waypoint"),true);C->SelectObject(0);StaticCastSharedPtr<SButton>(Select)->SimulateClick();
+            TestEqual(TEXT("Native text row selects the real object"),C->GetSelectedObject().Guid,1);
+            FVector2D Destination;uint32 Dungeon=0;
+            TestTrue(TEXT("Third Eye row also points the waypoint arrow at the object"),H->GetWaypoint(Destination,Dungeon)&&Destination.Equals(ACEWaypoint::Coordinates(Golem.Position),.002));
+        }
         auto Dismiss=FindTag(Panel,TEXT("ThirdEye.Dismiss.1"));
         if(TestTrue(TEXT("Slim row exposes a dismiss X"),Dismiss.IsValid()))StaticCastSharedPtr<SButton>(Dismiss)->SimulateClick();
         NativeStep();TestEqual(TEXT("Dismiss removes the detected line"),P->DetectedObjects.Num(),0);

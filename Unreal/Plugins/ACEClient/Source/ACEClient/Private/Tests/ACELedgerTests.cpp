@@ -403,6 +403,17 @@ bool FACELedgerTest::RunTest(const FString&)
         H->SetPluginBarHorizontal(true);CodexDock->Refresh();
         for(int32 Pass=0;Pass<3;++Pass){++GFrameCounter;Renderer.DrawWidget(Target,CodexDock,Size,0);FlushRenderingCommands();}
         TestTrue(TEXT("Horizontal Codex plugin bar retains themed chrome"),FindTagged(CodexDock,TEXT("PluginBarCodexChrome")).IsValid());
+        const auto Frame=CodexDock->Windows[TEXT("huntledger")].Widget.ToSharedRef();
+        const auto SettingsControl=FindTagged(Frame,TEXT("PluginFrameSettings"));
+        const auto PinControl=FindTagged(Frame,TEXT("PluginFramePin"));
+        const auto CloseControl=FindTagged(Frame,TEXT("PluginFrameClose"));
+        if(SettingsControl&&PinControl&&CloseControl)
+        {
+            TestTrue(TEXT("Title controls keep large readable targets in compact slots"),SettingsControl->GetCachedGeometry().GetLocalSize().X>=26&&SettingsControl->GetCachedGeometry().GetLocalSize().X<=30);
+            TestTrue(TEXT("Settings and pin controls pack together"),PinControl->GetCachedGeometry().GetAbsolutePosition().X-SettingsControl->GetCachedGeometry().GetAbsolutePosition().X<=32);
+            TestTrue(TEXT("Pin and close controls pack together"),CloseControl->GetCachedGeometry().GetAbsolutePosition().X-PinControl->GetCachedGeometry().GetAbsolutePosition().X<=32);
+        }
+
         PNG.Reset();FImageUtils::PNGCompressImageArray(Target->SizeX,Target->SizeY,[&]{TArray<FColor> Pixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);return Pixels;}(),PNG);
         FFileHelper::SaveArrayToFile(PNG,*(H->StorageRoot/TEXT("plugin-bar-codex-horizontal.png")));
         H->SetPluginBarMinimized(true);CodexDock->Refresh();
@@ -422,6 +433,15 @@ bool FACELedgerTest::RunTest(const FString&)
             FFileHelper::SaveArrayToFile(PNG,*(H->StorageRoot/FString::Printf(TEXT("waypoint-map-%d.png"),int32(MapSize.X))));
             MapTarget->ReleaseResource();
         }
+        for(const auto& Eye:H->Plugins)if(Eye->Id==TEXT("thirdeye"))Eye->Enabled=true;
+        if(!CodexDock->Windows.Contains(TEXT("thirdeye")))CodexDock->Toggle(TEXT("thirdeye"));
+        if(!TestTrue(TEXT("Third Eye resize fixture opens its window"),CodexDock->Windows.Contains(TEXT("thirdeye"))))return false;
+        auto& EyeWindow=CodexDock->Windows[TEXT("thirdeye")];
+        EyeWindow.Size=FVector2D(340,500);CodexDock->Layout(EyeWindow);
+        const double EyeHeight=CodexDock->DisplaySize(EyeWindow).Y;
+        TestTrue(TEXT("Third Eye preserves a size taller than its content"),EyeHeight>=500);
+        CodexDock->Resize(TEXT("thirdeye"),FVector2D(0,60),false);
+        TestEqual(TEXT("Third Eye can grow beyond its content by dragging"),CodexDock->DisplaySize(EyeWindow).Y,EyeHeight+60);
         auto CraftPanel=H->MakePanel(TEXT("autocraft"));
         for(int32 Pass=0;Pass<3;++Pass){++GFrameCounter;Renderer.DrawWidget(Target,CraftPanel,Size,0);FlushRenderingCommands();}
         for(const TCHAR* Action:{TEXT("AutoCraft.Make"),TEXT("AutoCraft.Stop")})

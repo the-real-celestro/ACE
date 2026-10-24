@@ -1,4 +1,5 @@
 #include "Mods/ACEPluginSubsystem.h"
+#include "Mods/ACEWaypoint.h"
 #include "Mods/ACEPluginStyle.h"
 #include "ACEClientSubsystem.h"
 #include "ACEHoverTooltipWidget.h"
@@ -49,7 +50,7 @@ namespace
                 Header->AddSlot().AutoWidth().Padding(1,0)[SNew(SACEPluginTab).Tag(FName(*FString::Printf(TEXT("ThirdEye.Tab.%d"),I)))
                     .Text(FText::FromString(I==0?TEXT("Found"):I==1?TEXT("Setup"):TEXT("Options"))).ContentPadding(FMargin(4,1))
                     .Selected_Lambda([this,I]{return Page==I;}).OnClicked_Lambda([this,I]{Page=I;Rebuild();return FReply::Handled();})];
-            ChildSlot[SNew(SBorder).BorderImage(&FACEPluginStyle::Current()->Background).Padding(4)
+            ChildSlot[SNew(SBorder).BorderImage(&FACEPluginStyle::Current()->Background).Padding(FMargin(4,4,4,16))
                 [SAssignNew(Root,SVerticalBox)+SVerticalBox::Slot().AutoHeight()[Header]
                 +SVerticalBox::Slot().AutoHeight().Padding(0,3,0,0)[SAssignNew(Body,SVerticalBox)]]];
             Rebuild();
@@ -59,10 +60,9 @@ namespace
             SCompoundWidget::Tick(G,Time,Delta);
             auto P=Plugin.Pin();if(!P)return;
             if((Page==0&&Revision!=P->DetectedRevision)||(Page!=0&&Config.Pin()!=P->SavedState))Rebuild();
-            // Content determines height, including lists taller than the viewport.
-            // No paging, list viewport, scrollbar, or saved blank vertical area.
+            // Content supplies a minimum; the desktop preserves larger user sizes.
             Root->SlatePrepass(G.Scale);
-            P->PanelSize=FVector2D(G.GetLocalSize().X,Root->GetDesiredSize().Y+8);
+            P->PanelSize=FVector2D(G.GetLocalSize().X,Root->GetDesiredSize().Y+20);
         }
     private:
         TWeakObjectPtr<UACEPluginSubsystem> Host;TWeakPtr<FACEClientPlugin> Plugin;
@@ -123,7 +123,15 @@ namespace
                                 if(H.IsValid())
                                 {
                                     auto* C=H->GetGameInstance()->GetSubsystem<UACEClientSubsystem>();FACEWorldObject O;
-                                    if(C->GetWorldObject(int32(Id),O)&&uint32(O.WeenieClassId)==Wcid)C->SelectObject(int32(Id));
+                                    if(C->GetWorldObject(int32(Id),O)&&uint32(O.WeenieClassId)==Wcid)
+                                    {
+                                        C->SelectObject(int32(Id));
+                                        if(O.bHasPosition&&H->IsWaypointEnabled())
+                                        {
+                                            const uint32 Dungeon=(uint32(O.Position.CellId)&65535)>=256?uint32(O.Position.CellId)>>16:0;
+                                            H->SetWaypoint(ACEWaypoint::Coordinates(O.Position),Dungeon);
+                                        }
+                                    }
                                 }
                                 return FReply::Handled();
                             })[Label])]
