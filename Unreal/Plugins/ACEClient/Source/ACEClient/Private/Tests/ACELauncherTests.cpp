@@ -36,6 +36,7 @@
 #include "RenderingThread.h"
 #include "UObject/StrongObjectPtr.h"
 #include "Input/DragAndDrop.h"
+#include "Widgets/Text/STextBlock.h"
 #include "HAL/IConsoleManager.h"
 #include "UObject/UObjectIterator.h"
 
@@ -215,6 +216,13 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
         return nullptr;
     };
     const auto RowGeometry=FGeometry::MakeRoot(FVector2D(600,40),FSlateLayoutTransform());
+    {
+        auto ClickRow=ACEMakeAccountOrderRow(W,FirstAccountId,TEXT("Account"),SNullWidget::NullWidget);
+        const FPointerEvent Mouse(0,FVector2D(100,20),FVector2D(100,20),{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState());
+        ClickRow->OnPreviewMouseButtonDown(RowGeometry,Mouse);ClickRow->OnMouseButtonUp(RowGeometry,Mouse);
+        TestEqual(TEXT("Click without a drag still selects the account"),W->Profile.SelectedAccountId,FirstAccountId);
+        W->RunAction(TEXT("selectaccount"),SecondAccountId);
+    }
     const FString EditedAlias=TEXT("Unsaved account label");
     W->AccountAliasBox->SetText(FText::FromString(EditedAlias));
     auto DragAccount=[&](const FString& Source,const FString& Target,bool After)
@@ -223,14 +231,39 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
         // The same wrapper the Play page's list rows use.
         const auto SourceRow=ACEMakeAccountOrderRow(W,Source,Source,SNullWidget::NullWidget);
         const auto TargetRow=ACEMakeAccountOrderRow(W,Target,Target,SNullWidget::NullWidget);
-        auto Grip=FindTag(SourceRow,FName(*(TEXT("AccountOrderGrip.")+Source)));
+        auto SourceTarget=FindTag(SourceRow,FName(*(TEXT("AccountOrderRow.")+Source)));
         auto Row=FindTag(TargetRow,FName(*(TEXT("AccountOrderRow.")+Target)));
-        if (!TestTrue(TEXT("Account rows expose a grip and full-width drop target"),Grip&&Row)) return;
-        const FVector2D Position(10,After?35:5);
+        if (!TestTrue(TEXT("Account rows expose whole-row drag and drop targets"),SourceTarget&&Row)) return;
+        TestFalse(TEXT("Account dragging no longer requires a separate grip"),FindTag(SourceRow,FName(*(TEXT("AccountOrderGrip.")+Source))).IsValid());
+        const FPointerEvent StarPress(0,FVector2D(16,20),FVector2D(16,20),{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState());
+        TestFalse(TEXT("Favorite star retains its own click instead of starting a drag"),SourceTarget->OnPreviewMouseButtonDown(RowGeometry,StarPress).IsEventHandled());
+        const FPointerEvent Press(0,FVector2D(80,20),FVector2D(80,20),{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState());
+        const auto PressReply=SourceTarget->OnPreviewMouseButtonDown(RowGeometry,Press);
+        TestTrue(TEXT("Pressing the account body arms threshold-based dragging"),PressReply.IsEventHandled()&&PressReply.GetDetectDragRequest()==SourceTarget);
+        const FVector2D Position(100,After?35:5);
         const FPointerEvent Mouse(0,Position,Position,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState());
-        const auto Drag=Grip->OnDragDetected(RowGeometry,Mouse).GetDragDropContent();
-        if (!TestTrue(TEXT("Account grip starts a drag"),Drag.IsValid())) return;
+        const auto Drag=SourceTarget->OnDragDetected(RowGeometry,Mouse).GetDragDropContent();
+        if (!TestTrue(TEXT("Dragging the account body starts a drag"),Drag.IsValid())) return;
         TestTrue(TEXT("Drag decorator works without a native popup"),Drag->IsWindowlessOperation()&&Drag->GetDefaultDecorator().IsValid());
+        const auto Preview=Drag->GetDefaultDecorator();
+        TestTrue(TEXT("Moving preview is a full account row"),Preview->GetTag()==FName(TEXT("AccountDragPreview"))&&FindTag(Preview.ToSharedRef(),TEXT("AccountDragTitle"))&&FindTag(Preview.ToSharedRef(),TEXT("AccountDragWhen")));
+        const auto Label=StaticCastSharedPtr<STextBlock>(FindTag(Preview.ToSharedRef(),TEXT("AccountDragTitle")));
+        TestEqual(TEXT("Moving preview preserves the account display name"),Label->GetText().ToString(),W->AccountDisplayItem(Source)->Title);
+        const FVector2D Before=Drag->GetDecoratorPosition(), Delta(37,19);
+        const FPointerEvent Moved(0,Position+Delta,Position,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState());
+        Drag->OnDragged(FDragDropEvent(Moved,Drag));
+        TestTrue(TEXT("Full row preview follows pointer movement without losing its grab offset"),Drag->GetDecoratorPosition().Equals(Before+Delta,.01));
+        Drag->OnDragged(FDragDropEvent(Mouse,Drag));
+        if(FApp::CanEverRender())
+        {
+            const FVector2D PreviewSize(600,40);FWidgetRenderer PreviewRenderer(false,true);
+            auto* PreviewTarget=FWidgetRenderer::CreateTargetFor(PreviewSize,TF_Bilinear,true);
+            PreviewRenderer.DrawWidget(PreviewTarget,Preview.ToSharedRef(),PreviewSize,0);FlushRenderingCommands();
+            TArray<FColor> Pixels;PreviewTarget->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);
+            TArray64<uint8> PNG;FImageUtils::PNGCompressImageArray(600,40,Pixels,PNG);
+            const FString Folder=FPaths::ProjectSavedDir()/TEXT("Automation/Launcher");IFileManager::Get().MakeDirectory(*Folder,true);
+            FFileHelper::SaveArrayToFile(PNG,*(Folder/TEXT("account-drag-preview.png")));PreviewTarget->ReleaseResource();
+        }
         TestFalse(TEXT("Unrelated payload cannot reorder accounts"),Row->OnDrop(RowGeometry,FDragDropEvent(Mouse,MakeShared<FDragDropOperation>())).IsEventHandled());
         TestTrue(TEXT("Hover accepts account drag and shows insertion marker"),Row->OnDragOver(RowGeometry,FDragDropEvent(Mouse,Drag)).IsEventHandled());
         Row->OnDragLeave(FDragDropEvent(Mouse,Drag));

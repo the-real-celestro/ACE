@@ -9,6 +9,8 @@
 #include "Styling/CoreStyle.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Layout/SBorder.h"
+#include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SScaleBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SLeafWidget.h"
 #include "Widgets/Text/STextBlock.h"
@@ -26,57 +28,49 @@ namespace
         DRAG_DROP_OPERATOR_TYPE(FAccountOrderDrag,FDragDropOperation)
         TWeakObjectPtr<UACELoginWidget> Owner;
         FString Id,Title;
-        FVector2D Position;
+        FVector2D Position,GrabOffset;
+        TSharedPtr<SWidget> Preview;
 
         static TSharedRef<FAccountOrderDrag> New(UACELoginWidget* Owner,const FString& Id,
-            const FString& Title,const FVector2D& Position)
+            const FString& Title,const FVector2D& Position,const FGeometry& Geometry,const FVector2D& PressPosition)
         {
             auto Op=MakeShared<FAccountOrderDrag>();
             Op->Owner=Owner; Op->Id=Id; Op->Title=Title; Op->Position=Position;
+            Op->GrabOffset=PressPosition-Geometry.GetAbsolutePosition();
+            // Snapshot display-only fields, never the login credentials or form contents.
+            const auto* Item=Owner?Owner->AccountDisplayItem(Id):nullptr;
+            const FString Name=Item?Item->Title:Title, User=Item?Item->Username:FString(), When=Item?Item->When:FString();
+            const bool Favorite=Item&&Item->bFavorite;
+            static const FSlateRoundedBoxBrush Face(FLinearColor(FColor(0x18,0x22,0x30)),0.f,FLinearColor(FColor(0xa5,0x87,0x4e)),1.f);
+            const auto Label=[](const FString& Text,int32 Size,FLinearColor Color,const TCHAR* Tag)
+            { return SNew(STextBlock).Tag(FName(Tag)).Text(FText::FromString(Text)).Font(FCoreStyle::GetDefaultFontStyle("Regular",Size))
+                .ColorAndOpacity(Color).ShadowOffset(FVector2D(1,1)).ShadowColorAndOpacity(FLinearColor(0,0,0,.7f)).OverflowPolicy(ETextOverflowPolicy::Ellipsis); };
+            auto UserLabel=Label(User,9,FLinearColor(FColor(0x8f,0x81,0x66)),TEXT("AccountDragUsername"));
+            UserLabel->SetVisibility(User.IsEmpty()?EVisibility::Collapsed:EVisibility::Visible);
+            auto Names=SNew(SVerticalBox)
+                +SVerticalBox::Slot().AutoHeight()[Label(Name,11,FLinearColor(FColor(0xff,0xf2,0xcc)),TEXT("AccountDragTitle"))]
+                +SVerticalBox::Slot().AutoHeight()[UserLabel];
+            auto Card=SNew(SBox).WidthOverride(Geometry.GetLocalSize().X).HeightOverride(UACELobbyAccountRow::RowHeight)
+                [SNew(SBorder).BorderImage(&Face).Padding(FMargin(10,0,12,0))
+                    [SNew(SHorizontalBox)
+                    +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,10,0)
+                        [SNew(SBox).WidthOverride(14)[SNew(SACELobbyGlyph).Kind(SACELobbyGlyph::EKind::Star).Size(12).Filled(Favorite).Color(FLinearColor(FColor(0xd7,0xb0,0x6a)))]]
+                    +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[Names]
+                    +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(10,0,0,0)
+                        [Label(When,9,FLinearColor(FColor(0xd8,0xc0,0x8a)),TEXT("AccountDragWhen"))]]];
+            // Windowless drag previews paint in window pixels, including DPI and lobby scaling.
+            Op->Preview=SNew(SBox).Tag(TEXT("AccountDragPreview")).WidthOverride(Geometry.GetAbsoluteSize().X).HeightOverride(Geometry.GetAbsoluteSize().Y)
+                [SNew(SScaleBox).Stretch(EStretch::ScaleToFit)[Card]];
             Op->bCreateNewWindow=false; Op->MouseCursor=EMouseCursor::GrabHandClosed;
             Op->Construct(); return Op;
         }
         void OnDragged(const FDragDropEvent& Event) override
-        {
-            Position=Event.GetScreenSpacePosition(); FDragDropOperation::OnDragged(Event);
-        }
-        TSharedPtr<SWidget> GetDefaultDecorator() const override
-        {
-            return SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
-                .BorderBackgroundColor(FLinearColor(.045f,.036f,.025f)).Padding(8)
-                [SNew(STextBlock).Text(FText::FromString(Title)).Font(FCoreStyle::GetDefaultFontStyle("Regular",18))
-                    .ColorAndOpacity(FLinearColor(.88f,.85f,.77f))];
-        }
+        { Position=Event.GetScreenSpacePosition(); FDragDropOperation::OnDragged(Event); }
+        FVector2D GetDecoratorPosition() const override { return Position-GrabOffset; }
+        TSharedPtr<SWidget> GetDefaultDecorator() const override { return Preview; }
     };
 
-    // Six-dot grip works before game data loads, without a font glyph dependency.
-    // Compact mode is the subtle two-column grip beside each Play-page account row.
-    class SAccountGripIcon : public SLeafWidget
-    {
-    public:
-        SLATE_BEGIN_ARGS(SAccountGripIcon):_Compact(false),_Tint(FLinearColor::White) {} SLATE_ARGUMENT(bool,Compact) SLATE_ATTRIBUTE(FLinearColor,Tint) SLATE_END_ARGS()
-        void Construct(const FArguments& Args) { Compact=Args._Compact; Tint=Args._Tint; SetVisibility(EVisibility::HitTestInvisible); }
-        FVector2D ComputeDesiredSize(float) const override { return Compact?FVector2D(10,15):FVector2D(18,26); }
-        int32 OnPaint(const FPaintArgs&,const FGeometry& G,const FSlateRect&,FSlateWindowElementList& Out,
-            int32 Layer,const FWidgetStyle& Style,bool Enabled) const override
-        {
-            const auto Effect=ShouldBeEnabled(Enabled)?ESlateDrawEffect::None:ESlateDrawEffect::DisabledEffect;
-            const FVector2D Box=ComputeDesiredSize(1);
-            const float Dot=Compact?2.f:3.f, Pitch=Compact?5.f:7.f, Inset=Compact?2.f:4.f;
-            if (Tint.Get().A<=.01f) return Layer;
-            const auto Offset=(G.GetLocalSize()-Box)*.5;
-            for (int32 Y=0;Y<3;++Y) for (int32 X=0;X<2;++X)
-                FSlateDrawElement::MakeBox(Out,Layer,G.ToPaintGeometry(FVector2D(Dot,Dot),
-                    FSlateLayoutTransform(Offset+FVector2D(Inset+X*Pitch,Inset+Y*Pitch))),FCoreStyle::Get().GetBrush("WhiteBrush"),
-                    Effect,FLinearColor(FColor(0xd7,0xb0,0x6a))*Tint.Get()*Style.GetColorAndOpacityTint());
-            return Layer;
-        }
-    private:
-        bool Compact=false;
-        TAttribute<FLinearColor> Tint;
-    };
-
-    // Grip + drop target around one account row. Identity is read through
+    // Full-row drag source and drop target. Identity is read through
     // attributes because the Play page's virtualised rows are recycled.
     class SAccountOrderRow : public SCompoundWidget
     {
@@ -90,26 +84,46 @@ namespace
         void Construct(const FArguments& Args)
         {
             Owner=Args._Owner; Id=Args._Id; Title=Args._Title;
-            GripStyle=FButtonStyle().SetNormal(FSlateNoResource()).SetHovered(FSlateNoResource()).SetPressed(FSlateNoResource())
-                .SetNormalPadding(FMargin(0)).SetPressedPadding(FMargin(0));
             SetTag(FName(*(TEXT("AccountOrderRow.")+Id.Get())));
-            ChildSlot
-            [SNew(SHorizontalBox)
-                +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,2,0)
-                [SAssignNew(Grip,SButton).Tag(FName(*(TEXT("AccountOrderGrip.")+Id.Get())))
-                    .ButtonStyle(&GripStyle).ContentPadding(FMargin(3,5)).IsFocusable(false)
-                    .AllowDragDrop(true).Cursor(EMouseCursor::GrabHand)
-                    .Visibility_Lambda([this]{ auto* Host=Owner.Get(); return Host&&Host->CanReorderAccounts()?EVisibility::Visible:EVisibility::Hidden; })
-                    .ToolTipText(FText::FromString(TEXT("Drag to reorder. The list switches to Custom order and is saved automatically.")))
-                    .OnSlateButtonDragDetected_Lambda([this](const FGeometry&,const FPointerEvent& Event)
-                    {
-                        auto* Host=Owner.Get();
-                        if (!Host || !Host->CanReorderAccounts() || Id.Get().IsEmpty()) return FReply::Unhandled();
-                        return FReply::Handled().BeginDragDrop(FAccountOrderDrag::New(Host,Id.Get(),Title.Get(),Event.GetScreenSpacePosition()));
-                    })
-                    [SNew(SAccountGripIcon).Compact(true)
-                        .Tint_Lambda([this]{ const bool bGrip=Grip.IsValid()&&Grip->IsHovered(); return FLinearColor(1,1,1,bGrip?1.f:IsHovered()?.8f:0.f); })]]
-                +SHorizontalBox::Slot().FillWidth(1)[Args._Content.Widget]];
+            SetCursor(TAttribute<TOptional<EMouseCursor::Type>>::CreateLambda([this](){auto* Host=Owner.Get();return TOptional<EMouseCursor::Type>(Host&&Host->CanReorderAccounts()?EMouseCursor::GrabHand:EMouseCursor::Default);}));
+            Content=Args._Content.Widget;
+            ChildSlot[Content.ToSharedRef()];
+        }
+        FReply OnPreviewMouseButtonDown(const FGeometry& G,const FPointerEvent& Event) override
+        {
+            auto* Host=Owner.Get();
+            const float X=G.AbsoluteToLocal(Event.GetScreenSpacePosition()).X;
+            // The favorite star keeps its own click. Every other part of the row can drag.
+            if(Event.GetEffectingButton()!=EKeys::LeftMouseButton || (X>=8&&X<=28)
+                || !Host || !Host->CanReorderAccounts() || Id.Get().IsEmpty())return FReply::Unhandled();
+            Pressed=true;PressedId=Id.Get();PressPosition=Event.GetScreenSpacePosition();
+            return FReply::Handled().CaptureMouse(SharedThis(this)).DetectDrag(SharedThis(this),EKeys::LeftMouseButton);
+        }
+        FReply OnMouseButtonUp(const FGeometry& G,const FPointerEvent& Event) override
+        {
+            if(!Pressed||Event.GetEffectingButton()!=EKeys::LeftMouseButton)return FReply::Unhandled();
+            Pressed=false;
+            if(auto* Host=Owner.Get();Host&&PressedId==Id.Get()&&G.IsUnderLocation(Event.GetScreenSpacePosition()))
+                Host->RunAction(TEXT("selectaccount"),PressedId);
+            return FReply::Handled().ReleaseMouseCapture();
+        }
+        void OnMouseCaptureLost(const FCaptureLostEvent& Event) override
+        { Pressed=false;SCompoundWidget::OnMouseCaptureLost(Event); }
+        FReply OnDragDetected(const FGeometry& G,const FPointerEvent& Event) override
+        {
+            auto* Host=Owner.Get();
+            if(!Pressed||!Host||!Host->CanReorderAccounts()||PressedId!=Id.Get())return FReply::Unhandled();
+            Pressed=false;
+            return FReply::Handled().BeginDragDrop(FAccountOrderDrag::New(Host,PressedId,Title.Get(),Event.GetScreenSpacePosition(),G,PressPosition));
+        }
+        void Tick(const FGeometry& G,double Time,float Delta) override
+        {
+            SCompoundWidget::Tick(G,Time,Delta);
+            const auto Drag=FSlateApplication::IsInitialized()?FSlateApplication::Get().GetDragDroppingContent():nullptr;
+            const auto AccountDrag=Drag&&Drag->IsOfType<FAccountOrderDrag>()?StaticCastSharedPtr<FAccountOrderDrag>(Drag):nullptr;
+            const bool IsSource=AccountDrag&&AccountDrag->Owner.Get()==Owner.Get()&&AccountDrag->Id==Id.Get();
+            if(IsSource!=WasSource){Content->SetRenderOpacity(IsSource?.18f:1.f);WasSource=IsSource;}
+            SetTag(FName(*(TEXT("AccountOrderRow.")+Id.Get())));
         }
         FReply OnDragOver(const FGeometry& G,const FDragDropEvent& E) override
         {
@@ -140,7 +154,7 @@ namespace
                 // Insertion line: a 2px gold hairline with small end dots, centred in the gap between rows.
                 const FLinearColor Mod=Style.GetColorAndOpacityTint();
                 const FLinearColor Edge(FColor(0xf0,0xad,0x42)), Mid(FColor(0xff,0xd7,0x7a));
-                const float X0=14.f, W=FMath::Max(10.f,float(G.GetLocalSize().X)-X0);
+                const float X0=0.f, W=FMath::Max(10.f,float(G.GetLocalSize().X)-X0);
                 const float Y=bBelow?G.GetLocalSize().Y+2.f:-2.f;
                 auto Band=[&](float H, float Alpha, int32 L)
                 {
@@ -163,8 +177,10 @@ namespace
     private:
         TAttribute<UACELoginWidget*> Owner;
         TAttribute<FString> Id,Title;
-        FButtonStyle GripStyle;
-        TSharedPtr<SButton> Grip;
+        TSharedPtr<SWidget> Content;
+        FString PressedId;
+        FVector2D PressPosition;
+        bool Pressed=false,WasSource=false;
         bool Hovered=false,After=false;
         bool CanAccept(const FDragDropEvent& Event) const
         {
@@ -177,6 +193,12 @@ namespace
             return G.AbsoluteToLocal(E.GetScreenSpacePosition()).Y>=G.GetLocalSize().Y*.5;
         }
     };
+}
+
+const UACELobbyAccountItem* UACELoginWidget::AccountDisplayItem(const FString& Id) const
+{
+    if(const auto* Found=AccountItems.Find(Id))return Found->Get();
+    return nullptr;
 }
 
 TSharedRef<SWidget> ACEMakeAccountOrderRow(TAttribute<UACELoginWidget*> Owner,TAttribute<FString> Id,TAttribute<FString> Title,TSharedRef<SWidget> Content)

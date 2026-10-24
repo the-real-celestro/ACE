@@ -28,7 +28,7 @@ class ACECLIENT_API UACELobbyAccountItem : public UObject
 public:
 	FString Id, Title;
 	/** Second line (login name when an alias is shown) and the short last-launch time; empty when unknown. */
-	FString Username, When;
+	FString Username, When, WhenTooltip;
 	bool bFavorite = false;
 	bool bSelected = false;
 	/** Search match highlighted in the name, in characters of Title. */

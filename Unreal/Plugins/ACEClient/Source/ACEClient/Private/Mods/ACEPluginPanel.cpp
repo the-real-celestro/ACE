@@ -194,7 +194,7 @@ namespace ACEPluginPanelPrivate
                 +SVerticalBox::Slot().FillHeight(1)[SNew(SScrollBox).ScrollBarStyle(&ScrollStyle())
                     +SScrollBox::Slot()[SAssignNew(PluginRows,SVerticalBox)]];
             List->AddSlot().AutoHeight().Padding(0,10,0,0)[SNew(SBox).HAlign(HAlign_Left)
-                [Plate(TEXT("Appearance & bar"),[this]{ManagerSelected=TEXT("__appearance");Host->PluginManagerSelection=ManagerSelected;RebuildDetail();},TEXT("PluginGlobalAppearance"))]];
+                [Plate(TEXT("Theme, appearance & bar"),[this]{ManagerSelected=TEXT("__appearance");Host->PluginManagerSelection=ManagerSelected;RebuildDetail();},TEXT("PluginGlobalAppearance"))]];
             for(auto P:Host->Plugins)
             {
                 const FString PluginId=P->Id;
@@ -210,7 +210,8 @@ namespace ACEPluginPanelPrivate
                     +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,8,0)[SNew(SBox).WidthOverride(28).HeightOverride(28)[SNew(SACEPluginBadge).Plugin(P)]]
                     +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(0,0,6,0)
                     [SNew(SVerticalBox)
-                        +SVerticalBox::Slot().AutoHeight()[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",13))
+                        +SVerticalBox::Slot().AutoHeight()[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",13)).OverflowPolicy(ETextOverflowPolicy::Ellipsis)
+                            .ToolTip(FACEPluginStyle::Tooltip(TAttribute<FText>::CreateLambda([P]{return FText::FromString(P->DisplayTitle());})))
                             .ColorAndOpacity_Lambda([this,PluginId]{return ManagerSelected==PluginId?FSlateColor(FACEPluginStyle::Gold()):FSlateColor(FACEPluginStyle::Cream());})
                             .Text_Lambda([P]{return FText::FromString(P->DisplayTitle());})]
                         +SVerticalBox::Slot().AutoHeight()[CodexText(TAttribute<FText>::CreateLambda([P]
@@ -257,7 +258,7 @@ namespace ACEPluginPanelPrivate
                     [SNew(SACEPluginText).Text(FText::FromString(TEXT("Refresh"))).Font(FCoreStyle::GetDefaultFontStyle("Regular",13)).ColorAndOpacity(ACELobbyArt::CaptionText)]];
             Body->AddSlot().FillHeight(1)
             [SNew(SHorizontalBox)
-                +SHorizontalBox::Slot().AutoWidth()[SNew(SBox).WidthOverride(340)[List]]
+                +SHorizontalBox::Slot().AutoWidth()[SNew(SBox).WidthOverride_Lambda([this]{return FMath::Clamp(GetCachedGeometry().GetLocalSize().X*.32f,220.f,300.f);})[List]]
                 +SHorizontalBox::Slot().AutoWidth().Padding(12,0)[SNew(SBox).WidthOverride(1)[SNew(SImage).Image(FCoreStyle::Get().GetBrush("WhiteBrush")).ColorAndOpacity(FACEPluginStyle::Gold(.22f))]]
                 +SHorizontalBox::Slot().FillWidth(1)[SAssignNew(Detail,SBox)]];
             Body->AddSlot().AutoHeight().Padding(0,8,0,2)[SNew(SBox).HeightOverride(1)[SNew(SImage).Image(FCoreStyle::Get().GetBrush("WhiteBrush")).ColorAndOpacity(FACEPluginStyle::Gold(.22f))]];
@@ -323,7 +324,7 @@ namespace ACEPluginPanelPrivate
             auto Look=SNew(SVerticalBox).Tag(TEXT("PluginGlobalAppearanceContent"));
             Look->AddSlot().AutoHeight().Padding(0,0,0,10)[CodexCaption(TEXT("Appearance · all plugins"))];
             Look->AddSlot().AutoHeight()[SNew(SHorizontalBox)
-                +SHorizontalBox::Slot().AutoWidth().Padding(0,0,10,0)[ThemeCard(TEXT("codex"),TEXT("Codex"),TEXT("Lobby art, slim gold"))]
+                +SHorizontalBox::Slot().AutoWidth().Padding(0,0,10,0)[ThemeCard(TEXT("codex"),TEXT("Codex"),TEXT("Current custom AC appearance"))]
                 +SHorizontalBox::Slot().AutoWidth()[ThemeCard(TEXT("original"),TEXT("Original"),TEXT("Classic red and brown"))]];
             Look->AddSlot().AutoHeight().Padding(0,10,0,0)[SwitchRow(TEXT("Match world color"),TAttribute<FText>::CreateLambda([]
                 {
@@ -399,6 +400,12 @@ namespace ACEPluginPanelPrivate
             if (!PluginOnly && Id.IsEmpty())
             {
                 auto Header=SNew(SHorizontalBox);
+                Header->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,12,0)
+                    [SNew(SACEPluginButton).Tag(TEXT("PluginThemeRestore")).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding))
+                        .ButtonStyle(&PluginButtonStyle()).IsFocusable(false)
+                        .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Restore the Codex appearance for all plugin windows."))))
+                        .OnClicked_Lambda([this]{Host->PluginManagerSelection=TEXT("__appearance");Host->SetPluginTheme(TEXT("codex"));return FReply::Handled();})
+                        [Label(TEXT("Restore Codex theme"),16)]];
                 Header->AddSlot().FillWidth(1).HAlign(HAlign_Right)[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(&PluginButtonStyle()).IsFocusable(false)
                     .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Reload installed plugins. Running plugins will stop."))))
                     .OnClicked_Lambda([this](){Host->Discover();ManagerNotice=Host->Notice;Rebuild();return FReply::Handled();})[Label(TEXT("Refresh"),16)]];
@@ -477,7 +484,7 @@ namespace ACEPluginPanelPrivate
             if(P->Id==TEXT("ucmmicro")){Add(Host->MakeUCMMicroPanel());return;}
             if(P->Id==TEXT("actiondeck")){Add(Host->GetGameInstance()->GetSubsystem<UACEActionDeckSubsystem>()->MakePanel());return;}
             if(P->Id==TEXT("ucm")){Add(SNew(SBox).HeightOverride(650)[Host->MakeUCMPanel()]);return;}
-            if(P->Id==TEXT("itemtools")){Add(SNew(SBox).HeightOverride(650)[Host->MakeItemToolsPanel()]);return;}
+            if(P->Id==TEXT("itemtools")){Add(SNew(SBox).HeightOverride(400)[Host->MakeItemToolsPanel()]);return;}
             if(P->Id==TEXT("autocraft")){Add(SNew(SBox).HeightOverride(650)[Host->MakeAutoCraftPanel()]);return;}
             if(!PluginOnly)Add(SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",26)).Text_Lambda([P]{return FText::FromString(P->DisplayTitle());}));
             Add(SNew(SACEPluginText).Visibility_Lambda([P]{return P->Status.IsEmpty()||!P->ShowStatus()?EVisibility::Collapsed:EVisibility::Visible;}).Font(FACEPluginStyle::NativeFont("Regular",18)).Text_Lambda([P](){return FText::FromString(P->Status);}).AutoWrapText(true));

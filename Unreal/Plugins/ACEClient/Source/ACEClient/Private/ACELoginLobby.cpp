@@ -291,16 +291,27 @@ namespace
 	{
 		return FString::Printf(TEXT("%d:%02d %s"),T.GetHour12(),T.GetMinute(),T.IsMorning()?TEXT("AM"):TEXT("PM"));
 	}
-	/** Short "when" for account rows, only from a real launch time: Today, Yesterday, 3d, 2w, Sep 30. */
-	FString ShortWhen(int64 LastUsed)
+	/** Elapsed launch time: minute precision for a day, hour precision for a week. */
+	FString ShortWhen(int64 LastUsed, int64 Now = FDateTime::UtcNow().ToUnixTimestamp())
 	{
 		if (LastUsed<=0) return FString();
+		const int64 Minutes=FMath::Max<int64>(0,Now-LastUsed)/60;
+		if (Minutes==0) return TEXT("Just now");
+		if (Minutes<60) return FString::Printf(TEXT("%lld %s"),Minutes,Minutes==1?TEXT("min"):TEXT("mins"));
+		const int64 Hours=Minutes/60, Remainder=Minutes%60;
+		if (Hours<24)
+		{
+			const FString Whole=FString::Printf(TEXT("%lld %s"),Hours,Hours==1?TEXT("hr"):TEXT("hrs"));
+			return Remainder?Whole+FString::Printf(TEXT(" %lld %s"),Remainder,Remainder==1?TEXT("min"):TEXT("mins")):Whole;
+		}
+		const int64 Days=Hours/24, ExtraHours=Hours%24;
+		if (Days<7)
+		{
+			const FString Whole=FString::Printf(TEXT("%lld %s"),Days,Days==1?TEXT("day"):TEXT("days"));
+			return ExtraHours?Whole+FString::Printf(TEXT(" %lld %s"),ExtraHours,ExtraHours==1?TEXT("hr"):TEXT("hrs")):Whole;
+		}
+		if (Days<35) return FString::Printf(TEXT("%lld %s"),Days/7,Days/7==1?TEXT("wk"):TEXT("wks"));
 		const FDateTime Local=FDateTime::FromUnixTimestamp(LastUsed)+(FDateTime::Now()-FDateTime::UtcNow());
-		const int32 Days=(FDateTime::Now().GetDate()-Local.GetDate()).GetDays();
-		if (Days<=0) return TEXT("Today");
-		if (Days==1) return TEXT("Yesterday");
-		if (Days<7) return FString::Printf(TEXT("%dd"),Days);
-		if (Days<35) return FString::Printf(TEXT("%dw"),Days/7);
 		static const TCHAR* Months[]={TEXT("Jan"),TEXT("Feb"),TEXT("Mar"),TEXT("Apr"),TEXT("May"),TEXT("Jun"),TEXT("Jul"),TEXT("Aug"),TEXT("Sep"),TEXT("Oct"),TEXT("Nov"),TEXT("Dec")};
 		if (Local.GetYear()==FDateTime::Now().GetYear()) return FString::Printf(TEXT("%s %d"),Months[Local.GetMonth()-1],Local.GetDay());
 		return FString::Printf(TEXT("%s %d"),Months[Local.GetMonth()-1],Local.GetYear());
@@ -739,15 +750,21 @@ void UACELoginWidget::EnsureDefaultLayout()
 	}
 	At(WorldPlaque,52,697,318,68);
 
-	// Quit and version at the foot of the column (FooterSize keeps the responsive test's name).
-	FooterSize=WidgetTree->ConstructWidget<USizeBox>(); FooterSize->SetWidthOverride(298);
+	// Quit stays by the navigation; the version becomes a small signature at lower right.
+	FooterSize=WidgetTree->ConstructWidget<USizeBox>(); FooterSize->SetWidthOverride(80);
+	FooterSize->SetContent(ActionButton(TEXT("Quit"),TEXT("quit")));
+	At(FooterSize,62,904,80,44);
 	{
-		auto* Foot=HBox(); FooterSize->SetContent(Foot);
-		AddH(Foot,ActionButton(TEXT("Quit"),TEXT("quit")));
-		auto* Version=Text(FString::Printf(TEXT("Version %s"),ACEClientBuild::Version),BodyFont(12.f),Hex(0x8d826b));
-		AddH(Foot,Version,FMargin(12,0,0,0),true)->SetHorizontalAlignment(HAlign_Right);
+		auto* Signature=WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(),TEXT("LobbyVersionSignature"));
+		Signature->SetWidthOverride(300);
+		auto* Lines=VBox(); Signature->SetContent(Lines);
+		auto* VersionLabel=Text(TEXT("VERSION"),CapsFont(9.f,2.8f),Hex(0x9f8c65)); VersionLabel->SetJustification(ETextJustify::Right);
+		AddLine(Lines,VersionLabel,4);
+		auto* Version=Retail(ACEClientBuild::Version,TEXT("fancyfont24"),1.f,Hex(0xd3bc82));
+		Version->SetJustification(ETextJustify::Right); Version->SetShadowOffset(FVector2D(1,2));
+		AddLine(Lines,Version,0);
+		At(Signature,1564,974)->SetAlignment(FVector2D(1,1));
 	}
-	At(FooterSize,62,904,298,44);
 
 	// ---- Accounts window: search, favourites, sort, the list, footer hint ----
 	{
@@ -795,7 +812,7 @@ void UACELoginWidget::EnsureDefaultLayout()
 			if (Segments->GetChildrenCount()) AddH(Segments,HostOf(SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(Hex(0x4a3a1c)),1,0),FMargin(0),false,VAlign_Fill);
 			AddH(Segments,B,FMargin(0),false,VAlign_Fill);
 		}
-		SortButtons[2]->SetToolTipText(FText::FromString(TEXT("Your own order. Drag an account by its grip to change it.")));
+		SortButtons[2]->SetToolTipText(FText::FromString(TEXT("Your own order. Drag an account row to change it.")));
 		AddLine(Body,Section(TEXT("All accounts"),nullptr,SegFrame),9);
 		auto* ListArea=WidgetTree->ConstructWidget<UOverlay>();
 		auto* ListAreaSlot=Body->AddChildToVerticalBox(ListArea); ListAreaSlot->SetSize(Fill);
@@ -814,9 +831,7 @@ void UACELoginWidget::EnsureDefaultLayout()
 		auto* Foot=HBox(); Body->AddChildToVerticalBox(Foot)->SetPadding(FMargin(0,10,0,0));
 		auto* Hint=HBox(); AddH(Foot,Hint,FMargin(0),true);
 		const FLinearColor HintColor=Hex(0x8f8366);
-		AddH(Hint,Text(TEXT("Drag "),BodyFont(12.5f),HintColor));
-		AddH(Hint,Glyph(SACELobbyGlyph::EKind::Grip,11,Hex(0xb0905a)));
-		AddH(Hint,Text(TEXT(" to reorder  \u00B7  "),BodyFont(12.5f),HintColor));
+		AddH(Hint,Text(TEXT("Drag any row to reorder  \u00B7  "),BodyFont(12.5f),HintColor));
 		AddH(Hint,Glyph(SACELobbyGlyph::EKind::Star,10,Hex(0xb0905a),true));
 		AddH(Hint,Text(TEXT(" to pin"),BodyFont(12.5f),HintColor));
 		auto* Add=ActionButton(TEXT("+ Add"),TEXT("newaccount")); Add->LobbyStyle=LobbySmall; ButtonStyle(Add,false);
@@ -895,14 +910,12 @@ void UACELoginWidget::EnsureDefaultLayout()
 		auto* ManageSize=WidgetTree->ConstructWidget<USizeBox>(); ManageSize->SetWidthOverride(666); ManageSize->SetContent(Manage);
 		auto* ManageSlot=Home->AddChildToCanvas(ManageSize); ManageSlot->SetAutoSize(true); ManageSlot->SetPosition(FVector2D(HomeX,0));
 
-		// Launch: halo in the page tint, retail ring (tinted glow on hover), caption beneath.
+		// One centered showcase: name, world and retail Launch ring move as a group.
 		auto* Halo=Decor(SACELobbyDecor::EKind::Halo,TAttribute<FLinearColor>::CreateLambda([TintOf,WeakThis]()
 		{
 			FLinearColor C=TintOf().Gem; C.A=WeakThis.IsValid()&&WeakThis->LoginButton&&WeakThis->LoginButton->GetIsEnabled()?.5f:.2f; return C;
 		}),0,336.f,336.f);
-		auto* HaloSlot=Home->AddChildToCanvas(Halo); HaloSlot->SetPosition(FVector2D(HomeX+165,476)); HaloSlot->SetSize(FVector2D(336,336));
 		LaunchSize=WidgetTree->ConstructWidget<USizeBox>(); LaunchSize->SetWidthOverride(290); LaunchSize->SetHeightOverride(290);
-		auto* LaunchSlot=Home->AddChildToCanvas(LaunchSize); LaunchSlot->SetPosition(FVector2D(HomeX+188,499)); LaunchSlot->SetSize(FVector2D(290,290));
 		LoginButton=ActionButton(TEXT("Launch"),TEXT("launch")); LaunchSize->SetContent(LoginButton);
 		LoginButton->SetToolTipText(FText::FromString(TEXT("Launch the selected account (Enter)")));
 		if (auto* CaptionSize=Cast<USizeBox>(LoginButton->GetContent())) if (auto* Caption=Cast<UACERetailTextBlock>(CaptionSize->GetContent()))
@@ -912,8 +925,23 @@ void UACELoginWidget::EnsureDefaultLayout()
 			Caption->SetRetailElement(UiResources(this),nullptr,FVector2D(1.5f),0,false);
 			Caption->SetShadowOffset(FVector2D(1,2)); Caption->SetShadowColorAndOpacity(FLinearColor(0,0,0,.95f));
 		}
-		LaunchCaption=Retail(TEXT(""),TEXT("sansfont14"),1.f,Hex(0xcdb98c));
-		auto* CaptionSlot=Home->AddChildToCanvas(LaunchCaption); CaptionSlot->SetAutoSize(true); CaptionSlot->SetPosition(FVector2D(HomeX+333,805)); CaptionSlot->SetAlignment(FVector2D(.5f,0));
+		auto* Showcase=WidgetTree->ConstructWidget<USizeBox>(); Showcase->SetWidthOverride(600); Showcase->Rename(TEXT("LaunchShowcaseGroup"),WidgetTree);
+		auto* Lines=VBox(); Showcase->SetContent(Lines);
+		LaunchCaption=Retail(TEXT(""),TEXT("fancyfont48"),1.125f,Hex(0xf5e1ac));
+		LaunchCaption->SetJustification(ETextJustify::Center); LaunchCaption->SetAutoWrapText(true); LaunchCaption->SetWrapTextAt(600);
+		LaunchCaption->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis); LaunchCaption->SetShadowOffset(FVector2D(1,2));
+		auto* NameBounds=WidgetTree->ConstructWidget<USizeBox>(); NameBounds->SetMaxDesiredHeight(94); NameBounds->SetClipping(EWidgetClipping::ClipToBounds); NameBounds->SetContent(LaunchCaption);
+		AddLine(Lines,NameBounds,8);
+		auto* World=Cast<UACERetailTextBlock>(Retail(TEXT(""),TEXT("fancyfont38"),1.f,Hex(0xdfcda4)));
+		World->Rename(TEXT("LaunchWorldCaption"),WidgetTree); World->SetJustification(ETextJustify::Center); World->SetAutoWrapText(true); World->SetWrapTextAt(580);
+		AddLine(Lines,World,12);
+		auto* Flourish=Decor(SACELobbyDecor::EKind::CenteredRule,Hex(0xa58a4e),0,180.f,1.f);
+		auto* FlourishSlot=Lines->AddChildToVerticalBox(Flourish); FlourishSlot->SetHorizontalAlignment(HAlign_Center);
+		auto* Ring=WidgetTree->ConstructWidget<UOverlay>();
+		auto* HaloLayer=Ring->AddChildToOverlay(Halo); HaloLayer->SetHorizontalAlignment(HAlign_Center); HaloLayer->SetVerticalAlignment(VAlign_Center);
+		auto* ButtonLayer=Ring->AddChildToOverlay(LaunchSize); ButtonLayer->SetHorizontalAlignment(HAlign_Center); ButtonLayer->SetVerticalAlignment(VAlign_Center);
+		auto* RingSlot=Lines->AddChildToVerticalBox(Ring); RingSlot->SetHorizontalAlignment(HAlign_Center); RingSlot->SetPadding(FMargin(0,24,0,0));
+		auto* ShowcaseSlot=Home->AddChildToCanvas(Showcase); ShowcaseSlot->SetAutoSize(true); ShowcaseSlot->SetPosition(FVector2D(790,714)); ShowcaseSlot->SetAlignment(FVector2D(.5f,.5f));
 	}
 
 	// Server editor: explicit save/cancel avoids sending credentials to an edited endpoint by accident.
@@ -1082,19 +1110,21 @@ void UACELoginWidget::EnsureDefaultLayout()
 		auto* StatusWidth=WidgetTree->ConstructWidget<USizeBox>(); StatusWidth->SetMaxDesiredWidth(666); StatusWidth->SetContent(StatusLayers);
 		StatusAnchor=StatusWidth; At(StatusWidth,1223,988)->SetAlignment(FVector2D(.5f,1.f));
 	}
-	// Inline destructive-action confirmation is also fully usable with VR pointers.
+	// Destructive-action confirmation is centered and blocks the underlying form.
 	{
+		auto* Scrim=ActionButton(TEXT(""),TEXT("cancelremove")); Scrim->LobbyStyle=LobbyScrim; ButtonStyle(Scrim,false); Scrim->SetContent(nullptr);
+		Scrim->Rename(TEXT("ConfirmationScrim"),WidgetTree); At(Scrim,-4000,-4000,9600,9000); Scrim->SetVisibility(ESlateVisibility::Collapsed);
 		auto* Confirmation=VBox();
 		ConfirmText=Text(TEXT(""),BodyFont(16.f),Hex(0xf2e3bd),true); AddLine(Confirmation,ConfirmText,14);
 		Buttons(Confirmation,{{TEXT("Remove"),TEXT("confirmremove")},{TEXT("Keep"),TEXT("cancelremove")}});
 		ConfirmPanel=WidgetTree->ConstructWidget<UBorder>(); ConfirmPanel->SetBrush(FSlateNoResource()); ConfirmPanel->SetPadding(FMargin(0));
 		auto* ConfirmSize=WidgetTree->ConstructWidget<USizeBox>(); ConfirmSize->SetWidthOverride(520); ConfirmSize->SetContent(Frame(Confirmation,FMargin(26,22)));
 		ConfirmPanel->SetContent(ConfirmSize);
-		At(ConfirmPanel,1223,330)->SetAlignment(FVector2D(.5f,0));
+		At(ConfirmPanel,800,500)->SetAlignment(FVector2D(.5f,.5f));
 		ConfirmPanel->SetVisibility(ESlateVisibility::Collapsed);
 	}
 
-	// ---- World popover: scrim over the whole window, then the panel beside the plaque ----
+	// ---- Centered world picker, with a scrim over the whole window ----
 	{
 		auto* Scrim=ActionButton(TEXT(""),TEXT("closeworld")); Scrim->SetContent(nullptr);
 		WorldScrim=Scrim; At(Scrim,-4000,-4000,9600,9000); Scrim->SetVisibility(ESlateVisibility::Collapsed);
@@ -1102,6 +1132,12 @@ void UACELoginWidget::EnsureDefaultLayout()
 		auto* Head=HBox(); AddLine(Pop,Head,9);
 		AddH(Head,Caps(TEXT("Choose your world"),12.f,2.6f),FMargin(0),true);
 		WorldCount=Text(TEXT(""),BodyFont(12.f),Hex(0x8f8166)); AddH(Head,WorldCount);
+		auto* CloseWorld=ActionButton(TEXT(""),TEXT("closeworld")); CloseWorld->LobbyStyle=LobbyGlyph; ButtonStyle(CloseWorld,false);
+		CloseWorld->SetToolTipText(FText::FromString(TEXT("Close server picker (Esc)")));
+		CloseWorld->SetContent(Glyph(SACELobbyGlyph::EKind::Cross,22.f,Hex(0xffedc4)));
+		auto* CloseWorldSize=WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(),TEXT("WorldPickerClose"));
+		CloseWorldSize->SetWidthOverride(34.f); CloseWorldSize->SetHeightOverride(34.f); CloseWorldSize->SetContent(CloseWorld);
+		AddH(Head,CloseWorldSize,FMargin(12,0,0,0),false,VAlign_Center);
 		AddLine(Pop,Rule(),12);
 		ServerListSize=WidgetTree->ConstructWidget<USizeBox>(); ServerListSize->SetHeightOverride(ServerRowHeight);
 		ServerList=Slim(WidgetTree->ConstructWidget<UScrollBox>()); ServerListSize->SetContent(ServerList);
@@ -1138,7 +1174,7 @@ void UACELoginWidget::EnsureDefaultLayout()
 		auto* PaintSlot=Panel->AddChildToOverlay(HostOf(Painted)); PaintSlot->SetHorizontalAlignment(HAlign_Fill); PaintSlot->SetVerticalAlignment(VAlign_Fill);
 		auto* PopSlot=Panel->AddChildToOverlay(Pop); PopSlot->SetPadding(FMargin(24,22,24,22)); PopSlot->SetHorizontalAlignment(HAlign_Fill);
 		auto* PopSize=WidgetTree->ConstructWidget<USizeBox>(); PopSize->SetWidthOverride(460); PopSize->SetContent(Panel);
-		WorldPopover=PopSize; At(PopSize,384,770)->SetAlignment(FVector2D(0,1.f));
+		WorldPopover=PopSize; At(PopSize,800,500)->SetAlignment(FVector2D(.5f,.5f));
 		PopSize->SetVisibility(ESlateVisibility::Collapsed);
 		// Arrow nub pointing back at the plaque.
 		auto* Nub=Glyph(SACELobbyGlyph::EKind::Pointer,16,Hex(0xd9a548));
@@ -1235,6 +1271,25 @@ void UACELoginWidget::NativeTick(const FGeometry& Geometry, float Dt)
 	Super::NativeTick(Geometry,Dt);
 	if (bAccountOrderDirty) RefreshAccounts();
 	TickAccountDrag(Dt);
+	AccountRecencyPollTime-=Dt;
+	if (AccountRecencyPollTime<=0)
+	{
+		AccountRecencyPollTime=1.f;
+		const int64 Now=FDateTime::UtcNow().ToUnixTimestamp();
+		bool bChanged=false;
+		for (const auto& Account:Profile.Accounts)
+			if (auto* Found=AccountItems.Find(Account.Id))
+			{
+				const FString When=ShortWhen(Account.LastUsed,Now);
+				if ((*Found)->When!=When) { (*Found)->When=When; bChanged=true; }
+			}
+		// Update visible labels in place: preserve selection, scroll and an active drag.
+		if (bChanged)
+		{
+			if (AccountList) AccountList->RefreshRows();
+			if (FavoriteList) FavoriteList->RefreshRows();
+		}
+	}
 	UpdatePollTime-=Dt;
 	if (UpdatePollTime<=0)
 	{
@@ -1366,7 +1421,6 @@ void UACELoginWidget::NativeTick(const FGeometry& Geometry, float Dt)
 		if (AccountsWindow) AccountsWindow->SetVisibility(bHome?ESlateVisibility::SelfHitTestInvisible:ESlateVisibility::Collapsed);
 		const float StatusX=bHome?1223.f:983.f;
 		if (StatusAnchor) if (auto* C=Cast<UCanvasPanelSlot>(StatusAnchor->Slot)) C->SetPosition(FVector2D(StatusX,C->GetPosition().Y));
-		if (ConfirmPanel) if (auto* C=Cast<UCanvasPanelSlot>(ConfirmPanel->Slot)) C->SetPosition(FVector2D(StatusX,C->GetPosition().Y));
 		// Accounts (home), Servers (directory, and the server editor), Game Files, Updates, Plugins.
 		const int32 PageForTab[]={0,2,3,4,5};
 		for(int32 I=0;I<NavigationButtons.Num();++I)
@@ -1397,6 +1451,15 @@ void UACELoginWidget::LayoutLobby(const FVector2D& View)
 		// Tint wash low on the left (mockup: ellipse 50%x40% at 18%,70%).
 		if (auto* Wash=SlotOf(LobbyWash)) { Wash->SetPosition(FVector2D(L.X*.18f,L.Y*.7f)); Wash->SetSize(FVector2D(L.X*.7f,L.Y*.56f)); }
 		if (auto* Stage=SlotOf(DashboardSize)) Stage->SetPosition(FVector2D((L.X-DesignW)*.5f,(L.Y-DesignH)*.5f));
+		// Center the whole showcase in the viewport's lower-right quadrant, including
+		// extra space around the fitted stage. Pages begins at (410,36) within that stage.
+		// The ring halo and bitmap line boxes add invisible space; 28px balances the
+		// visible lettering/ring above and below the quadrant center.
+		if (auto* Showcase=SlotOf(WidgetTree->FindWidget(TEXT("LaunchShowcaseGroup"))))
+			Showcase->SetPosition(FVector2D(L.X*.75f-(L.X-DesignW)*.5f-410.f,L.Y*.75f+28.f-(L.Y-DesignH)*.5f-36.f));
+		// The signature follows the viewport corner even when the centered stage is letterboxed.
+		if(auto* Signature=SlotOf(WidgetTree->FindWidget(TEXT("LobbyVersionSignature"))))
+			Signature->SetPosition(FVector2D((L.X+DesignW)*.5f-36.f,(L.Y+DesignH)*.5f-26.f));
 	}
 	// The quiet list uses a thin scrollbar only; the retail arrow buttons stay collapsed (they remain
 	// as actions for keyboard and gamepad scrolling).
@@ -1495,7 +1558,7 @@ void UACELoginWidget::SetWorldMenuOpen(bool bOpen)
 {
 	const ESlateVisibility Panel=bOpen?ESlateVisibility::SelfHitTestInvisible:ESlateVisibility::Collapsed;
 	if (WorldPopover) WorldPopover->SetVisibility(Panel);
-	if (WorldNub) WorldNub->SetVisibility(bOpen?ESlateVisibility::HitTestInvisible:ESlateVisibility::Collapsed);
+	if (WorldNub) WorldNub->SetVisibility(ESlateVisibility::Collapsed);
 	if (WorldScrim) WorldScrim->SetVisibility(bOpen?ESlateVisibility::Visible:ESlateVisibility::Collapsed);
 	if (WorldPlaque) ButtonStyle(WorldPlaque,bOpen);
 	if (bOpen) RefreshServers();
@@ -1513,6 +1576,7 @@ bool UACELoginWidget::IsLobbyKeyboardActive() const
 FReply UACELoginWidget::NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
 {
 	const FKey Key=InKeyEvent.GetKey();
+	if(Key==EKeys::Escape&&!PendingRemoval.IsEmpty()){RunAction(TEXT("cancelremove"));return FReply::Handled();}
 	if (Key==EKeys::Escape && IsWorldMenuOpen()) { RunAction(TEXT("closeworld")); return FReply::Handled(); }
 	if (IsLobbyKeyboardActive() && AccountSearchBox)
 	{
@@ -1720,6 +1784,12 @@ void UACELoginWidget::RefreshAccountLists()
 			// Two lines when an alias differs from the login; "when" only from a real launch.
 			Item->Username=A->Alias.IsEmpty()||A->Alias==A->Username?FString():A->Username;
 			Item->When=ShortWhen(A->LastUsed);
+			if (A->LastUsed>0)
+			{
+				const FDateTime Local=FDateTime::FromUnixTimestamp(A->LastUsed)+(FDateTime::Now()-FDateTime::UtcNow());
+				Item->WhenTooltip=FString::Printf(TEXT("Last launched %s at %s"),*Local.ToString(TEXT("%b %e, %Y")),*TimeOfDay(Local));
+			}
+			else Item->WhenTooltip=TEXT("Not launched yet on this device");
 			Item->MatchStart=Search.IsEmpty()?INDEX_NONE:Item->Title.Find(Search,ESearchCase::IgnoreCase);
 			Item->MatchLen=Item->MatchStart==INDEX_NONE?0:Search.Len();
 			Item->Owner=this;
@@ -1758,7 +1828,10 @@ void UACELoginWidget::UpdateSelectedAccountInfo()
 	if (LaunchCaption)
 	{
 		const FACELoginServer* S=Profile.SelectedServer();
-		LaunchCaption->SetText(FText::FromString(A&&S?FString::Printf(TEXT("%s  on  %s"),*(A->Alias.TrimStartAndEnd().IsEmpty()?A->Username:A->Alias),*S->Name):!S?TEXT("Choose a world first"):TEXT("Select an account to launch")));
+		const FString Name=A?(A->Alias.TrimStartAndEnd().IsEmpty()?A->Username:A->Alias):!S?TEXT("Choose your world"):TEXT("Select an account");
+		LaunchCaption->SetText(FText::FromString(Name)); LaunchCaption->SetToolTipText(FText::FromString(Name));
+		if(auto* World=Cast<UTextBlock>(WidgetTree->FindWidget(TEXT("LaunchWorldCaption"))))
+			World->SetText(FText::FromString(S?TEXT("on ")+S->Name:TEXT("Select a server to begin")));
 	}
 	RefreshLaunchState();
 	if (!LastLaunchedText) return;
@@ -2166,14 +2239,15 @@ void UACELoginWidget::RunAction(const FString& Action, const FString& Value)
 		PendingRemoval=Action==TEXT("removeserver")?TEXT("s:")+Profile.SelectedServerId:TEXT("a:")+Profile.SelectedAccountId;
 		ConfirmText->SetText(FText::FromString(Action==TEXT("removeserver")?TEXT("Remove this server from your saved list? Your accounts will remain available."):TEXT("Remove this saved account from this device?")));
 		ConfirmPanel->SetVisibility(ESlateVisibility::Visible);
+		if(auto* Scrim=WidgetTree->FindWidget(TEXT("ConfirmationScrim")))Scrim->SetVisibility(ESlateVisibility::Visible);
 	}
 	else if (Action==TEXT("confirmremove"))
 	{
 		if (PendingRemoval.StartsWith(TEXT("s:"))) Profile.RemoveServer(PendingRemoval.Mid(2));
 		else if (PendingRemoval.StartsWith(TEXT("a:"))) Profile.Accounts.RemoveAll([&](const auto& A){return A.Id==PendingRemoval.Mid(2);});
-		PendingRemoval.Reset(); ConfirmPanel->SetVisibility(ESlateVisibility::Collapsed); SelectServer(Profile.SelectedServerId); SetStatus(TEXT("Removed from this device."));
+		PendingRemoval.Reset(); ConfirmPanel->SetVisibility(ESlateVisibility::Collapsed); if(auto* Scrim=WidgetTree->FindWidget(TEXT("ConfirmationScrim")))Scrim->SetVisibility(ESlateVisibility::Collapsed); SelectServer(Profile.SelectedServerId); SetStatus(TEXT("Removed from this device."));
 	}
-	else if (Action==TEXT("cancelremove")) { PendingRemoval.Reset(); ConfirmPanel->SetVisibility(ESlateVisibility::Collapsed); }
+	else if (Action==TEXT("cancelremove")) { PendingRemoval.Reset(); ConfirmPanel->SetVisibility(ESlateVisibility::Collapsed); if(auto* Scrim=WidgetTree->FindWidget(TEXT("ConfirmationScrim")))Scrim->SetVisibility(ESlateVisibility::Collapsed); }
 	else if (Action==TEXT("browser")) { Pages->SetActiveWidgetIndex(2); RefreshBrowser(); if (Directory.IsEmpty()) FetchDirectory(); }
 	else if (Action==TEXT("refresh")) FetchDirectory();
 	else if (Action==TEXT("directoryselect")) { BrowserServerId=Value; RefreshBrowser(); }

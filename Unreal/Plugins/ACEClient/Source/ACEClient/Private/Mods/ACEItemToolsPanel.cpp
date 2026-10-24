@@ -49,16 +49,12 @@ public:
             Tabs->AddSlot()[SNew(SACEPluginTab).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).Tag(TEXT("ItemToolsTab")).Text(FText::FromString(Name))
                 .Selected_Lambda([this,Name](){return Page==Name;})
                 .OnClicked_Lambda([this,Name](){Page=Name;Rebuild();Scroll->ScrollToStart();return FReply::Handled();})];
-        ChildSlot[SNew(SBorder).BorderImage(&FACEPluginStyle::Current()->Background).Padding(16)
+        ChildSlot[SNew(SBorder).Tag(TEXT("ItemToolsPanel")).BorderImage(&FACEPluginStyle::Current()->Background).Padding(8)
             [SNew(SVerticalBox)
-            +SVerticalBox::Slot().AutoHeight()[SNew(SHorizontalBox)
-                +SHorizontalBox::Slot().FillWidth(1)[SNew(SVerticalBox)
-                    +SVerticalBox::Slot().AutoHeight()[SNew(SBox).Visibility(Args._ShowTitle?EVisibility::Visible:EVisibility::Collapsed)[Text(TEXT("Item Tools"),26)]]
-                    +SVerticalBox::Slot().AutoHeight().Padding(0,4)[Text(TEXT("Give, trade and restock across all your packs."),14,Muted)]]
-                +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(SBox).IsEnabled_Lambda([this](){return Plugin->Running;})
-                    [Button(TEXT("Stop"),[this](){Host->Stop(Plugin->Id,TEXT("Stopped by player"));})]]]
-            +SVerticalBox::Slot().AutoHeight().Padding(0,8)[SNew(SACEPluginText).AutoWrapText(true).ColorAndOpacity(Accent)
-                .Font(FACEPluginStyle::NativeFont("Regular",14)).Text_Lambda([this](){
+            +SVerticalBox::Slot().AutoHeight()[SNew(SBox).Visibility(Args._ShowTitle?EVisibility::Visible:EVisibility::Collapsed)[Text(TEXT("Item Tools"),18)]]
+            +SVerticalBox::Slot().AutoHeight().Padding(0,0,0,6)[SNew(SHorizontalBox)
+                +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[SNew(SACEPluginText).AutoWrapText(true).ColorAndOpacity(Accent)
+                    .Font(FACEPluginStyle::NativeFont("Regular",12)).Text_Lambda([this](){
                     FString Progress;
                     if(Plugin->Running&&Host->ItemToolsProgress)
                     {
@@ -72,7 +68,9 @@ public:
                     }
                     return FText::FromString(Progress.IsEmpty()?Plugin->Status:Progress+TEXT("\n")+Plugin->Status);
                 })]
-            +SVerticalBox::Slot().AutoHeight().Padding(0,0,0,12)[Tabs]
+                +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(SBox).IsEnabled_Lambda([this](){return Plugin->Running;})
+                    [Button(TEXT("Stop"),[this](){Host->Stop(Plugin->Id,TEXT("Stopped by player"));})]]]
+            +SVerticalBox::Slot().AutoHeight().Padding(0,0,0,6)[Tabs]
             +SVerticalBox::Slot().FillHeight(1)[SAssignNew(Scroll,SScrollBox)+SScrollBox::Slot()
                 [SAssignNew(Body,SVerticalBox).IsEnabled_Lambda([this](){return !Plugin->Running;})]]
             +SVerticalBox::Slot().AutoHeight().Padding(0,10,0,0)[SNew(SACEPluginText).AutoWrapText(true).ColorAndOpacity(Muted)
@@ -90,26 +88,26 @@ private:
     TSharedPtr<FJsonObject> P()const{return Plugin->Profile;}
     UACEClientSubsystem* Client()const{return Host->GetGameInstance()->GetSubsystem<UACEClientSubsystem>();}
     void Save(){Host->SaveProfile(Plugin->Id,Plugin->ProfileName,Host->ProfileJson(Plugin->Id),false);}
-    void Add(TSharedRef<SWidget> Widget){Body->AddSlot().AutoHeight().Padding(0,0,0,12)[Widget];}
-    void Heading(const FString& Title,const FString& Help){Add(Text(Title,20));Add(Text(Help,14,Muted));}
+    void Add(TSharedRef<SWidget> Widget){Body->AddSlot().AutoHeight().Padding(0,0,0,6)[Widget];}
+    void Heading(const FString& Title,const FString& Help){auto Caption=Text(Title+TEXT("  ⓘ"),16);Caption->SetToolTip(FACEPluginStyle::Tooltip(FText::FromString(Help)));Add(Caption);}
     TSharedRef<SWidget> Tile(TSharedRef<SWidget> Widget)
-    {return SNew(SBorder).BorderImage(&FACEPluginStyle::Current()->SectionFrame).Padding(10)[Widget];}
+    {return SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("NoBrush")).Padding(FMargin(0,2))[Widget];}
     void Pick(const FString& Key,const FString& Kind,const FString& Label)
     {
-        auto Row=SNew(SVerticalBox);
-        Row->AddSlot().AutoHeight()[Text(Label,14,Muted)];
-        Row->AddSlot().AutoHeight().Padding(0,5)[SNew(SACEPluginText).AutoWrapText(true).Font(FACEPluginStyle::NativeFont("Regular",17))
-            .Text_Lambda([this,Key](){FString Name=String(P(),*(Key+TEXT("_name")));if(Name.IsEmpty())Name=TEXT("Nothing selected");
-                else if((Key==TEXT("target")||Key==TEXT("chest")||Key.StartsWith(TEXT("mule")))&&!Guid(P(),*(Key+TEXT("_id"))))Name+=TEXT(" - select again this login");return FText::FromString(Name);})];
-        auto Buttons=SNew(SHorizontalBox);
-        Buttons->AddSlot().AutoWidth()[Button(TEXT("Use selected"),[this,Key,Kind](){Host->SelectItemToolsObject(Key,Kind);})];
-        Buttons->AddSlot().AutoWidth().Padding(6,0)[Button(TEXT("Clear"),[this,Key](){for(const TCHAR* Suffix:{TEXT("_id"),TEXT("_name"),TEXT("_wcid")})P()->RemoveField(*(Key+Suffix));Save();})];
-        Row->AddSlot().AutoHeight()[Buttons];Add(Tile(Row));
+        auto Row=SNew(SHorizontalBox);
+        Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,6,0)[SNew(SBox).WidthOverride(82)[Text(Label,12,Muted)]];
+        auto Name=TAttribute<FText>::CreateLambda([this,Key](){FString Value=String(P(),*(Key+TEXT("_name")));if(Value.IsEmpty())Value=TEXT("Nothing selected");
+            else if((Key==TEXT("target")||Key==TEXT("chest")||Key.StartsWith(TEXT("mule")))&&!Guid(P(),*(Key+TEXT("_id"))))Value+=TEXT(" - select again this login");return FText::FromString(Value);});
+        Row->AddSlot().FillWidth(1).VAlign(VAlign_Center).Padding(0,0,6,0)
+            [SNew(SACEPluginText).Text(Name).Font(FACEPluginStyle::NativeFont("Regular",14)).OverflowPolicy(ETextOverflowPolicy::Ellipsis).ToolTip(FACEPluginStyle::Tooltip(Name))];
+        Row->AddSlot().AutoWidth().VAlign(VAlign_Center)[Button(TEXT("Use selected"),[this,Key,Kind](){Host->SelectItemToolsObject(Key,Kind);})];
+        Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(4,0,0,0)[Button(TEXT("Clear"),[this,Key](){for(const TCHAR* Suffix:{TEXT("_id"),TEXT("_name"),TEXT("_wcid")})P()->RemoveField(*(Key+Suffix));Save();})];
+        Add(Tile(Row));
     }
     void Quantity(const FString& Key,const FString& Caption,int32 Default=0,int32 Max=100000)
     {
         Add(Tile(SNew(SHorizontalBox)+SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[Text(Caption)]
-            +SHorizontalBox::Slot().AutoWidth().Padding(10,0)[SNew(SBox).WidthOverride(112)[SNew(SSpinBox<int32>).Style(&FACEPluginStyle::Current()->Spin).MinValue(0).MaxValue(Max).MinDesiredWidth(104).Font(FACEPluginStyle::NativeFont("Regular",14))
+            +SHorizontalBox::Slot().AutoWidth().Padding(10,0)[SNew(SBox).WidthOverride(88)[SNew(SSpinBox<int32>).Style(&FACEPluginStyle::Current()->Spin).MinValue(0).MaxValue(Max).MinDesiredWidth(80).Font(FACEPluginStyle::NativeFont("Regular",14))
                 .Value_Lambda([this,Key,Default](){return int32(Number(P(),*Key,Default));})
                 .OnValueChanged_Lambda([this,Key](int32 Value){P()->SetNumberField(*Key,Value);})
                 .OnEndSliderMovement_Lambda([this](int32){Save();})
@@ -122,10 +120,14 @@ private:
     }
     void Start(const FString& Mode,const FString& Label)
     {
-        Add(SNew(SCheckBox).Style(&FACEPluginStyle::Current()->Check).IsChecked_Lambda([this](){return Plugin->Enabled?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
-            .OnCheckStateChanged_Lambda([this](ECheckBoxState S){Host->SetEnabled(Plugin->Id,S==ECheckBoxState::Checked);})[Text(TEXT("Enable Item Tools inventory actions"))]);
-        Add(SNew(SBox).IsEnabled_Lambda([this](){return Plugin->Enabled;})[Button(Label,[this,Mode](){Host->StartItemTools(Mode);})]);
-        Add(Text(TEXT("Waits for each transfer to be confirmed. UCM pauses during this job and resumes afterwards."),12,Muted));
+        auto Actions=SNew(SHorizontalBox);
+        Actions->AddSlot().FillWidth(1).VAlign(VAlign_Center)[SNew(SCheckBox).Style(&FACEPluginStyle::Current()->Check)
+            .IsChecked_Lambda([this](){return Plugin->Enabled?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
+            .OnCheckStateChanged_Lambda([this](ECheckBoxState S){Host->SetEnabled(Plugin->Id,S==ECheckBoxState::Checked);})[Text(TEXT("Enable inventory actions"),12)]];
+        Actions->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(6,0,0,0)[SNew(SBox).Tag(TEXT("ItemToolsStart")).IsEnabled_Lambda([this](){return Plugin->Enabled;})
+            .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Waits for confirmed transfers. UCM pauses for this job and resumes afterwards. Equipped, retained and offered items are excluded; only empty containers can be given."))))
+            [Button(Label,[this,Mode](){Host->StartItemTools(Mode);})]];
+        Add(Actions);
     }
     void Rules(const FString& Key,const FString& Label)
     {
@@ -200,8 +202,8 @@ private:
             Heading(TEXT("Give matching items"),TEXT("Select a player or NPC in the world, then select an inventory item. All eligible items with that name are included across your packs."));
             Pick(TEXT("target"),TEXT("recipient"),TEXT("Recipient"));Pick(TEXT("give"),TEXT("item"),TEXT("Item to give"));
             Add(SNew(SACEPluginText).ColorAndOpacity(Accent).Text_Lambda([this](){return FText::FromString(FString::Printf(TEXT("Eligible units across all packs: %d"),GiveCounts.FindRef(String(P(),TEXT("give_name")))));}));
-            Quantity(TEXT("give_limit"),TEXT("Maximum units to give (0 = all)"));Quantity(TEXT("delay_ms"),TEXT("Pause between transfers (milliseconds)"),250,5000);
-            Add(Text(TEXT("Equipped, retained and offered items are excluded. Only empty containers can be given."),12,Muted));Start(TEXT("give"),TEXT("Start giving"));
+            Quantity(TEXT("give_limit"),TEXT("Max units (0 = all)"));Quantity(TEXT("delay_ms"),TEXT("Transfer delay (ms)"),250,5000);
+            Start(TEXT("give"),TEXT("Start giving"));
         }
         else if(Page==TEXT("Buy / Sell"))
         {
@@ -252,7 +254,7 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeItemToolsPanel(bool bShowTitle)
 #include "ImageUtils.h"
 #include "RenderingThread.h"
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEItemToolsPanelTest,"ACE.Plugins.ItemTools.Panel",
-    EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
 bool FACEItemToolsPanelTest::RunTest(const FString&)
 {
     auto* GI=NewObject<UGameInstance>();GI->Init();ON_SCOPE_EXIT{GI->Shutdown();};
@@ -266,14 +268,22 @@ bool FACEItemToolsPanelTest::RunTest(const FString&)
     {
         FWidgetRenderer Renderer(false,true);
         const FString Folder=FPaths::ProjectSavedDir()/TEXT("ItemToolsReview/UI");IFileManager::Get().MakeDirectory(*Folder,true);
-        for(const TCHAR* Page:{TEXT("Give"),TEXT("Buy / Sell"),TEXT("Profiles"),TEXT("Chests"),TEXT("Restock")})for(int Width:{780,460})
+        for(const TCHAR* Page:{TEXT("Give"),TEXT("Buy / Sell"),TEXT("Profiles"),TEXT("Chests"),TEXT("Restock")})for(int Width:{480,380})
         {
-            auto Panel=SNew(ACEItemToolsPanel::SItemToolsPanel).Host(H).Page(Page);
-            const FVector2D Size(Width,900);auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);
+            auto Panel=SNew(ACEItemToolsPanel::SItemToolsPanel).Host(H).Page(Page).ShowTitle(false);
+            const FVector2D Size(Width,360);auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);
             for(int Pass=0;Pass<3;++Pass){Renderer.DrawWidget(Target,Panel,Size,0);FlushRenderingCommands();}
+            if(FString(Page)==TEXT("Give"))
+            {
+                TFunction<TSharedPtr<SWidget>(TSharedRef<SWidget>)> FindStart=[&](TSharedRef<SWidget> W)->TSharedPtr<SWidget>
+                {if(W->GetTag()==TEXT("ItemToolsStart"))return W;auto* C=W->GetChildren();for(int32 I=0;I<C->Num();++I)if(auto Match=FindStart(C->GetChildAt(I)))return Match;return nullptr;};
+                auto Start=FindStart(Panel);
+                if(TestTrue(TEXT("Give exposes its compact action"),Start.IsValid()))
+                    TestTrue(TEXT("Give action fits without scrolling"),Start->GetCachedGeometry().GetAbsolutePosition().Y+Start->GetCachedGeometry().GetAbsoluteSize().Y<=360.);
+            }
             TArray<FColor> Pixels;FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags);
-            TestEqual(TEXT("Each activity renders at desktop and narrow width"),Pixels.Num(),Width*900);
-            TArray64<uint8> PNG;FImageUtils::PNGCompressImageArray(Width,900,Pixels,PNG);
+            TestEqual(TEXT("Each activity renders at desktop and narrow width"),Pixels.Num(),Width*360);
+            TArray64<uint8> PNG;FImageUtils::PNGCompressImageArray(Width,360,Pixels,PNG);
             FFileHelper::SaveArrayToFile(PNG,*(Folder/FString::Printf(TEXT("%s-%d.png"),*FString(Page).Replace(TEXT(" / "),TEXT("-")),Width)));Target->ReleaseResource();
         }
     }

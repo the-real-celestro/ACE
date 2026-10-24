@@ -78,6 +78,8 @@ bool FACEUCMLogTest::RunTest(const FString&)
     TestEqual(TEXT("Log size restores"),NewDock->Windows[TEXT("ucm.log")].Size,SavedSize);
     if(FApp::CanEverRender())
     {
+        // Dense rows must still test actual overflow, not an all-visible list.
+        for(int32 I=0;I<40;++I)H->LogUCMEvent(*P,FString::Printf(TEXT("History event %d for scroll-follow coverage"),I));
         FWidgetRenderer Renderer(false,true);auto Panel=H->MakeUCMLogPanel();const FVector2D Size(720,480);
         auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);
         for(int32 Pass=0;Pass<6;++Pass){++GFrameCounter;Renderer.DrawWidget(Target,Panel,Size,0);FlushRenderingCommands();}

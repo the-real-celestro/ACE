@@ -70,6 +70,7 @@ TSharedRef<SWidget> UACELobbyAccountRow::RebuildWidget()
 		}
 		StarButton = WidgetTree->ConstructWidget<UACELobbyPlainButton>();
 		StarButton->SetStyle(GlyphButtonStyle());
+		StarButton->SetCursor(EMouseCursor::Hand);
 		StarButton->SetToolTipText(FText::FromString(TEXT("Pin to favorites")));
 		StarButton->OnClicked.AddDynamic(this, &UACELobbyAccountRow::HandleStarClicked);
 		auto* Star = WidgetTree->ConstructWidget<UNativeWidgetHost>();
@@ -117,7 +118,7 @@ TSharedRef<SWidget> UACELobbyAccountRow::RebuildWidget()
 		auto* WhenSlot = Line->AddChildToHorizontalBox(WhenText);
 		WhenSlot->SetVerticalAlignment(VAlign_Center); WhenSlot->SetPadding(FMargin(10, 0, 0, 0));
 	}
-	// Rows are recycled, so the grip and drop target read the current item each time.
+	// Rows are recycled, so the drag source and drop target read the current item each time.
 	TWeakObjectPtr<UACELobbyAccountRow> Self(this);
 	return ACEMakeAccountOrderRow(
 		TAttribute<UACELoginWidget*>::CreateLambda([Self]() -> UACELoginWidget* { return Self.IsValid()&&Self->Item?Self->Item->Owner.Get():nullptr; }),
@@ -135,7 +136,7 @@ void UACELobbyAccountRow::NativeOnListItemObjectSet(UObject* ListItemObject)
 void UACELobbyAccountRow::Refresh()
 {
 	if (!Item || !Name || !RowButton) return;
-	RowButton->SetToolTipText(FText::FromString(Item->Title));
+	RowButton->SetToolTipText(FText::FromString(Item->Title+TEXT("\n")+Item->WhenTooltip));
 	const FLinearColor Base = Item->bSelected ? FLinearColor(FColor(0xff, 0xf2, 0xcc)) : FLinearColor(FColor(0xdc, 0xcf, 0xab));
 	if (UserLine)
 	{

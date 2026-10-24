@@ -32,6 +32,10 @@ namespace
     // Hunt Ledger was fixed-size; its old .size entry stored a snapshot with
     // editor chrome. Only new user resizes should override its automatic height.
     FString SizeKey(const FString& Id){return Id+(Id==TEXT("huntledger")?TEXT(".body_size"):TEXT(".size"));}
+    FString PanelSizeKey(const FString& Id)
+    {
+        return Id+((Id==TEXT("itemtools")||Id==TEXT("autocraft")||Id==TEXT("ucmmicro")||Id==TEXT("ucm.log")||Id==TEXT("thirdeye"))?TEXT(".compact_size"):TEXT(".size"));
+    }
     const FButtonStyle& DockButtonStyle(){return FACEPluginStyle::Current()->DockButton;}
     TSharedRef<SWidget> DockIcon(const FString& Id)
     {return SNew(SBox).WidthOverride(26).HeightOverride(26)[SNew(SACEPluginIcon).Id(Id)];}
@@ -49,11 +53,12 @@ namespace
     class SCodexChrome : public SLeafWidget
     {
     public:
-        SLATE_BEGIN_ARGS(SCodexChrome) {}
+        SLATE_BEGIN_ARGS(SCodexChrome) : _Flat(false) {}
+            SLATE_ARGUMENT(bool, Flat)
             SLATE_ARGUMENT(TSharedPtr<FACEPluginStyle>, Style)
             SLATE_ATTRIBUTE(bool, HeaderHidden)
         SLATE_END_ARGS()
-        void Construct(const FArguments& Args){Style=Args._Style;HeaderHidden=Args._HeaderHidden;SetVisibility(EVisibility::HitTestInvisible);}
+        void Construct(const FArguments& Args){Style=Args._Style;HeaderHidden=Args._HeaderHidden;Flat=Args._Flat;SetVisibility(EVisibility::HitTestInvisible);}
         virtual FVector2D ComputeDesiredSize(float) const override {return FVector2D::ZeroVector;}
         virtual int32 OnPaint(const FPaintArgs&,const FGeometry& G,const FSlateRect&,FSlateWindowElementList& Out,int32 Layer,const FWidgetStyle& WidgetStyle,bool) const override
         {
@@ -66,6 +71,18 @@ namespace
             const FSlateBrush* White=FCoreStyle::Get().GetBrush("WhiteBrush");
             auto Box=[&](const FSlateBrush* Brush,FVector2D Pos,FVector2D Size,FLinearColor Color)
             {if(Brush&&Size.X>0&&Size.Y>0)FSlateDrawElement::MakeBox(Out,Layer,G.ToPaintGeometry(Size,FSlateLayoutTransform(Pos)),Brush,ESlateDrawEffect::None,Color*Mod);};
+            if(Flat)
+            {
+                // Use the actual retail blue window texture, independently of world tint.
+                // The blue glaze keeps the narrow bar recognizable beside the gold AC trim.
+                if(const FSlateBrush* Body=ACELobbyArt::TintedWindowBody(0))
+                    Box(Body,FVector2D::ZeroVector,S,FLinearColor(.7f,.85f,1.f,A));
+                else Box(White,FVector2D::ZeroVector,S,FLinearColor(FColor(14,33,73)).CopyWithNewOpacity(A));
+                Box(White,FVector2D::ZeroVector,S,FLinearColor(FColor(16,46,112)).CopyWithNewOpacity(.3f*A));
+                const TArray<FVector2D> Border={FVector2D(.5,.5),FVector2D(S.X-.5,.5),FVector2D(S.X-.5,S.Y-.5),FVector2D(.5,S.Y-.5),FVector2D(.5,.5)};
+                FSlateDrawElement::MakeLines(Out,Layer+1,G.ToPaintGeometry(),Border,ESlateDrawEffect::None,FLinearColor(FColor(112,87,44)).CopyWithNewOpacity(A)*Mod,true,1.f);
+                return Layer+1;
+            }
             const FACELobbyArt* Art=ACELobbyArt::Get();
             const FLinearColor Fade(1,1,1,A);
             if(const FSlateBrush* Body=Art?ACELobbyArt::TintedWindowBody(FACEPluginStyle::WindowTint()):nullptr)
@@ -89,6 +106,7 @@ namespace
         }
     private:
         TSharedPtr<FACEPluginStyle> Style;
+        bool Flat=false;
         TAttribute<bool> HeaderHidden;
     };
 
@@ -193,17 +211,17 @@ namespace
                 [SNew(SHorizontalBox)
                 +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(0,0,3,0)
                     [SNew(SBox).HAlign(HAlign_Left)[SNew(SBox).WidthOverride(10).HeightOverride(2)
-                        [SNew(SImage).Image(FCoreStyle::Get().GetBrush("WhiteBrush")).ColorAndOpacity(FACEPluginStyle::Gold(.55f))]]]
+                        [SNew(SImage).Image(FCoreStyle::Get().GetBrush("WhiteBrush")).ColorAndOpacity(FLinearColor(.55f,.40f,.20f))]]]
                 +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
                     [SNew(SBox).WidthOverride(14).HeightOverride(14)
-                        [SNew(SACEPluginButton).Tag(TEXT("PluginBarMinimize")).ButtonStyle(&Retail->DockButton)
+                        [SNew(SACEPluginButton).Cursor(EMouseCursor::Default).Tag(TEXT("PluginBarMinimize")).ButtonStyle(&TitleControlStyle())
                             .ContentPadding(FMargin(0)).HAlign(HAlign_Center).VAlign(VAlign_Center).IsFocusable(false)
                             .ToolTip(FACEPluginStyle::Tooltip(TAttribute<FText>::CreateLambda([Mini=Args._Minimized]{return FText::FromString(Mini.Get()?TEXT("Expand plugin bar"):TEXT("Minimize plugin bar"));})))
                             .OnClicked_Lambda([Toggle=Args._ToggleMinimized]{Toggle();return FReply::Handled();})
                             [SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",10)).ColorAndOpacity(FACEPluginStyle::Cream())
                                 .Text_Lambda([Mini=Args._Minimized]{return FText::FromString(Mini.Get()?TEXT("+"):TEXT("-"));})]]]];
             ChildSlot[SNew(SOverlay)
-                +SOverlay::Slot()[SNew(SCodexChrome).Tag(TEXT("PluginBarCodexChrome")).Style(Retail).HeaderHidden(true)]
+                +SOverlay::Slot()[SNew(SCodexChrome).Tag(TEXT("PluginBarCodexChrome")).Style(Retail).Flat(true).HeaderHidden(true)]
                 +SOverlay::Slot()[SNew(SVerticalBox)
                     +SVerticalBox::Slot().AutoHeight()[SNew(SBox).HeightOverride(18)[Header]]
                     +SVerticalBox::Slot().FillHeight(1)
@@ -220,9 +238,8 @@ namespace
             static const FButtonStyle Style=[]
             {
                 FButtonStyle S=FCoreStyle::Get().GetWidgetStyle<FButtonStyle>("Button");
-                S.SetNormal(FSlateRoundedBoxBrush(FLinearColor(.025f,.045f,.075f,.95f),2.f,FACEPluginStyle::Gold(.8f),1.f))
-                    .SetHovered(FSlateRoundedBoxBrush(FACEPluginStyle::Gold(.2f),2.f,FACEPluginStyle::Gold(),1.f))
-                    .SetPressed(FSlateRoundedBoxBrush(FACEPluginStyle::Gold(.35f),2.f,FACEPluginStyle::Gold(),1.f))
+                S.SetNormal(FSlateNoResource()).SetHovered(FSlateNoResource()).SetPressed(FSlateNoResource())
+                    .SetDisabled(FSlateNoResource())
                     .SetNormalPadding(FMargin(0)).SetPressedPadding(FMargin(0));return S;
             }();return Style;
         }
@@ -232,14 +249,14 @@ namespace
             // The plaque's left piece carries the silver ring; the fancy gold title starts just after it,
             // with the caps subtitle on the same line.
             auto Title=SNew(SHorizontalBox)
-                +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(SBox).WidthOverride(FMath::RoundToFloat(56*FACEPluginStyle::HeaderHeight()/42.)).HAlign(HAlign_Center)
+                +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(SBox).WidthOverride(Id==TEXT("ucmmicro")?24.f:FMath::RoundToFloat(56*FACEPluginStyle::HeaderHeight()/42.)).HAlign(HAlign_Center)
                     [SNew(SBox).WidthOverride(24).HeightOverride(24).Tag(TEXT("PluginFrameIcon"))
                         [SNew(SScaleBox).Stretch(EStretch::ScaleToFit)[Args._Icon.IsValid()?Args._Icon.ToSharedRef():SNullWidget::NullWidget]]]]
-                +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(0,4,0,0)[SNew(SACEPluginText).OverflowPolicy(ETextOverflowPolicy::Ellipsis).Text_Lambda([T=Args._Title]{return FText::FromString(T.Get());})
+                +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(0,0,0,0)[SNew(SACEPluginText).Visibility_Lambda([this](){return Id==TEXT("ucmmicro")&&GetCachedGeometry().GetLocalSize().X<240?EVisibility::Collapsed:EVisibility::Visible;}).OverflowPolicy(ETextOverflowPolicy::Ellipsis).Text_Lambda([T=Args._Title]{return FText::FromString(T.Get());})
                     .Font(FCoreStyle::GetDefaultFontStyle("Fancy",18)).ColorAndOpacity(FACEPluginStyle::Gold())]
                 // Always present so the title buttons stay right-aligned even without a subtitle.
-                +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(10,4,6,0)[SNew(SBox)[SNew(SACEPluginText).Text_Lambda([T=Args._Subtitle]{return FText::FromString(T.Get().ToUpper());})
-                    .Visibility_Lambda([this,T=Args._Subtitle]{return T.Get().IsEmpty()||GetCachedGeometry().GetLocalSize().X<480?EVisibility::Collapsed:EVisibility::Visible;})
+                +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(Id==TEXT("ucmmicro")?FMargin(0):FMargin(10,0,6,0))[SNew(SBox)[SNew(SACEPluginText).Text_Lambda([T=Args._Subtitle]{return FText::FromString(T.Get().ToUpper());})
+                    .Visibility_Lambda([this,T=Args._Subtitle]{return Id==TEXT("ucmmicro")||T.Get().IsEmpty()||GetCachedGeometry().GetLocalSize().X<480?EVisibility::Collapsed:EVisibility::Visible;})
                     .Font(FCoreStyle::GetDefaultFontStyle("Regular",9)).ColorAndOpacity(FACEPluginStyle::Muted())]];
             if(Host.IsValid())Title->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,4,0)
                 [SNew(SBox).WidthOverride(34).HeightOverride(32)[SNew(SACEPluginButton).Cursor(EMouseCursor::Default).Tag(TEXT("PluginFrameSettings"))
@@ -263,11 +280,11 @@ namespace
                 +SVerticalBox::Slot().AutoHeight()[SNew(SBox).HeightOverride(FACEPluginStyle::HeaderHeight())
                     .Tag(Args._CompactWhenLocked?FName(TEXT("LedgerHeader")):FName(NAME_None))
                     .Visibility_Lambda([Lock=Locked]{return Lock.Get(false)?EVisibility::Collapsed:EVisibility::Visible;})
-                    [SNew(SBorder).Tag(TEXT("PluginWindowHandle")).BorderImage(FCoreStyle::Get().GetBrush("NoBrush")).Padding(0)
+                    [SNew(SBorder).Tag(TEXT("PluginWindowHandle")).BorderImage(FCoreStyle::Get().GetBrush("NoBrush")).Padding(FMargin(0,0,0,4))
                     .ToolTip(FACEPluginStyle::Tooltip(TAttribute<FText>::CreateLambda([this](){return FText::FromString(CanManipulate&&!CanManipulate()?TEXT("Unlock the UI or hold Quick-show pinned windows to move"):TEXT("Drag to move"));})))
                     .Cursor_Lambda([this](){return CanManipulate&&!CanManipulate()?EMouseCursor::Default:EMouseCursor::CardinalCross;})
                     .OnMouseButtonDown_Lambda([this](const FGeometry&,const FPointerEvent& E){return BeginDrag(E);})[Title]]]
-                +SVerticalBox::Slot().FillHeight(1)[SNew(SBox).Padding(Args._CompactWhenLocked?FMargin(0,6,0,0):FMargin(8,6,8,0))
+                +SVerticalBox::Slot().FillHeight(1)[SNew(SBox).Padding((Args._CompactWhenLocked||Id==TEXT("ucmmicro"))?FMargin(0,6,0,0):FMargin(8,6,8,0))
                     .Tag(Args._CompactWhenLocked?FName(TEXT("LedgerContent")):FName(NAME_None))[Args._Content.Widget]]
                 +SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right)[SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("NoBrush")).Padding(FMargin(8,2,4,4))
                     .Visibility_Lambda([this]{return Resize&&(!CanManipulate||CanManipulate())?EVisibility::Visible:EVisibility::Collapsed;})
@@ -373,6 +390,9 @@ FVector2D SACEPluginDesktop::DisplaySize(const FWindow& W) const
         if(W.MapOverlay&&Host->WaypointOption(TEXT("map_minimized"),false))return FVector2D(70,26);
     }
     auto Size=W.Size;
+    if(W.Id==TEXT("ucmmicro"))Size.X=FMath::Max(160.,Size.X);
+    if(W.Id==TEXT("ucmmicro")&&Size.X<312&&Host.IsValid()&&Host->LedgerOption(TEXT("ucmmicro"),TEXT("condensed")))
+        Size.Y=FMath::Max(220.,Size.Y*.5);
     if(W.Id==TEXT("actiondeck")&&Host.IsValid())
     {
         const auto* Deck=Host->GetGameInstance()->GetSubsystem<UACEActionDeckSubsystem>();
@@ -427,7 +447,7 @@ void SACEPluginDesktop::Tick(const FGeometry& G,double Time,float Delta)
     for(auto& Pair:Windows)
     {
         const bool Hidden=Host.IsValid()&&Host->IsPluginWindowChromeHidden(Pair.Key);
-        if(BoundsChanged||Hidden!=Pair.Value.HiddenChrome||!Pair.Value.LedgerId.IsEmpty()||Pair.Key==TEXT("actiondeck"))Layout(Pair.Value);
+        if(BoundsChanged||Hidden!=Pair.Value.HiddenChrome||!Pair.Value.LedgerId.IsEmpty()||Pair.Key==TEXT("actiondeck")||Pair.Key==TEXT("ucmmicro"))Layout(Pair.Value);
         Pair.Value.HiddenChrome=Hidden;
     }
 }
@@ -470,8 +490,10 @@ void SACEPluginDesktop::Resize(const FString& Id,FVector2D Delta,bool Save)
              FMath::Clamp(Size.Y-Chrome,40.,FMath::Max(40.,ViewSize.Y-Chrome)));
          Layout(*W);if(Save)Host->SavePluginWindowPosition(SizeKey(Id),W->Size);return;
      }
-     W->Size+=Delta;const double MinWidth=Id==TEXT("actiondeck")?360.:96.,MinHeight=64.;W->Size.X=FMath::Clamp(W->Size.X,MinWidth,FMath::Max(MinWidth,ViewSize.X));W->Size.Y=FMath::Clamp(W->Size.Y,MinHeight,FMath::Max(MinHeight,ViewSize.Y));Layout(*W);
-     if(Save&&Host.IsValid())Host->SavePluginWindowPosition(Id+TEXT(".size"),W->Size);}
+     if(Id==TEXT("ucmmicro")&&W->Size.X<312&&Host.IsValid()&&Host->LedgerOption(Id,TEXT("condensed"))&&!FMath::IsNearlyZero(Delta.Y))
+         Delta.Y=2*(FMath::Max(220.,W->Size.Y*.5)+Delta.Y)-W->Size.Y;
+     W->Size+=Delta;const double MinWidth=Id==TEXT("actiondeck")?360.:Id==TEXT("itemtools")?380.:Id==TEXT("ucmmicro")?160.:96.,MinHeight=64.;W->Size.X=FMath::Clamp(W->Size.X,MinWidth,FMath::Max(MinWidth,ViewSize.X));W->Size.Y=FMath::Clamp(W->Size.Y,MinHeight,FMath::Max(MinHeight,ViewSize.Y));Layout(*W);
+     if(Save&&Host.IsValid())Host->SavePluginWindowPosition(PanelSizeKey(Id),W->Size);}
 }
 void SACEPluginDesktop::Raise(const FString& Id)
 {if(Id!=BarId)if(auto* W=Windows.Find(Id))W->Slot->SetZOrder(++TopOrder);}
@@ -506,15 +528,18 @@ void SACEPluginDesktop::Toggle(const FString& Id)
         else {Host->SavePluginWindowVisibility(Id,true);W->Open=true;W->Widget->SetVisibility(EVisibility::Visible);Raise(Id);}
         return;
     }
-    FWindow W;W.Id=Id;W.Position=Host->GetPluginWindowPosition(Id,FVector2D(84+24*(Windows.Num()-1),80+24*(Windows.Num()-1)));W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(780,700));
+    FWindow W;W.Id=Id;W.Position=Host->GetPluginWindowPosition(Id,FVector2D(84+24*(Windows.Num()-1),80+24*(Windows.Num()-1)));W.Size=Host->GetPluginWindowPosition(PanelSizeKey(Id),FVector2D(780,700));
     const bool Arrow=Id==TEXT("waypoint.arrow");
     const bool Dungeon=Id==TEXT("waypoint.dungeon");
     W.MapOverlay=Dungeon;
     const bool Ledger=UACEPluginSubsystem::IsLedger(Id);
     if(Ledger){W.LedgerId=Id;W.Size=Host->GetPluginWindowPosition(SizeKey(Id),FVector2D(Id==TEXT("supplyledger")?200:290,0));}
-    if(Id==TEXT("ucmmicro"))W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(270,360));
+    if(Id==TEXT("itemtools"))W.Size=Host->GetPluginWindowPosition(TEXT("itemtools.compact_size"),FVector2D(480,380));
+    if(Id==TEXT("ucmmicro"))W.Size=Host->GetPluginWindowPosition(PanelSizeKey(Id),FVector2D(360,340));
+    if(Id==TEXT("autocraft"))W.Size=Host->GetPluginWindowPosition(PanelSizeKey(Id),FVector2D(520,460));
+    if(Id==TEXT("thirdeye"))W.Size=Host->GetPluginWindowPosition(PanelSizeKey(Id),FVector2D(520,480));
     if(Id==TEXT("actiondeck"))W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(530,203));
-    if(Id==TEXT("ucm.log"))W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(700,440));
+    if(Id==TEXT("ucm.log"))W.Size=Host->GetPluginWindowPosition(PanelSizeKey(Id),FVector2D(620,360));
     if(Manager)W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FACEPluginStyle::IsCodex()?FVector2D(880,640):FVector2D(740,600));
     if(Arrow)W.Size=FVector2D(290,225);
     if(Dungeon)W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(420,420));
@@ -584,7 +609,7 @@ void SACEPluginDesktop::Refresh()
             .Tag(FName(*(TEXT("PluginBarOrder.")+Id)))
             [SNew(SOverlay)+SOverlay::Slot()[SNew(SBox).WidthOverride(32).HeightOverride(32)
             [SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::IconButtonPadding)).Tag(Manager?FName(TEXT("PluginOptions")):FName(*(TEXT("PluginBarButton.")+Id)))
-                .ButtonStyle(&DockButtonStyle()).IsFocusable(false).AllowDragDrop(true)
+                .Cursor(EMouseCursor::Default).ButtonStyle(FACEPluginStyle::IsCodex()?&SPluginFrame::TitleControlStyle():&DockButtonStyle()).IsFocusable(false).AllowDragDrop(true)
                 .OnSlateButtonDragDetected_Lambda([H=Host,Id](const FGeometry&,const FPointerEvent&){return ACEPluginOrder::BeginDrag(H.Get(),Id,BarId);})
                 .ToolTip(FACEPluginStyle::Tooltip(TAttribute<FText>::CreateLambda([H=Host,P,Id,Manager]()
                 {
@@ -601,7 +626,7 @@ void SACEPluginDesktop::Refresh()
             // Codex: a 2px gold underline marks windows that are open.
             +SOverlay::Slot().VAlign(VAlign_Bottom).HAlign(HAlign_Center)[SNew(SBox).WidthOverride(18).HeightOverride(2)
                 .Visibility_Lambda([this,Id,Manager]{return FACEPluginStyle::IsCodex()&&(Manager?Host.IsValid()&&Host->IsManagerOpen():IsOpen(Id))?EVisibility::HitTestInvisible:EVisibility::Collapsed;})
-                [SNew(SImage).Image(FCoreStyle::Get().GetBrush("WhiteBrush")).ColorAndOpacity(FACEPluginStyle::Gold())]]]];
+                [SNew(SImage).Image(FCoreStyle::Get().GetBrush("WhiteBrush")).ColorAndOpacity(FLinearColor(.65f,.51f,.28f))]]]];
     }
     auto& Bar=Windows.FindChecked(BarId);
     Bar.Size=Horizontal?FVector2D(4+34*Buttons->NumSlots(),52):FVector2D(38,18+34*Buttons->NumSlots());

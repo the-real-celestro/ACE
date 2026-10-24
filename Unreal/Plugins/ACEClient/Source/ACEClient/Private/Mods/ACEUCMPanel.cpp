@@ -130,9 +130,9 @@ namespace ACEUCMPanelPrivate
                     [SNew(SVerticalBox)
                     +SVerticalBox::Slot().AutoHeight()[SNew(SBox).IsEnabled_Lambda(Enabled)[Header()]]
                     +SVerticalBox::Slot().FillHeight(1).Padding(0,8,0,0)[SNew(SHorizontalBox)
-                        +SHorizontalBox::Slot().AutoWidth()[SNew(SBox).WidthOverride(168).IsEnabled_Lambda(Enabled)[Tabs()]]
+                        +SHorizontalBox::Slot().AutoWidth()[SNew(SBox).WidthOverride_Lambda([this]{return FMath::Clamp(GetCachedGeometry().GetLocalSize().X*.22f,126.f,152.f);}).IsEnabled_Lambda(Enabled)[Tabs()]]
                         +SHorizontalBox::Slot().AutoWidth()[SNew(SBox).WidthOverride(1)[SNew(SImage).Image(FCoreStyle::Get().GetBrush("WhiteBrush")).ColorAndOpacity(FACEPluginStyle::Gold(.22f))]]
-                        +SHorizontalBox::Slot().FillWidth(1).Padding(16,4,4,0)[BodyScroll.ToSharedRef()]]
+                        +SHorizontalBox::Slot().FillWidth(1).Padding(10,4,4,0)[BodyScroll.ToSharedRef()]]
                     +SVerticalBox::Slot().AutoHeight().Padding(0,8,0,0)[Notice]
                     +SVerticalBox::Slot().AutoHeight().Padding(0,6,0,0)[SNew(SBox).HeightOverride(1)[SNew(SImage).Image(FCoreStyle::Get().GetBrush("WhiteBrush")).ColorAndOpacity(FACEPluginStyle::Gold(.22f))]]
                     +SVerticalBox::Slot().AutoHeight().Padding(4,5,4,0)[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",10)).ColorAndOpacity(FACEPluginStyle::Muted())
@@ -183,7 +183,7 @@ namespace ACEUCMPanelPrivate
             }
             RenderedProfile=P();if(ExternalChange)Rebuild();
         }
-        void Add(TSharedRef<SWidget> W){(SectionBody?SectionBody:Body)->AddSlot().AutoHeight().Padding(0,0,0,10)[W];}
+        void Add(TSharedRef<SWidget> W){(SectionBody?SectionBody:Body)->AddSlot().AutoHeight().Padding(0,0,0,FACEPluginStyle::IsCodex()&&!EditorOnly?6:10)[W];}
         void Heading(const FString& Title,const FString& Description)
         {
             const FString Key=Page+TEXT("/")+Title;
@@ -200,10 +200,14 @@ namespace ACEUCMPanelPrivate
                 {
                     // The first heading is the page title; its settings follow uncollapsed.
                     SectionBody.Reset();
-                    Body->AddSlot().AutoHeight().Padding(0,0,0,2)[SNew(SACEPluginText).Text(FText::FromString(Title))
-                        .Font(FCoreStyle::GetDefaultFontStyle("Fancy",27)).ColorAndOpacity(FACEPluginStyle::Gold())];
-                    if(!Description.IsEmpty())Body->AddSlot().AutoHeight().Padding(0,0,0,6)[SNew(SACEPluginText).Text(FText::FromString(Description))
-                        .Font(FCoreStyle::GetDefaultFontStyle("Regular",10)).ColorAndOpacity(FACEPluginStyle::Muted()).AutoWrapText(true)];
+                    Body->AddSlot().AutoHeight().Padding(0,0,0,2)[SNew(SHorizontalBox)
+                        +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[SNew(SACEPluginText).Text(FText::FromString(Title))
+                            .Font(FCoreStyle::GetDefaultFontStyle("Fancy",24)).ColorAndOpacity(FACEPluginStyle::Gold()).AutoWrapText(true)
+                            .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(Description))) ]
+                        +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(6,0,0,0)[SNew(SACEPluginText).Text(FText::FromString(TEXT("(?)")))
+                            .Visibility(Description.IsEmpty()?EVisibility::Collapsed:EVisibility::Visible)
+                            .Font(FCoreStyle::GetDefaultFontStyle("Regular",11)).ColorAndOpacity(FACEPluginStyle::Muted())
+                            .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(Description)))]];
                     SectionBody=SNew(SVerticalBox);
                     Body->AddSlot().AutoHeight().Padding(0,8,0,4)[SNew(SBox).Tag(FName(*Key))[SectionBody.ToSharedRef()]];
                     return;
@@ -212,13 +216,12 @@ namespace ACEUCMPanelPrivate
                 // Codex sections open like the mockup; a collapse the player chose is kept.
                 Body->AddSlot().AutoHeight().Padding(0,10,0,4)[SNew(SExpandableArea).Tag(FName(*Key)).InitiallyCollapsed(CollapsedSections.Contains(Key)&&CollapsedSections[Key])
                     .BorderImage(FCoreStyle::Get().GetBrush("NoBrush")).BodyBorderImage(FCoreStyle::Get().GetBrush("NoBrush"))
-                    .HeaderPadding(FMargin(0,3)).Padding(FMargin(0))
+                    .HeaderPadding(FMargin(0,3)).Padding(FMargin(0)).ToolTip(FACEPluginStyle::Tooltip(FText::FromString(Description)))
                     .OnAreaExpansionChanged_Lambda([this,Key](bool Expanded){CollapsedSections.Add(Key,!Expanded);})
                     .HeaderContent()[SNew(SHorizontalBox)
                         +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,10,0)[CaptionText(Title)]
                         +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[SNew(SBox).HeightOverride(1)[SNew(SImage).Image(FCoreStyle::Get().GetBrush("WhiteBrush")).ColorAndOpacity(FACEPluginStyle::Gold(.3f))]]]
                     .BodyContent()[SNew(SBox).Padding(0,8,0,0)[SectionBody.ToSharedRef()]]];
-                if(!Description.IsEmpty())Add(Text(Description,11,FACEPluginStyle::Muted()));
                 return;
             }
             SectionBody=SNew(SVerticalBox);
@@ -445,8 +448,7 @@ namespace ACEUCMPanelPrivate
                     .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(Help)))
                     [SNew(SHorizontalBox)
                         +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(0,2,12,2)[SNew(SVerticalBox)
-                            +SVerticalBox::Slot().AutoHeight()[Text(Caption,13,FACEPluginStyle::Cream(),WrapText)]
-                            +SVerticalBox::Slot().AutoHeight()[SNew(SBox).Visibility(Help.IsEmpty()||!WrapText?EVisibility::Collapsed:EVisibility::Visible)[Text(Help,11,FACEPluginStyle::Muted(),true)]]]
+                            +SVerticalBox::Slot().AutoHeight()[Text(Caption,13,FACEPluginStyle::Cream(),WrapText)]]
                         +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(SImage)
                             .Image_Lambda([this,Key,Default]()->const FSlateBrush*{const auto& Sw=FACEPluginStyle::Current()->Switch;return Bool(P(),Key,Default)?&Sw.CheckedImage:&Sw.UncheckedImage;})]];
             }

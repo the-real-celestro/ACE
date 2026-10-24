@@ -17,7 +17,7 @@ class UACELoginWidget;
 class UACELobbyAccountListView;
 class UACELobbyAccountItem;
 
-/** Wraps an account row with a drag grip and insertion-line drop target (ACELoginAccountOrder.cpp). */
+/** Wraps an account row with whole-row dragging and an insertion-line drop target (ACELoginAccountOrder.cpp). */
 TSharedRef<SWidget> ACEMakeAccountOrderRow(TAttribute<UACELoginWidget*> Owner, TAttribute<FString> Id, TAttribute<FString> Title, TSharedRef<SWidget> Content);
 #if !UE_BUILD_SHIPPING
 void ACESetAccountDropPreview(const FString& Id);
@@ -67,6 +67,8 @@ class ACECLIENT_API UACELoginWidget : public UUserWidget
 public:
 	void RunAction(const FString& Action, const FString& Value = FString());
 	bool CanReorderAccounts() const;
+	/** Display-only row data for a drag preview; contains no password. */
+	const UACELobbyAccountItem* AccountDisplayItem(const FString& Id) const;
 	/** True when Id can be dropped beside TargetId (same group, no search filter). */
 	bool CanMoveAccount(const FString& Id, const FString& TargetId) const;
 	bool MoveAccountInOrder(const FString& Id, const FString& TargetId, bool bAfter);
@@ -286,6 +288,7 @@ protected:
 	UPROPERTY() TObjectPtr<UTextBlock> AutoUpdateMark;
 	UFUNCTION() void OnAutoUpdateChanged(bool bChecked);
 	float UpdatePollTime = 0;
+	float AccountRecencyPollTime = 0;
 	void RefreshUpdateControls();
 	void RefreshServers();
 	void RefreshAccounts();

@@ -14,6 +14,7 @@
 #include "UI/ACEUIElementManager.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/Input/SCheckBox.h"
 #include "Engine/GameInstance.h"
 #include "Slate/WidgetRenderer.h"
 #include "Engine/TextureRenderTarget2D.h"
@@ -76,6 +77,7 @@ bool FACELedgerTest::RunTest(const FString&)
     auto* H=GI->GetSubsystem<UACEPluginSubsystem>();
     auto* Manager=GI->GetSubsystem<UACEClientSubsystem>()->GetUIElementManager();Manager->SetUiLocked(false);
     H->StorageRoot=FPaths::ProjectSavedDir()/TEXT("Automation/Ledgers");H->Settings=MakeShared<FJsonObject>();
+    TestTrue(TEXT("Isolated Micro controls have writable linked profiles"),H->InitializeUCMSelection());
     // The pixel, font, bevel and fixed chrome expectations below describe Original.
     const FString PreviousTheme=FACEPluginStyle::ThemeName();
     ON_SCOPE_EXIT { FACEPluginStyle::SetTheme(PreviousTheme); };
@@ -371,6 +373,10 @@ bool FACELedgerTest::RunTest(const FString&)
         TestTrue(TEXT("Compact count is fully allocated"),CounterBounds.GetLocalSize().X>=CompactCount->GetDesiredSize().X);
         const auto ListBounds=FindTagged(Dock,TEXT("SupplyRows"))->GetCachedGeometry();
         TestTrue(TEXT("Scrollbar never covers digits in the narrow ledger"),CounterBounds.GetAbsolutePosition().X+CounterBounds.GetAbsoluteSize().X<=ListBounds.GetAbsolutePosition().X+ListBounds.GetAbsoluteSize().X);
+        auto OriginalManager=H->MakePanel();
+        const auto RestoreTheme=FindTagged(OriginalManager,TEXT("PluginThemeRestore"));
+        if(TestTrue(TEXT("Original theme exposes a way back to Codex"),RestoreTheme.IsValid()))Click(RestoreTheme);
+        TestEqual(TEXT("Restore button switches all plugins back to Codex"),FACEPluginStyle::ThemeName(),FString(TEXT("codex")));
         // Codex must preserve the same compact icon/count layout despite its wider frame padding.
         H->SetPluginTheme(TEXT("codex"));
         auto CodexDock=SNew(SACEPluginDesktop).Host(H);
@@ -422,6 +428,86 @@ bool FACELedgerTest::RunTest(const FString&)
         {
             const auto Control=FindTagged(CraftPanel,Action);
             if(TestTrue(TEXT("Craft action remains available"),Control.IsValid()))TestTrue(TEXT("Craft action fits its label instead of stretching"),Control->GetCachedGeometry().GetLocalSize().X<180);
+        }
+        for(const auto& Entry:TArray<TPair<FString,FVector2D>>{
+            {TEXT("autocraft"),FVector2D(520,450)},{TEXT("ucmmicro"),FVector2D(360,270)},
+            {TEXT("ucm.log"),FVector2D(620,290)},{TEXT("thirdeye"),FVector2D(520,410)}})
+        {
+            auto Panel=H->MakePanel(Entry.Key);const auto Viewport=Entry.Value;
+            auto* CompactTarget=FWidgetRenderer::CreateTargetFor(Viewport,TF_Bilinear,true);
+            for(int32 Pass=0;Pass<4;++Pass){++GFrameCounter;Renderer.DrawWidget(CompactTarget,Panel,Viewport,0);FlushRenderingCommands();}
+            if(Entry.Key==TEXT("ucmmicro"))
+            {
+                auto Meta=FindTagged(Panel,TEXT("MicroToggle.Metas")),Buff=FindTagged(Panel,TEXT("MicroToggle.Buffing")),Combat=FindTagged(Panel,TEXT("MicroToggle.Combat")),Last=FindTagged(Panel,TEXT("MicroToggle.Peace when idle"));
+                if(TestTrue(TEXT("Micro keeps quick activity controls"),Meta&&Buff&&Combat&&Last))
+                {
+                    TestTrue(TEXT("Micro activities share rows"),FMath::IsNearlyEqual(Meta->GetCachedGeometry().GetAbsolutePosition().Y,Buff->GetCachedGeometry().GetAbsolutePosition().Y));
+                    TestTrue(TEXT("All Micro activities fit the compact viewport"),Last->GetCachedGeometry().GetAbsolutePosition().Y+Last->GetCachedGeometry().GetAbsoluteSize().Y<=Viewport.Y);
+                    auto UCM=H->Find(TEXT("ucm"));const auto SavedProfile=MakeShared<FJsonObject>(*UCM->Profile);
+                    auto BuffControl=StaticCastSharedPtr<SCheckBox>(Buff),CombatControl=StaticCastSharedPtr<SCheckBox>(Combat);
+                    BuffControl->UpdateAllAttributes();CombatControl->UpdateAllAttributes();
+                    if(!BuffControl->IsChecked())BuffControl->ToggleCheckedState();
+                    if(!CombatControl->IsChecked())CombatControl->ToggleCheckedState();
+                    for(int32 Pass=0;Pass<3;++Pass){++GFrameCounter;Renderer.DrawWidget(CompactTarget,Panel,Viewport,0);FlushRenderingCommands();}
+                    BuffControl->UpdateAllAttributes();CombatControl->UpdateAllAttributes();
+                    TestTrue(TEXT("Micro round indicators allow multiple enabled activities"),BuffControl->IsChecked()&&CombatControl->IsChecked());
+                    BuffControl->ToggleCheckedState();
+                    for(int32 Pass=0;Pass<3;++Pass){++GFrameCounter;Renderer.DrawWidget(CompactTarget,Panel,Viewport,0);FlushRenderingCommands();}
+                    BuffControl->UpdateAllAttributes();CombatControl->UpdateAllAttributes();
+                    TestTrue(TEXT("Turning one Micro activity off leaves another enabled"),!BuffControl->IsChecked()&&CombatControl->IsChecked());
+                    UCM->Profile=SavedProfile;
+                    const FVector2D NarrowSize(200,500);
+                    auto* NarrowTarget=FWidgetRenderer::CreateTargetFor(NarrowSize,TF_Bilinear,true);
+                    for(int32 Pass=0;Pass<6;++Pass){++GFrameCounter;Renderer.DrawWidget(NarrowTarget,Panel,NarrowSize,0);FlushRenderingCommands();}
+                    TestTrue(TEXT("Narrow Micro activities stack in one column"),FMath::IsNearlyEqual(Buff->GetCachedGeometry().GetAbsolutePosition().X,Combat->GetCachedGeometry().GetAbsolutePosition().X)&&Combat->GetCachedGeometry().GetAbsolutePosition().Y>Buff->GetCachedGeometry().GetAbsolutePosition().Y);
+                    TestTrue(TEXT("Narrow Micro keeps its final activity within the scroll viewport"),Last->GetCachedGeometry().GetAbsolutePosition().Y+Last->GetCachedGeometry().GetAbsoluteSize().Y<NarrowSize.Y);
+                    TArray<FColor> NarrowPixels;NarrowTarget->GameThread_GetRenderTargetResource()->ReadPixels(NarrowPixels);
+                    TArray64<uint8> NarrowPNG;FImageUtils::PNGCompressImageArray(NarrowTarget->SizeX,NarrowTarget->SizeY,NarrowPixels,NarrowPNG);
+                    FFileHelper::SaveArrayToFile(NarrowPNG,*(H->StorageRoot/TEXT("ucmmicro-narrow.png")));NarrowTarget->ReleaseResource();
+                    TestTrue(TEXT("Micro primary order begins Metas, Buffing, Combat"),Meta->GetCachedGeometry().GetAbsolutePosition().Y<Buff->GetCachedGeometry().GetAbsolutePosition().Y&&Buff->GetCachedGeometry().GetAbsolutePosition().Y<Combat->GetCachedGeometry().GetAbsolutePosition().Y);
+                    const auto ProfileBeforeCompact=UCM->Profile;
+                    auto CompactButton=FindTagged(Panel,TEXT("MicroCompact"));
+                    if(TestTrue(TEXT("Single-column Micro exposes its compact action"),CompactButton&&CompactButton->GetVisibility().IsVisible()))Click(CompactButton);
+                    TestTrue(TEXT("Micro compact action saves its display preference"),H->LedgerOption(TEXT("ucmmicro"),TEXT("condensed")));
+                    const FVector2D TinySize(160,166);auto* TinyTarget=FWidgetRenderer::CreateTargetFor(TinySize,TF_Bilinear,true);
+                    for(int32 Pass=0;Pass<6;++Pass){++GFrameCounter;Renderer.DrawWidget(TinyTarget,Panel,TinySize,0);FlushRenderingCommands();}
+                    TestFalse(TEXT("Condensed Micro hides secondary activity rows"),FindTagged(Panel,TEXT("MicroToggle.Vendor restocking")).IsValid());
+                    auto Summoning=FindTagged(Panel,TEXT("MicroToggle.Summoning"));
+                    if(TestTrue(TEXT("Condensed Micro retains six primary activities"),Summoning.IsValid()))TestTrue(TEXT("Six Micro activities fit the narrow half-height content area"),Summoning->GetCachedGeometry().GetAbsolutePosition().Y+Summoning->GetCachedGeometry().GetAbsoluteSize().Y<=TinySize.Y);
+                    TestTrue(TEXT("Hiding Micro controls does not change activity settings"),UCM->Profile==ProfileBeforeCompact);
+                    auto RunControl=StaticCastSharedPtr<SCheckBox>(FindTagged(Panel,TEXT("MicroRun")));
+                    if(TestTrue(TEXT("Micro run control uses the same on/off indicator"),RunControl.IsValid()))
+                    {
+                        UCM->Running=true;RunControl->UpdateAllAttributes();RunControl->ToggleCheckedState();
+                        TestFalse(TEXT("Micro run indicator stops actual UCM execution"),UCM->Running);
+                    }
+                    TArray<FColor> TinyPixels;TinyTarget->GameThread_GetRenderTargetResource()->ReadPixels(TinyPixels);
+                    TArray64<uint8> TinyPNG;FImageUtils::PNGCompressImageArray(TinyTarget->SizeX,TinyTarget->SizeY,TinyPixels,TinyPNG);
+                    FFileHelper::SaveArrayToFile(TinyPNG,*(H->StorageRoot/TEXT("ucmmicro-condensed.png")));TinyTarget->ReleaseResource();
+                    auto* BoundaryTarget=FWidgetRenderer::CreateTargetFor(FVector2D(312,500),TF_Bilinear,true);
+                    for(int32 Pass=0;Pass<6;++Pass){++GFrameCounter;Renderer.DrawWidget(BoundaryTarget,Panel,FVector2D(312,500),0);FlushRenderingCommands();}
+                    TestTrue(TEXT("Widening to two columns temporarily restores all Micro activities"),FindTagged(Panel,TEXT("MicroToggle.Vendor restocking")).IsValid());
+                    for(int32 Pass=0;Pass<6;++Pass){++GFrameCounter;Renderer.DrawWidget(BoundaryTarget,Panel,FVector2D(311,500),0);FlushRenderingCommands();}
+                    TestFalse(TEXT("Returning to one column restores the compact preference"),FindTagged(Panel,TEXT("MicroToggle.Vendor restocking")).IsValid());BoundaryTarget->ReleaseResource();
+                    H->Find(TEXT("ucmmicro"))->Enabled=true;Dock->Toggle(TEXT("ucmmicro"));
+                    auto& MicroWindow=Dock->Windows[TEXT("ucmmicro")];MicroWindow.Size=FVector2D(160,500);
+                    TestEqual(TEXT("Condensed native Micro is half its expanded height"),Dock->DisplaySize(MicroWindow).Y,250.);
+                    MicroWindow.Size.X=312;TestEqual(TEXT("Native Micro restores full height at the two-column boundary"),Dock->DisplaySize(MicroWindow).Y,500.);MicroWindow.Size.X=160;
+                    Dock->Resize(TEXT("ucmmicro"),FVector2D(-1000,0),false);
+                    TestEqual(TEXT("Micro can narrow to its longest row width"),MicroWindow.Size.X,160.);
+                    Click(CompactButton);
+                    for(int32 Pass=0;Pass<6;++Pass){++GFrameCounter;Renderer.DrawWidget(CompactTarget,Panel,Viewport,0);FlushRenderingCommands();}
+                    TestTrue(TEXT("More restores secondary controls"),FindTagged(Panel,TEXT("MicroToggle.Vendor restocking")).IsValid());
+                    TestEqual(TEXT("Expanding restores the saved full Micro height"),Dock->DisplaySize(MicroWindow).Y,500.);
+                    Dock->Hide(TEXT("ucmmicro"),false);
+                    TestTrue(TEXT("Widening Micro restores two columns"),FMath::IsNearlyEqual(Meta->GetCachedGeometry().GetAbsolutePosition().Y,Buff->GetCachedGeometry().GetAbsolutePosition().Y));
+                }
+            }
+            if(Entry.Key==TEXT("autocraft"))
+                if(auto Materials=FindTagged(Panel,TEXT("AutoCraft.Materials")))TestTrue(TEXT("Craft material preview starts within the compact viewport"),Materials->GetCachedGeometry().GetAbsolutePosition().Y<Viewport.Y);
+            TArray<FColor> CompactPixels;CompactTarget->GameThread_GetRenderTargetResource()->ReadPixels(CompactPixels);
+            PNG.Reset();FImageUtils::PNGCompressImageArray(CompactTarget->SizeX,CompactTarget->SizeY,CompactPixels,PNG);
+            FFileHelper::SaveArrayToFile(PNG,*(H->StorageRoot/(Entry.Key+TEXT("-compact-audit.png"))));CompactTarget->ReleaseResource();
         }
         H->SetPluginTheme(TEXT("original"));Draw();
         // Sample empty space inside the actual pinned window, away from item artwork

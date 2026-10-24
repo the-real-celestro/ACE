@@ -1,10 +1,15 @@
 #include "Mods/ACEPluginIcon.h"
+#include "Mods/ACEPluginStyle.h"
 #include "Rendering/DrawElements.h"
 
 void SACEPluginIcon::Construct(const FArguments& Args)
 {
     SetCanTick(false);SetVisibility(EVisibility::HitTestInvisible);
-    const FLinearColor Gold(.94f,.68f,.26f),Paper(.96f,.88f,.65f),Teal(.32f,.76f,.65f),Red(.94f,.36f,.22f);
+    const bool Neutral=FACEPluginStyle::IsCodex();
+    const FLinearColor Gold=Neutral?FLinearColor(.78f,.61f,.32f):FLinearColor(.94f,.68f,.26f);
+    const FLinearColor Paper=Neutral?FLinearColor(.94f,.86f,.66f):FLinearColor(.96f,.88f,.65f);
+    const FLinearColor Teal=Neutral?FLinearColor(.68f,.57f,.37f):FLinearColor(.32f,.76f,.65f);
+    const FLinearColor Red=Neutral?Paper:FLinearColor(.94f,.36f,.22f);
     auto Line=[&](std::initializer_list<FVector2D> Points,FLinearColor Color)
     {FPath P;P.Color=Color;for(auto V:Points)P.Points.Add(V);Paths.Add(MoveTemp(P));};
     auto Fill=[&](std::initializer_list<FVector2D> Points,FLinearColor Color)
