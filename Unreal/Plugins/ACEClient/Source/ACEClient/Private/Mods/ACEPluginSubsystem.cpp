@@ -353,9 +353,26 @@ void UACEPluginSubsystem::ValidateItemBuffTimers()
         if(Number(E,TEXT("expires"))<=Now)return true;
         const TArray<TSharedPtr<FJsonValue>>* Equipment=nullptr;
         if(Target==DataPlayer&&E->TryGetArrayField(TEXT("equipment"),Equipment))
+        {
+            // A shield can be removed to wield the casting wand. Do not erase
+            // every worn-armor timer when combat equips it again: that produces
+            // an endless wand -> shield -> wand cycle. Retain uncovered items
+            // until their individual cast completes, even while in inventory.
+            const TArray<TSharedPtr<FJsonValue>>* Previous=nullptr;
+            TArray<TSharedPtr<FJsonValue>> Missing;
+            if(E->TryGetArrayField(TEXT("missing_equipment"),Previous))Missing=*Previous;
             for(const auto& Pair:Session->GetWorldObjects())
                 if(Pair.Value.WielderId==DataPlayer&&(Pair.Value.ItemType&(ACEItemType::Armor|ACEItemType::Clothing))
-                    &&!Equipment->ContainsByPredicate([&](const auto& Id){return Id->AsNumber()==double(uint32(Pair.Key));}))return true;
+                    &&!Equipment->ContainsByPredicate([&](const auto& Id){return Id->AsNumber()==double(uint32(Pair.Key));})
+                    &&!Missing.ContainsByPredicate([&](const auto& Id){return Id->AsNumber()==double(uint32(Pair.Key));}))
+                    Missing.Add(MakeShared<FJsonValueNumber>(uint32(Pair.Key)));
+            Missing.RemoveAll([&](const auto& Id)
+            {
+                FACEWorldObject Item;
+                return !C->GetWorldObject(int32(uint32(Id->AsNumber())),Item)||!IsOwnedPluginItem(Item);
+            });
+            E->SetArrayField(TEXT("missing_equipment"),Missing);
+        }
         return false;
     });
 }
@@ -1810,8 +1827,12 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         {P.Status=TEXT("Spell target is unavailable");return;}
         FACEWorldObject CastTargetObject;
         if(DefeatedTargets.Contains(Target)){P.NextAction=0;P.NextDecision=0;ScheduleDecisionWake(Now);return;}
-        if(C->GetWorldObject(Target,CastTargetObject)&&CastTargetObject.IsAttackable()&&!CastTargetObject.bIsPlayer&&!CastTargetObject.PetOwnerId
-            && !HasClearCombatSight(CastTargetObject)){C->GetSession()->SendCancelAttack();P.Status=TEXT("Target behind an obstruction; continuing route");return;}
+        // ACE also marks inventory items Attackable. Their stale world positions
+        // must not block equipment buffs with the hostile-creature sight check.
+        const bool HostileCreature=C->GetWorldObject(Target,CastTargetObject)&&(CastTargetObject.ItemType&ACEItemType::Creature)
+            &&CastTargetObject.IsAttackable()&&!CastTargetObject.bIsPlayer&&!CastTargetObject.PetOwnerId;
+        if(HostileCreature&&!HasClearCombatSight(CastTargetObject))
+        {C->GetSession()->SendCancelAttack();P.Status=TEXT("Target behind an obstruction; continuing route");return;}
         if(Target && Target!=C->GetPlayerGuid() && Target!=C->GetSelectedObject().Guid)C->SelectObject(Target);
         if(!PrepareCombatAction(P,I,8))return;
         // SendCastSpell's public UI path selects only in VR. Automation uses the same
@@ -1830,8 +1851,7 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         {
             PrepareSpellConfirmation(SpellName);
         }
-        if(C->GetWorldObject(Target,CastTargetObject)&&CastTargetObject.IsAttackable()&&!CastTargetObject.bIsPlayer&&!CastTargetObject.PetOwnerId
-            &&Dat->IsPluginSingleTargetOffensiveSpell(Spell)&&Dat->TryGetSpellInfo(Spell,SpellName,Icon))
+        if(HostileCreature&&Dat->IsPluginSingleTargetOffensiveSpell(Spell)&&Dat->TryGetSpellInfo(Spell,SpellName,Icon))
         {
             if(P.IsPolicy())this->CombatTarget=Target;
             FOffensiveCast Record;Record.Spell=Spell;Record.Target=Target;Record.Owner=P.Id;

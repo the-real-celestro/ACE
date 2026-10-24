@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "ACETestDatDirectory.h"
 #include "Framework/Application/SlateApplication.h"
 #include "ACEPlayerController.h"
 #include "VR/ACEVRComponent.h"
@@ -15,6 +16,7 @@
 #include "ACELoadingScreenActor.h"
 #include "ACERetailPortalAnimation.h"
 #include "ACECharacterAppearanceComponent.h"
+#include "ACEScriptComponent.h"
 #include "ACECharacterCreation.h"
 #include "ACEHoverTooltipWidget.h"
 #include "Components/BoxComponent.h"
@@ -23,6 +25,7 @@
 #include "Engine/StaticMesh.h"
 #include "Components/CapsuleComponent.h"
 #include "Camera/CameraComponent.h"
+#include "Camera/PlayerCameraManager.h"
 #include "ProceduralMeshComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
@@ -96,7 +99,7 @@ bool FACECreatureEscapeTest::RunTest(const FString&)
 {
     FEntryWorld F;
     auto* Dat=F.GI->GetSubsystem<UACEDatSubsystem>();
-    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))return false;
+    if(!Dat->LoadDatDirectory(ACETestDatDirectory()))return false;
     const auto Player=FCollisionShape::MakeCapsule(48,91.75);
     FCollisionQueryParams Q(SCENE_QUERY_STAT(CreatureEscape),true);
     for(uint32 Setup:{0x02000964u,0x02000041u,0x02001121u})
@@ -155,7 +158,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEPortalPlacementTest,"ACE.RetailParity.Porta
 bool FACEPortalPlacementTest::RunTest(const FString&)
 {
     FEntryWorld F;auto* Dat=F.GI->GetSubsystem<UACEDatSubsystem>();
-    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))return false;
+    if(!Dat->LoadDatDirectory(ACETestDatDirectory()))return false;
     auto* Client=F.GI->GetSubsystem<UACEClientSubsystem>();
     auto* PC=F.World->SpawnActor<AACEPlayerController>();PC->Client=Client;F.World->AddController(PC);
     auto* Pawn=F.World->SpawnActor<APawn>();auto* Capsule=NewObject<UCapsuleComponent>(Pawn);
@@ -231,7 +234,7 @@ bool FACEPortalMotionTest::RunTest(const FString&)
 {
     FEntryWorld F;
     auto* Dat=F.GI->GetSubsystem<UACEDatSubsystem>();
-    if(!TestTrue(TEXT("Retail DAT opens"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))))return false;
+    if(!TestTrue(TEXT("Retail DAT opens"),Dat->LoadDatDirectory(ACETestDatDirectory())))return false;
     auto* Client=F.GI->GetSubsystem<UACEClientSubsystem>();auto Session=Client->GetSession();
     auto* PC=F.World->SpawnActor<AACEPlayerController>();PC->Client=Client;F.World->AddController(PC);
     auto* Pawn=F.World->SpawnActor<APawn>();auto* Root=NewObject<USceneComponent>(Pawn);
@@ -327,7 +330,7 @@ bool FACEPortalDropTest::RunTest(const FString&)
     {
         FEntryWorld F;
         auto* Dat=F.GI->GetSubsystem<UACEDatSubsystem>();
-        if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+        if(!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
         auto AddWaterArrivals=[&](uint32 Block,float X,float Y,const TCHAR* GroundName,const TCHAR* DropName)
         {
             Dat->GetOrBuildLandblockMesh(Block,100);
@@ -363,7 +366,7 @@ bool FACEPortalDropTest::RunTest(const FString&)
     {
         FEntryWorld F;
         auto* Dat=F.GI->GetSubsystem<UACEDatSubsystem>();
-        if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+        if(!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
         auto* Client=F.GI->GetSubsystem<UACEClientSubsystem>();auto Session=Client->GetSession();
         F.World->SetGameMode(FURL(nullptr,TEXT("/Game/Test?game=/Script/Engine.GameModeBase"),TRAVEL_Absolute));
         auto* GM=F.World->GetAuthGameMode();
@@ -503,7 +506,7 @@ bool FACEShoushiGapTest::RunTest(const FString&)
 {
     FEntryWorld Fixture;
     auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if(!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     auto Spawn=[&](uint32 Guid,uint32 Setup,FVector Location,FQuat Rotation,uint32 Type) {
         FACEWorldObject O;O.Guid=Guid;O.SetupId=Setup;O.ItemType=Type;
         O.bHasPosition=true;O.Position.CellId=0xDA55001D;O.Position.Location=Location;
@@ -552,7 +555,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERadarArtTest,"ACE.RetailParity.RadarArt",
 bool FACERadarArtTest::RunTest(const FString&)
 {
     FEntryWorld Fixture;auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if(!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     auto* Resources=Dat->GetUiResources();
     for(uint32 Image=1;Image<=12;++Image) {
         const uint32 Id=Resources->ResolveTargetIndicatorId(Image);
@@ -591,7 +594,7 @@ bool FACEStreamingRetirementTest::RunTest(const FString&)
 {
     FEntryWorld Fixture;
     auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if(!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     Dat->EnsureLoaded();
     auto* Client=Fixture.GI->GetSubsystem<UACEClientSubsystem>();
     auto Session=Client->GetSession();
@@ -649,7 +652,7 @@ bool FACEPortalRetirementTest::RunTest(const FString&)
 {
     FEntryWorld Fixture;
     auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if(!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     Dat->EnsureLoaded();Dat->SetWorldStreamingAllowed(false);
     auto* Client=Fixture.GI->GetSubsystem<UACEClientSubsystem>();
     Fixture.World->SetGameMode(FURL(nullptr,TEXT("/Game/Test?game=/Script/Engine.GameModeBase"),TRAVEL_Absolute));
@@ -694,13 +697,137 @@ bool FACEPortalRetirementTest::RunTest(const FString&)
     return !HasAnyErrors();
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERetailLogoutTest, "ACE.RetailParity.LogoutTransition",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FACERetailLogoutTest::RunTest(const FString&)
+{
+    FEntryWorld F;
+    auto* Dat=F.GI->GetSubsystem<UACEDatSubsystem>();
+    FString DatDirectory=TEXT("C:/Turbine/Asheron's Call");FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),DatDirectory);
+    if(!Dat->LoadDatDirectory(DatDirectory))return false;
+    Dat->EnsureLoaded();
+    auto* Client=F.GI->GetSubsystem<UACEClientSubsystem>();auto Session=Client->GetSession();
+    Session->State=EACESessionState::InWorld;Session->PlayerGuid=0x50000100;
+    Session->PlayerVitals.CombatMode=int32(ACECombatMode::NonCombat);
+    auto* PC=F.World->SpawnActor<AACEPlayerController>();PC->Client=Client;
+    PC->SetPlayer(NewObject<ULocalPlayer>(GEngine));F.World->AddController(PC);
+    if(!PC->PlayerCameraManager) {
+        PC->PlayerCameraManager=F.World->SpawnActor<APlayerCameraManager>();
+        PC->PlayerCameraManager->InitializeFor(PC);
+    }
+    auto* Pawn=F.World->SpawnActor<APawn>();auto* Capsule=NewObject<UCapsuleComponent>(Pawn);
+    Pawn->SetRootComponent(Capsule);Pawn->AddInstanceComponent(Capsule);Capsule->InitCapsuleSize(22,88);Capsule->RegisterComponent();
+    PC->Possess(Pawn);PC->PlayerInput=NewObject<UPlayerInput>(PC);PC->SetupInputComponent();
+    PC->SetViewTarget(Pawn);
+    // This isolated world has not begun play, so route the real session event
+    // natively rather than relying on Unreal's suppressed actor script dispatch.
+    const auto StateHandle=Session->OnStateChanged.AddLambda([PC](EACESessionState State){PC->HandleSessionStateChanged(State);});
+    ON_SCOPE_EXIT {Session->OnStateChanged.Remove(StateHandle);};
+    FACEWorldObject Self;Self.Guid=Session->PlayerGuid;Self.bIsSelf=true;Self.bIsPlayer=true;
+    Self.SetupId=0x02000001;Self.MotionTableId=0x09000001;Self.Scale=1;
+    Self.Position.CellId=0xA9A10001;Self.bHasPosition=true;Session->WorldObjects.Add(Self.Guid,Self);
+    Session->PlayerPosition=Self.Position;
+    auto* App=PC->EnsurePawnAppearance();
+    if(!TestTrue(TEXT("Real player DAT appearance loads"),App && App->ApplyWorldObject(Self,100,false)))return false;
+    const double Deadline=FPlatformTime::Seconds()+20;
+    do {
+        PC->PreparePortalScreen();FTaskGraphInterface::Get().ProcessThreadUntilIdle(ENamedThreads::GameThread);
+        if(PC->LoadingScreenActor && PC->LoadingScreenActor->bMeshReady)break;
+        FPlatformProcess::Sleep(.002f);
+    } while(FPlatformTime::Seconds()<Deadline);
+    auto* Tunnel=PC->LoadingScreenActor.Get();
+    if(!TestTrue(TEXT("Logout has the actual retail tunnel ready"),Tunnel && Tunnel->bMeshReady))return false;
+    PC->ShowGameHUD();
+    auto* Canvas=PC->DatCanvasWidget.Get();auto* Binder=PC->DatGameplayBinder.Get();
+    const TSharedPtr<SWidget> Hud=Canvas?Canvas->TakeWidget():TSharedPtr<SWidget>();
+    if(!TestTrue(TEXT("Gameplay UI is present"),Canvas && Binder && Canvas->IsVisible()))return false;
+    auto* Sockets=ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
+    auto* Receiver=Sockets->CreateSocket(NAME_DGram,TEXT("Logout receiver"),false);
+    auto Address=Sockets->CreateInternetAddr();bool Valid=false;
+    Address->SetIp(TEXT("127.0.0.1"),Valid);Address->SetPort(0);
+    if(!TestTrue(TEXT("Isolated logout peer binds"),Receiver && Receiver->Bind(*Address)))return false;
+    ON_SCOPE_EXIT {Receiver->Close();Sockets->DestroySocket(Receiver);};
+    Receiver->GetAddress(*Address);
+    Session->SocketC2S=Sockets->CreateSocket(NAME_DGram,TEXT("Logout sender"),false);
+    Session->ServerC2SAddr=Address;Session->IssacClient=MakeUnique<FACEIsaac>(123u);
+
+    Binder->HandleOptionsNamedClick(TEXT("GameplayOptionsTab"));
+    TestTrue(TEXT("Leave World uses the normal logout path"),Binder->HandleOptionsNamedClick(TEXT("GameplayOptions_LeaveWorld_Button")));
+    TestTrue(TEXT("Logout awaits the server"),Session->IsLogOffPending());
+    TestTrue(TEXT("Retail non-PK delay is three seconds"),FMath::IsNearlyEqual(Session->GetLogOffPortalStartTime()-FPlatformTime::Seconds(),3.,.1));
+    const double StartTime=Session->GetLogOffPortalStartTime();Client->Logout();
+    TestEqual(TEXT("Repeated logout does not restart the animation delay"),Session->GetLogOffPortalStartTime(),StartTime);
+    TestFalse(TEXT("Combat is blocked immediately on logout"),Client->SendCastSpell(1));
+    FACEObjectMotionState Motion;Motion.CurrentStyle=ACEMotion::StanceNonCombat;
+    Motion.ActionCommand=0x1000011e;Motion.ActionSpeed=1;Motion.bNewAction=true;
+    PC->HandleMotionUpdate(Self.Guid,Motion);
+    PC->PlayerTick(.016f);
+    TestEqual(TEXT("Server logout motion survives local input polling"),App->ActionCommand,0x1000011eu);
+    TestTrue(TEXT("The world remains visible during the logout motion"),PC->GetViewTarget()==Pawn && !Pawn->IsHidden());
+    TestFalse(TEXT("The tunnel is not started before the retail delay"),PC->bEnterWorldLoading);
+    TestTrue(TEXT("Logout blocks player movement and look"),PC->IsMoveInputIgnored() && PC->IsLookInputIgnored());
+    auto* Effects=NewObject<UACEScriptComponent>(Pawn);Pawn->AddInstanceComponent(Effects);Effects->RegisterComponent();
+    Effects->InitializeFromObject(Self,100);Effects->NotifyAppearanceReady();
+    auto* Impact=Effects->PlayImpactEffect(0x5B,1.f);
+    if(!TestNotNull(TEXT("Incoming hit has its own effect"),Impact))return false;
+    Impact->TickComponent(.016f,LEVELTICK_All,nullptr);
+    TestFalse(TEXT("Incoming hits remain visible during the logout delay"),Impact->GetOwner()->IsActorBeingDestroyed());
+
+    Session->LogOffPortalStartTime=FPlatformTime::Seconds()-.5;PC->PlayerTick(.016f);
+    PC->PlayerCameraManager->UpdateCamera(.016f);
+    TestTrue(TEXT("World stretches before switching cameras"),PC->bLogOffWorldFadeStarted && PC->GetViewTarget()==Pawn && PC->PlayerCameraManager->GetFOVAngle()>100.f);
+    TestTrue(TEXT("HUD remains visible through world fade"),Canvas->IsVisible());
+    Session->LogOffPortalStartTime=FPlatformTime::Seconds()-1.01;PC->PlayerTick(.016f);
+    TestTrue(TEXT("One-second world fade enters the prepared tunnel"),PC->bEnterWorldLoading && PC->GetViewTarget()==Tunnel && !Tunnel->IsHidden());
+    TestTrue(TEXT("Old world avatar is hidden behind the portal"),Pawn->IsHidden());
+    Impact->TickComponent(.016f,LEVELTICK_All,nullptr);
+    TestTrue(TEXT("Portal view retires the old world's hit effects"),Impact->GetOwner()->IsActorBeingDestroyed());
+    const uint32 Actions=Session->NextGameActionSequence;
+    for(int32 Frame=0;Frame<120;++Frame) {Tunnel->Tick(1.f/60.f);PC->PlayerTick(1.f/60.f);}
+    TestTrue(TEXT("Logout portal animates while waiting for server"),Tunnel->IsActorTickEnabled() && PC->GetViewTarget()==Tunnel);
+    TestFalse(TEXT("Logout cannot run arrival, destination streaming or world reveal"),PC->bDestinationStreamingStarted || PC->bPortalExitNotified || PC->bWorldRevealActive);
+    TestEqual(TEXT("Waiting cannot send LoginComplete or world-entry actions"),Session->NextGameActionSequence,Actions);
+    TestTrue(TEXT("Gameplay UI is retained until server logout completes"),Canvas->IsVisible());
+    Session->LogOffPortalStartTime=FPlatformTime::Seconds()-6.;PC->PlayerTick(.016f);
+    TestTrue(TEXT("Elapsed animation alone cannot switch to character selection"),Session->State==EACESessionState::InWorld && PC->bEnterWorldLoading);
+    FACEBinaryWriter Ack;Ack.WriteUInt32(ACEOpcode::CharacterLogOff);Session->HandleGameMessage(Ack.GetData());
+    TestTrue(TEXT("Logout ack preserves tunnel until roster arrives"),Session->IsLogOffPending() && PC->bEnterWorldLoading);
+    FACEBinaryWriter Roster;Roster.WriteUInt32(ACEOpcode::CharacterList);Roster.WriteUInt32(0);Roster.WriteUInt32(1);
+    Roster.WriteUInt32(Self.Guid);Roster.WriteString16L(TEXT("Logout tester"));Roster.WriteUInt32(0);
+    Roster.WriteUInt32(0);Roster.WriteUInt32(11);Roster.WriteString16L(TEXT("fixture"));
+    Session->HandleGameMessage(Roster.GetData());
+    TestEqual(TEXT("Authoritative roster ends logout"),Session->State,EACESessionState::CharacterSelect);
+    TestFalse(TEXT("Roster clears pending logout and presentation"),Session->IsLogOffPending() || PC->IsWorldTransitionActive());
+    TestTrue(TEXT("Roster releases the portal and input lock"),!PC->LoadingScreenActor && !PC->IsMoveInputIgnored() && !PC->IsLookInputIgnored());
+    TestFalse(TEXT("Roster leaves portal rendering mode"),Dat->IsInPortalSpace());
+
+    // PK and PKLite share retail's additional twenty seconds, sampled at request.
+    for(int32 Status:{ACEPlayerKillerStatus::PK,ACEPlayerKillerStatus::PKLite}) {
+        Session->State=EACESessionState::InWorld;Session->PlayerGuid=Self.Guid;
+        Session->PlayerVitals.PlayerKillerStatus=Status;Client->Logout();PC->PlayerTick(.016f);
+        TestTrue(TEXT("PK logout keeps the retail 23-second delay"),FMath::IsNearlyEqual(Session->GetLogOffPortalStartTime()-FPlatformTime::Seconds(),23.,.1));
+        TestFalse(TEXT("PK delay does not hide the world early"),PC->bEnterWorldLoading);
+        Session->HandleGameMessage(Roster.GetData());
+        TestFalse(TEXT("An early authoritative roster still releases all input"),PC->IsWorldTransitionActive() || PC->IsMoveInputIgnored());
+    }
+    Session->State=EACESessionState::InWorld;Session->PlayerGuid=Self.Guid;
+    Session->PlayerVitals.PlayerKillerStatus=0;
+    PC->BeginWorldTransition(TEXT("logout-during-portal"));auto* ExistingTunnel=PC->LoadingScreenActor.Get();
+    Client->Logout();PC->PlayerTick(.016f);
+    TestTrue(TEXT("Logout inside a portal retains the current tunnel"),PC->LoadingScreenActor==ExistingTunnel && !PC->bLogOffWorldFadeStarted);
+    Session->Disconnect();
+    TestFalse(TEXT("Disconnect cannot strand the logout animation"),PC->IsWorldTransitionActive() || PC->IsMoveInputIgnored() || PC->IsLookInputIgnored());
+    PC->DestroyGameHUD();
+    return !HasAnyErrors();
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACELoadingTransitionTest, "ACE.RetailParity.LoadingTransition",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACELoadingTransitionTest::RunTest(const FString&)
 {
     FEntryWorld Fixture;
     auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if(!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     Dat->EnsureLoaded();
     auto* Client=Fixture.GI->GetSubsystem<UACEClientSubsystem>();auto Session=Client->GetSession();
     auto* PC=Fixture.World->SpawnActor<AACEPlayerController>();PC->Client=Client;
@@ -791,7 +918,8 @@ bool FACEPortalInterfaceTest::RunTest(const FString&)
     ON_SCOPE_EXIT {GGameUserSettingsIni=OriginalConfig;ACEInputBindings::Reload();};
     FEntryWorld F;
     auto* Dat=F.GI->GetSubsystem<UACEDatSubsystem>();
-    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))return false;
+    FString DatDirectory=TEXT("C:/Turbine/Asheron's Call");FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),DatDirectory);
+    if(!Dat->LoadDatDirectory(DatDirectory))return false;
     Dat->EnsureLoaded();
     auto* Client=F.GI->GetSubsystem<UACEClientSubsystem>();auto Session=Client->GetSession();
     Session->State=EACESessionState::InWorld;Session->PlayerGuid=0x50000100;
@@ -884,7 +1012,7 @@ bool FACETerrainPortalRevealTest::RunTest(const FString&)
 {
     FEntryWorld Fixture;
     auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if(!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     Dat->EnsureLoaded();
     auto* Owner=Fixture.World->SpawnActor<AActor>();
     auto* Terrain=NewObject<UACETerrainPresenterComponent>(Owner);
@@ -941,7 +1069,7 @@ bool FACETerrainArrivalTest::RunTest(const FString& Parameters)
     FEntryWorld Fixture;
     auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
     const double Start=FPlatformTime::Seconds();
-    if (!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if (!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     Dat->EnsureLoaded();
     // A unique test fingerprint exercises cold disk misses without removing the
     // user's cache. No maintenance is run with this synthetic fingerprint.
@@ -1009,7 +1137,7 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
 {
     FEntryWorld Fixture;
     auto* Dat = Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if (!Dat || !Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if (!Dat || !Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     auto* Client = Fixture.GI->GetSubsystem<UACEClientSubsystem>();
     auto Session = Client->GetSession();
     auto* Controller = Fixture.World->SpawnActor<AACEPlayerController>();
@@ -1322,9 +1450,16 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
         // must never turn an orbit key into forward/backward/turn movement.
         for (bool NumLockOn : {false,true}) for (int32 Direction=0;Direction<4;++Direction)
         {
+#if PLATFORM_WINDOWS
             const uint32 Scans[]={0x4B,0x4D,0x48,0x50}, Navigation[]={0x25,0x27,0x26,0x28}, Numpad[]={0x64,0x66,0x68,0x62};
             const uint32 Mapped=FACEKeyboardRouter::NumpadVirtualKey(NumLockOn?Numpad[Direction]:Navigation[Direction],Scans[Direction],false);
             const FKey PhysicalKey=FInputKeyManager::Get().GetKeyFromCodes(Mapped,0);
+#else
+            // Other platform backends already produce Unreal keypad keys.
+            // Windows VK values are unrelated to SDL's native key codes.
+            const FKey KeypadKeys[]={EKeys::NumPadFour,EKeys::NumPadSix,EKeys::NumPadEight,EKeys::NumPadTwo};
+            const FKey PhysicalKey=KeypadKeys[Direction];
+#endif
             Controller->PlayerInput->FlushPressedKeys();PressKey(PhysicalKey);
             Controller->PlayerInput->ProcessInputStack({},.016f,false);
             Pawn->SetActorTransform(StartTransform);Controller->PredictedPose=StartPose;Controller->bHavePredictedPose=true;
@@ -1739,7 +1874,9 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
     auto* DepthCapture=NewObject<USceneCaptureComponent2D>(DepthOwner);
     DepthOwner->SetRootComponent(DepthCapture); DepthCapture->RegisterComponent();
     auto* DepthTarget=NewObject<UTextureRenderTarget2D>(DepthCapture);
-    DepthTarget->RenderTargetFormat=RTF_R32f; DepthTarget->InitAutoFormat(32,32);
+    // Vulkan's FLinearColor readback supports RGBA32f, but not single-channel
+    // R32f. Preserve 32-bit depth precision on both Vulkan and D3D fixtures.
+    DepthTarget->RenderTargetFormat=RTF_RGBA32f; DepthTarget->InitAutoFormat(32,32);
     DepthCapture->TextureTarget=DepthTarget; DepthCapture->CaptureSource=SCS_SceneDepth;
     DepthCapture->bCaptureEveryFrame=false; DepthCapture->bCaptureOnMovement=false; DepthCapture->FOVAngle=10;
     DepthCapture->PrimitiveRenderMode=ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList;
@@ -1852,7 +1989,7 @@ bool FACERetailPortalSpaceTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("Retail UIGlobals fixed-point curve sample"), GetAnimLevel(Pair.Key), Pair.Value);
     FEntryWorld Fixture;
     auto* Dat = Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if (!Dat || !Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if (!Dat || !Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     auto* Tunnel = Fixture.World->SpawnActor<AACELoadingScreenActor>();
     Tunnel->BeginTunnel();
     const double Deadline = FPlatformTime::Seconds() + 20;

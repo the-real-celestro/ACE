@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "ACETestDatDirectory.h"
 #include "Misc/ScopeExit.h"
 #include "Misc/Paths.h"
 #include "Misc/FileHelper.h"
@@ -15,6 +16,7 @@
 #include "Components/CanvasPanel.h"
 #include "Components/Border.h"
 #include "ACEDatSubsystem.h"
+#include "Dat/ACEDatTextureResolver.h"
 #include "ACEClientSubsystem.h"
 #include "ACEPlayerController.h"
 #include "SocketSubsystem.h"
@@ -39,7 +41,7 @@ bool FACESelectionToolbarTest::RunTest(const FString&)
     TGuardValue<uint64> FrameGuard(GFrameCounter, GFrameCounter);
     auto* GI = NewObject<UGameInstance>();
     auto* Dat = NewObject<UACEDatSubsystem>(GI);
-    if (!TestTrue(TEXT("Retail DAT opens"), Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))) return false;
+    if (!TestTrue(TEXT("Retail DAT opens"), Dat->LoadDatDirectory(ACETestDatDirectory()))) return false;
     ON_SCOPE_EXIT { Dat->Deinitialize(); };
     auto* Resources = NewObject<UACEUIResourceResolver>(); Resources->Initialize(Dat);
     auto* Manager = NewObject<UACEUIElementManager>(); Manager->Initialize();
@@ -74,32 +76,105 @@ bool FACESelectionToolbarTest::RunTest(const FString&)
     const auto Health = Manager->FindElementByName(TEXT("ToolbarHealthMeter"));
     const auto Mana = Manager->FindElementByName(TEXT("ToolbarManaMeter"));
     const auto Stack = Manager->FindElementByName(TEXT("StackSizeSlider"));
-    if (!TestTrue(TEXT("Authored toolbar controls exist"), Text && Field && Health && Mana && Stack)) return false;
+    const auto Frame = Manager->FindElementByName(TEXT("SelectionBlinkField"));
+    if (!TestTrue(TEXT("Authored toolbar controls exist"), Text && Field && Health && Mana && Stack && Frame)) return false;
 
     FWidgetRenderer Renderer(true, true);
-    auto* Target = FWidgetRenderer::CreateTargetFor(FVector2D(1600, 900), TF_Bilinear, true);
+    FIntPoint ImageSize(1600, 900);
+    auto* Target = FWidgetRenderer::CreateTargetFor(FVector2D(ImageSize), TF_Bilinear, true);
     const FString ArtDirectory = FPaths::ProjectSavedDir() / TEXT("Automation/SelectionToolbar");
     IFileManager::Get().MakeDirectory(*ArtDirectory, true);
     auto Draw = [&](const TCHAR* Name, float DPIScale = 1.f)
     {
+        if (Target->SizeX != ImageSize.X || Target->SizeY != ImageSize.Y)
+            Target->ResizeTarget(ImageSize.X, ImageSize.Y);
         const TSharedRef<SWidget> Scaled = SNew(SDPIScaler).DPIScale(DPIScale)[Slate];
         for (int32 Pass = 0; Pass < 3; ++Pass)
         {
             ++GFrameCounter;
             Canvas->NativeTick(Canvas->GetCachedGeometry(), 0.f);
-            Renderer.DrawWidget(Target, Scaled, FVector2D(1600, 900), 0.f);
+            Renderer.DrawWidget(Target, Scaled, FVector2D(ImageSize), 0.f);
             FlushRenderingCommands();
         }
         TArray<FColor> Pixels; Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);
-        TArray64<uint8> PNG; FImageUtils::PNGCompressImageArray(1600, 900, Pixels, PNG);
+        TArray64<uint8> PNG; FImageUtils::PNGCompressImageArray(ImageSize.X, ImageSize.Y, Pixels, PNG);
         FFileHelper::SaveArrayToFile(PNG, *(ArtDirectory / (FString(Name) + TEXT(".png"))));
+        return Pixels;
     };
+    // Retail draws the depth-2 end trim behind the depth-1 panel buttons.
+    // Exercise the loaded layout and actual Slate pixels, including selected
+    // artwork and enlarged UI, so a reversed depth import cannot clip either rim.
+    const auto LeftTrim = Manager->FindElementByName(TEXT("PanelButton_LeftSideSpacer"));
+    const auto RightTrim = Manager->FindElementByName(TEXT("PanelButton_RightSideSpacer"));
+    if (!TestTrue(TEXT("Toolbar end trim exists"), LeftTrim && RightTrim)) return false;
+    const auto Tooltip = UACEUILayoutResolver::LoadTemplate(0x21000041, 0x10000395);
+    if (TestTrue(TEXT("Retail object tooltip loads"), Tooltip.IsValid()))
+        TestEqual(TEXT("Exported signed tooltip depth converts without overflow"), Tooltip->ZLevel, int64(1));
+    for (const TCHAR* Name : {TEXT("Social"), TEXT("Magic"), TEXT("SkillManagement"),
+        TEXT("QuestManagement"), TEXT("World"), TEXT("Options")})
+    {
+        const auto Button = Manager->FindElementByName(FString::Printf(TEXT("PanelButton_%sButton"), Name));
+        if (!TestTrue(TEXT("Panel button exists"), Button.IsValid())) return false;
+        const auto Parent = Button->Parent.Pin();
+        TestTrue(TEXT("End trim paints before each panel icon"),
+            Parent->Children.IndexOfByKey(LeftTrim) < Parent->Children.IndexOfByKey(Button)
+            && Parent->Children.IndexOfByKey(RightTrim) < Parent->Children.IndexOfByKey(Button));
+    }
+    for (float Scale : {1.f, 1.5f, 2.f}) for (int32 Selected = 0; Selected < 3; ++Selected)
+    {
+        // Keep at least the authored 800x600 logical viewport at every scale.
+        ImageSize = FIntPoint(1600, FMath::Max(900, FMath::CeilToInt(600 * Scale)));
+        if (Selected == 0) Binder->HidePanel();
+        else Binder->ShowPanelPage(Selected == 1 ? TEXT("SocialPanel_Field") : TEXT("OptionsPanel_Field"));
+        Manager->BringFloatyToFront(Toolbar);
+        const FString Name = FString::Printf(TEXT("PanelIcons_%d_%d"), int32(Scale * 100), Selected);
+        const auto WithTrim = Draw(*Name, Scale);
+        LeftTrim->bVisible = RightTrim->bVisible = false;
+        const auto WithoutTrim = Draw(*(Name + TEXT("_WithoutTrim")), Scale);
+        LeftTrim->bVisible = RightTrim->bVisible = true;
+        int32 CheckedPixels = 0, CoveredPixels = 0;
+        for (const TCHAR* Icon : {TEXT("Social"), TEXT("Options")})
+        {
+            const int32 PreviousSamples = CheckedPixels;
+            const auto Button = Manager->FindElementByName(FString::Printf(TEXT("PanelButton_%sButton"), Icon));
+            const auto Trim = FCString::Strcmp(Icon, TEXT("Social")) == 0 ? LeftTrim : RightTrim;
+            const auto Origin = Button->GetScreenOrigin();
+            const auto TrimOrigin = Trim->GetScreenOrigin();
+            const auto* State = Button->ResolvePaintState(false, false, false);
+            FACEDatTexture Texture; FACEDatDecodedSurface Source;
+            auto* TextureResolver = Dat->GetTextureResolver();
+            if (!TestTrue(TEXT("Toolbar icon artwork decodes"), State
+                && TextureResolver->LoadTextureForUi(State->ImageFileId, Texture)
+                && TextureResolver->DecodeTextureForUi(Texture, Source))) return false;
+            for (int32 Y = 0; Y < FMath::Min(Button->Height, Source.Height); ++Y)
+            for (int32 X = 0; X < FMath::Min(Button->Width, Source.Width); ++X)
+            {
+                const auto Color = Source.Pixels[Y * Source.Width + X];
+                if (Origin.X + X < TrimOrigin.X || Origin.X + X >= TrimOrigin.X + Trim->Width
+                    || Color.A != 255 || FMath::Max3(Color.R, Color.G, Color.B) < 32) continue;
+                const FVector2D Point = Canvas->LayoutToViewport(FVector2D(Origin.X + X + .5, Origin.Y + Y + .5)) * Scale;
+                const int32 Index = FMath::FloorToInt(Point.Y) * ImageSize.X + FMath::FloorToInt(Point.X);
+                if (!TestTrue(TEXT("Icon rim lies inside the screenshot"), WithTrim.IsValidIndex(Index))) return false;
+                ++CheckedPixels;
+                if (WithTrim[Index] != WithoutTrim[Index]) ++CoveredPixels;
+                TestTrue(TEXT("Visible rim accepts its panel button, not the trim"),
+                    Manager->HitTestCanvas(Origin.X + X, Origin.Y + Y) == Button);
+            }
+            TestTrue(FString::Printf(TEXT("%s rim has opaque artwork under its trim bounds"), Icon),
+                CheckedPixels > PreviousSamples);
+        }
+        TestEqual(TEXT("End trim never covers opaque icon pixels"), CoveredPixels, 0);
+    }
+    ImageSize = FIntPoint(1600, 900);
+    Binder->HidePanel(); Draw(TEXT("PanelIconsRestored"));
     Client->SelectObject(Item.Guid); Binder->RefreshSelectionOverlay();
     TestEqual(TEXT("Raw network material produces full selection name"), Binder->SelectionText->GetText().ToString(), FString(TEXT("Copper Bracelet")));
     TestFalse(TEXT("Structure never opens a mana vial"), bool(Mana->bVisible));
     TestFalse(TEXT("Jewelry never opens a health vial"), bool(Health->bVisible));
     TestFalse(TEXT("One item hides split controls"), bool(Stack->bVisible));
     TestEqual(TEXT("Selected field uses retail ObjectSelected state"), Field->DefaultState, 0x1000000Bu);
+    const double RemainingFlash = Binder->ToolbarSelectionFlashUntil - FPlatformTime::Seconds();
+    TestTrue(TEXT("Toolbar flash uses the DAT quarter-second pause"), RemainingFlash > 0 && RemainingFlash <= .25);
     auto* Label = Cast<UACERetailTextBlock>(Binder->SelectionText);
     if (!TestNotNull(TEXT("Selected name uses the DAT bitmap text renderer"), Label)) return false;
     if (!TestNotNull(TEXT("Selected name resolves its bitmap font"), Label->GetBitmapFont())) return false;
@@ -110,12 +185,21 @@ bool FACESelectionToolbarTest::RunTest(const FString&)
     const auto* TextSlot = Cast<UCanvasPanelSlot>(Label->Slot);
     if (!TestNotNull(TEXT("Name is attached to the toolbar canvas"), TextSlot)) return false;
     TestTrue(TEXT("Name retains full authored 140x31 bounds"), TextSlot->GetSize().Equals(FVector2D(140, 31)));
+    Binder->ToolbarSelectionFlashUntil=FPlatformTime::Seconds()+10; // hold the flash for the render capture
+    Draw(TEXT("CopperBraceletFlash"));
+    TestEqual(TEXT("Flash paints the retail green indicator"),Frame->PaintState,0x1000000Bu);
+    Binder->ToolbarSelectionFlashUntil=0; Binder->RefreshSelectionOverlay();
     Draw(TEXT("CopperBracelet"));
+    TestEqual(TEXT("An item without a meter returns to the normal field"),Field->DefaultState,1u);
+    TestEqual(TEXT("Expired flash clears the child indicator's selected state"),Frame->PaintState,0u);
+    TestEqual(TEXT("Expiration keeps the selected item's name"),Label->GetText().ToString(),FString(TEXT("Copper Bracelet")));
+    TestEqual(TEXT("Expiration does not deselect the item"),Client->GetSelectedObject().Guid,Item.Guid);
 
     Session.WorldObjects[Item.Guid].Name = TEXT("Copper Bracelet"); Binder->RefreshSelectionOverlay();
     TestEqual(TEXT("Already decorated material is not doubled"), Label->GetText().ToString(), FString(TEXT("Copper Bracelet")));
     Session.SelectedObject.bShowMana = true; Session.SelectedObject.ManaFraction = .4f;
-    Binder->RefreshSelectionOverlay();
+    Client->OnSelectionChanged.Broadcast(Session.SelectedObject); Binder->RefreshSelectionOverlay();
+    TestEqual(TEXT("Late mana replies do not restart the toolbar flash"),Binder->ToolbarSelectionFlashUntil,0.0);
     TestTrue(TEXT("Successful item mana reply exposes the authored mana vial"), bool(Mana->bVisible));
     TestEqual(TEXT("Mana fill comes from response independently of structure"), Mana->MeterFillFraction, .4f);
     TestEqual(TEXT("Mana keeps the authored background image"), Mana->ImageFileId, 0x060022D5u);
@@ -126,7 +210,8 @@ bool FACESelectionToolbarTest::RunTest(const FString&)
     TestEqual(TEXT("Empty mana has zero fill"), Mana->MeterFillFraction, 0.f);
 
     Session.SelectedObject.bShowHealth = true; Session.SelectedObject.HealthFraction = .65f;
-    Binder->RefreshSelectionOverlay();
+    Client->OnSelectionChanged.Broadcast(Session.SelectedObject); Binder->RefreshSelectionOverlay();
+    TestEqual(TEXT("Health updates do not restart the toolbar flash"),Binder->ToolbarSelectionFlashUntil,0.0);
     TestTrue(TEXT("Health selection exposes authored health vial"), bool(Health->bVisible));
     TestFalse(TEXT("Health takes precedence over stale mana"), bool(Mana->bVisible));
     TestEqual(TEXT("Health uses response fraction"), Health->MeterFillFraction, .65f);
@@ -135,6 +220,7 @@ bool FACESelectionToolbarTest::RunTest(const FString&)
 
     auto& StackItem = Session.WorldObjects[Item.Guid]; StackItem.Name = TEXT("Arrow");
     StackItem.PluralName = TEXT("Arrows"); StackItem.MaterialType = 64; StackItem.StackSize = StackItem.MaxStackSize = 50;
+    Client->SelectObject(Item.Guid);
     Binder->SelectedStackAmount = 50; Binder->RefreshSelectionOverlay();
     TestTrue(TEXT("A stack always shows split controls"), bool(Stack->bVisible));
     TestFalse(TEXT("A stack suppresses even a stale health reply"), bool(Health->bVisible));
@@ -143,7 +229,13 @@ bool FACESelectionToolbarTest::RunTest(const FString&)
     TestTrue(TEXT("Stack name is one line above quantity controls"), Text->bTextOneLine);
     TestEqual(TEXT("Stack name aligns left in retail state"), int32(Label->GetTextJustification()), int32(ETextJustify::Left));
     TestEqual(TEXT("Stack uses retail selected field state"), Field->DefaultState, 0x1000000Cu);
+    Binder->ToolbarSelectionFlashUntil=FPlatformTime::Seconds()+10;
+    Draw(TEXT("StackFlash"));
+    Binder->ToolbarSelectionFlashUntil=0; Binder->RefreshSelectionOverlay();
     Draw(TEXT("Stack"));
+    TestEqual(TEXT("Stack flash settles into the retail StackedItem state"),Field->DefaultState,0x1000000Du);
+    TestEqual(TEXT("Stack flash clears its green indicator"),Frame->PaintState,0u);
+    TestTrue(TEXT("Ending the stack flash preserves split controls"),bool(Stack->bVisible));
 
     const auto Track = Stack->Children[0], Thumb = Stack->Children[1];
     TestEqual(TEXT("Retail stack track art"), Track->ImageFileId, 0x06004CF6u);
@@ -159,7 +251,6 @@ bool FACESelectionToolbarTest::RunTest(const FString&)
     TestEqual(TEXT("Partial quantity does not shrink the track"), Track->Width, Stack->Width);
     TestEqual(TEXT("Typed quantity immediately repositions thumb"), Thumb->X, 10);
     TestEqual(TEXT("Typed quantity immediately updates name"), Label->GetText().ToString(), FString(TEXT("7 Steel Arrows (of 50)")));
-    const auto Frame = Manager->FindElementByName(TEXT("SelectionBlinkField"));
     TestTrue(TEXT("Opaque selection frame paints below the slider"), Field->Children.IndexOfByKey(Frame) < Field->Children.IndexOfByKey(Stack));
     Draw(TEXT("StackPartial"));
     Draw(TEXT("StackPartial150"), 1.5f);

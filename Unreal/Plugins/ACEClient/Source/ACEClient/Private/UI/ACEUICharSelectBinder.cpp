@@ -102,7 +102,8 @@ void UACEUICharSelectBinder::Initialize(UACEClientSubsystem* InClient, UACEUIEle
 	UACEUICanvasWidget* InCanvas, AACEPlayerController* InPC,
 	const TArray<FACECharacterInfo>& InCharacters, const FString& InServerName)
 {
-	const int32 PreviousSelection = SelectedCharacterId;
+	const int32 PreviousSelection = InClient && InClient->GetSession() && InClient->GetSession()->GetPreferredCharacterId()
+		? InClient->GetSession()->GetPreferredCharacterId() : SelectedCharacterId;
 	Shutdown();
 	Client = InClient;
 	Manager = InManager;
@@ -208,6 +209,7 @@ void UACEUICharSelectBinder::SelectCharacterIndex(int32 Index)
 	}
 	SelectedIndex = Index;
 	SelectedCharacterId = Characters[Index].CharacterId;
+	if (Client && Client->GetSession()) Client->GetSession()->SetPreferredCharacterId(SelectedCharacterId);
 }
 
 void UACEUICharSelectBinder::EnterSelectedCharacter()

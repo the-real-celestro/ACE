@@ -1,6 +1,8 @@
 #include "ACELoginWidget.h"
 #include "ACELobbyArt.h"
 #include "ACELobbyAccountList.h"
+#include "ACEDesktopDisplay.h"
+#include "ACEPlayerController.h"
 #include "UI/ACERetailTextBlock.h"
 #include "UI/ACEUIFontStyles.h"
 #include "UI/ACEUIResourceResolver.h"
@@ -1003,6 +1005,13 @@ void UACELoginWidget::EnsureDefaultLayout()
 		UVerticalBox* Check; AddH(Cols,SidePanel(TEXT("Installation check"),Check,430.f),FMargin(0),false,VAlign_Top);
 		FileRows=VBox(); AddLine(Check,FileRows,12);
 		FileStatus=Text(TEXT(""),BodyFont(13.5f),Hex(0x8f8366),true); AddLine(Check,FileStatus,0);
+#if !PLATFORM_ANDROID
+		if (!UHeadMountedDisplayFunctionLibrary::IsHeadMountedDisplayEnabled())
+		{
+			auto* GraphicsActions=HBox(); AddLine(Check,GraphicsActions,0);
+			AddH(GraphicsActions,ActionButton(TEXT("Reset graphics"),TEXT("resetgraphics")),FMargin(0,16,0,0));
+		}
+#endif
 	}
 
 	UVerticalBox* UpdatesPage; auto* UpdatesWindow=PageWindow(TEXT("Client Updates"),UpdatesPage,true); Pages->AddChild(UpdatesWindow); HugTop(UpdatesWindow);
@@ -2053,6 +2062,11 @@ void UACELoginWidget::SetPasswordVisible(bool bVisible)
 
 void UACELoginWidget::RunAction(const FString& Action, const FString& Value)
 {
+	if(Action==TEXT("resetgraphics"))
+	{
+		FACEDesktopDisplay::ResetGraphics(Cast<AACEPlayerController>(GetOwningPlayer()));
+		SetStatus(TEXT("Graphics reset. Windowed mode and default graphics restored."));return;
+	}
 	if(Action==TEXT("togglepassword")){SetPasswordVisible(PasswordBox&&PasswordBox->GetIsPassword());return;}
 	if(Action==TEXT("clearsearch"))
 	{

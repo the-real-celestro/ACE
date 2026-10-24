@@ -1045,9 +1045,19 @@ bool UACEUIGameplayBinder::TryHandleModalPopupClick(FVector2D Absolute)
 		}
 		return true;
 	}
-	if (!bChatTargetPopupOpen) return false;
-	TryHandleChatTargetPopupClick(Absolute);
-	return true; // The dismissing click also belongs to the popup.
+	if (bChatTargetPopupOpen)
+	{
+		TryHandleChatTargetPopupClick(Absolute);
+		return true; // The dismissing click also belongs to the popup.
+	}
+	if (bVendorFilterDropdownOpen)
+	{
+		// Match the popup's paint priority before the canvas starts any underlying
+		// scrollbar/item drag. Outside clicks dismiss without activating controls.
+		TryHandleVendorFilterDropdownClick(Absolute);
+		return true;
+	}
+	return false;
 }
 
 bool UACEUIGameplayBinder::TryHandleChatTargetPopupClick(FVector2D Absolute)
@@ -1090,6 +1100,20 @@ bool UACEUIGameplayBinder::TryHandleChatTargetPopupClick(FVector2D Absolute)
 	}
 	CloseChatTargetPopup();
 	return false;
+}
+
+bool UACEUIGameplayBinder::DispatchActionDeckCommand(const FString& Command)
+{
+    if(!Client||Client->GetSessionState()!=EACESessionState::InWorld)return false;
+    FString Message=Command.TrimStartAndEnd();
+    if(!Message.StartsWith(TEXT("/"))&&!Message.StartsWith(TEXT("@")))return false;
+    Message[0]=TEXT('@');
+    // Route through the same aliases, channel selection and server-command path
+    // as typed chat, but leave the user's unfinished message and focus intact.
+    const int32 PreviousSource=ChatSourceWindow;ChatSourceWindow=0;
+    const bool Result=TryDispatchChatCommand(Message);
+    ChatSourceWindow=PreviousSource;
+    return Result;
 }
 
 bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEditableTextBox* Entry, bool* bClearEntry)

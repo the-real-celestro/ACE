@@ -58,6 +58,7 @@
 #include "UI/ACEUIResourceResolver.h"
 #include "UI/ACERetailTextBlock.h"
 #include "UI/ACEAppraisalFormatting.h"
+#include "UI/ACERetailVendorCategories.h"
 #include "UI/ACERetailTextEntry.h"
 #include "UI/ACERetailKeySelector.h"
 #include "Engine/GameInstance.h"
@@ -178,7 +179,7 @@ FORCENOINLINE void FACERetailAugmentationUIFixture::Check(FAutomationTestBase& T
     for (int32 Id : {39, 44, 47, 34})
     {
         FACESkillInfo Skill; Skill.SkillId = Id;
-        Skill.AdvancementClass = Id == 39 ? 3 : 2;
+        Skill.AdvancementClass = Id == 39 ? 3 : Id == 34 ? 1 : 2;
         Skill.InitLevel = Id == 39 ? 10 : 5; Skill.Ranks = 50;
         V.Skills.Add(Skill);
     }
@@ -200,15 +201,42 @@ FORCENOINLINE void FACERetailAugmentationUIFixture::Check(FAutomationTestBase& T
     }
     V.StatQualityInts.Add(326, 1); V.StatQualityInts.Add(344, 3);
     Dat->RecomputePlayerStats(V, {}); Client->OnVitalsUpdated.Broadcast(V);
-    Gameplay->SelectedSkillId = 39; Gameplay->RefreshSkillOverlays();
-    Test.TestEqual(TEXT("Retail Jack/spec luminance remain visible without active spells"),
-        Gameplay->AttrFooterTitle->GetText().ToString(), FString(TEXT("Cooking: 177 (+11)")));
-    const int32 CookingRow = Gameplay->SkillRowIds.IndexOfByKey(39);
-    if (Test.TestTrue(TEXT("Modified-only augmented skill still has a row"), CookingRow != INDEX_NONE))
+    for (int32 Id : {39, 44, 47, 34})
     {
-        const auto Color = Gameplay->SkillRowValues[CookingRow]->GetColorAndOpacity().GetSpecifiedColor();
-        Test.TestTrue(TEXT("Retail modified-only augmentations paint green"), Color.G > Color.R);
+        Gameplay->SelectedSkillId = Id; Gameplay->RefreshSkillOverlays();
+        const int32 Row = Gameplay->SkillRowIds.IndexOfByKey(Id);
+        if (Test.TestTrue(TEXT("Augmented trained, specialized and untrained skills have rows"), Row != INDEX_NONE))
+        {
+            const auto Color = Gameplay->SkillRowValues[Row]->GetColorAndOpacity().GetSpecifiedColor();
+            Test.TestTrue(TEXT("Jack/spec luminance alone paint neutral ivory"), Color.Equals(FLinearColor(.95f, .95f, .9f, 1.f)));
+            Test.TestFalse(TEXT("Permanent gains have no positive footer suffix"), Gameplay->AttrFooterTitle->GetText().ToString().Contains(TEXT(" (+")));
+        }
     }
+    Gameplay->SelectedSkillId = 39;
+    auto CheckCooking = [&](const TCHAR* Title, int32 Modifier)
+    {
+        Client->OnVitalsUpdated.Broadcast(V); Gameplay->RefreshSkillOverlays();
+        Test.TestEqual(TEXT("Skill footer includes permanent gains in its baseline"),
+            Gameplay->AttrFooterTitle->GetText().ToString(), FString(Title));
+        const int32 Row = Gameplay->SkillRowIds.IndexOfByKey(39);
+        if (Test.TestTrue(TEXT("Cooking remains visible"), Row != INDEX_NONE))
+        {
+            const auto Color = Gameplay->SkillRowValues[Row]->GetColorAndOpacity().GetSpecifiedColor();
+            Test.TestTrue(TEXT("Row color agrees with actual spell/vitae contribution"),
+                Modifier > 0 ? Color.G > Color.R : Modifier < 0 ? Color.R > Color.G : Color.Equals(FLinearColor(.95f, .95f, .9f, 1.f)));
+        }
+    };
+    CheckCooking(TEXT("Cooking: 177"), 0);
+    FACEActiveEnchantment Buff; Buff.SpellId = 3; Buff.SpellCategory = 102;
+    Buff.StatModType = 0x8010; Buff.StatModKey = 39; Buff.StatModValue = 40;
+    Dat->RecomputePlayerStats(V, {Buff}); CheckCooking(TEXT("Cooking: 217 (+40)"), 40);
+    Buff.StatModValue = -3;
+    Dat->RecomputePlayerStats(V, {Buff}); CheckCooking(TEXT("Cooking: 174 (-3)"), -3);
+    FACEActiveEnchantment Vitae; Vitae.bVitae = true; Vitae.StatModValue = .9f;
+    Dat->RecomputePlayerStats(V, {Vitae}); CheckCooking(TEXT("Cooking: 160 (-17)"), -17);
+    Dat->RecomputePlayerStats(V, {}); CheckCooking(TEXT("Cooking: 177"), 0);
+    V.StatQualityInts.Remove(326); V.StatQualityInts.Remove(344);
+    Dat->RecomputePlayerStats(V, {}); CheckCooking(TEXT("Cooking: 166"), 0);
     Gameplay->AttributeScrollOffset = 0; Gameplay->SyncSkillPanelTab(TEXT("AttributePage"));
     for (int32 Row = 0; Row < 6; ++Row)
     {
@@ -555,7 +583,11 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     if (TestTrue(TEXT("Casting tab exists"),Tab.IsValid()))
     {
         TestTrue(TEXT("Casting text tab is an activatable hit target"),Tab->IsInteractiveHitTarget());
-        for (auto P=Tab; P; P=P->Parent.Pin()) P->bVisible=true;
+        // Enter through the normal stance path. Forcing only the spell panel
+        // visible leaves the mutually exclusive melee panel over it in retail.
+        Gameplay->SyncCombatModeFromServer(static_cast<int32>(ACECombatMode::Magic));
+        TestFalse(TEXT("Magic stance hides the overlapping melee panel"),
+            bool(Manager->FindElementByName(TEXT("CombatPanel"))->bVisible));
         Manager->ApplyEdgeAnchoredLayout(1600,900);
         const auto Origin=Tab->GetScreenOrigin();
         const FVector2D Pos(Origin.X+Tab->Width/2,Origin.Y+Tab->Height/2);
@@ -923,6 +955,60 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     CaptureScreen(TEXT("GameplayVendorGreenDropdown"));
     CheckVendorRowArtwork(*this,Gameplay->VendorFilterDropdownRows,Gameplay->VendorVisibleFilterIndices,
         Gameplay->VendorItemTypeFilter,Canvas->GetResourceResolver());
+    [&]()
+    {
+        TGuardValue<TArray<FACEWorldObject>> SavedStock(Client->Session->VendorMerchandise,{});
+        // Enough real item categories and stock to cover an enabled scrollbar
+        // with the dropdown, using the authored layout rather than moving controls.
+        for (const auto& Category : ACERetailVendorCategories::Categories)
+            for (int32 I=0;I<32;++I)
+            {
+                FACEWorldObject Stock;
+                Stock.Guid=980000+Client->Session->VendorMerchandise.Num();
+                Stock.Name=Category.Name;Stock.ContainerId=9876;
+                Stock.ItemType=Category.Mask & (~Category.Mask+1u);
+                Client->Session->VendorMerchandise.Add(Stock);
+            }
+        Gameplay->SetVendorItemTypeFilter(0);
+        Gameplay->ToggleVendorFilterDropdown();
+        CaptureScreen(TEXT("GameplayVendorDropdownHitPriority"));
+        const auto Bar=Manager->FindElementByName(TEXT("Vendor_ItemListScroll"));
+        if (!TestTrue(TEXT("Vendor regression has an enabled item scrollbar"),Bar && Bar->bVisible)) return;
+        const auto& Geo=Canvas->GetCachedGeometry();
+        const FVector2D BarOrigin(Bar->GetScreenOrigin());
+        const auto& DropGeo=Gameplay->VendorFilterDropdownBg->GetCachedGeometry();
+        const FVector2D DropMin=Canvas->ViewportToLayout(Geo.AbsoluteToLocal(DropGeo.GetAbsolutePosition()));
+        const FVector2D DropMax=Canvas->ViewportToLayout(Geo.AbsoluteToLocal(DropGeo.LocalToAbsolute(DropGeo.GetLocalSize())));
+        const FVector2D Min(FMath::Max(BarOrigin.X+17.,DropMin.X),FMath::Max(BarOrigin.Y,DropMin.Y));
+        const FVector2D Max(FMath::Min(BarOrigin.X+Bar->Width-17.,DropMax.X),FMath::Min(BarOrigin.Y+Bar->Height,DropMax.Y));
+        if (!TestTrue(TEXT("Vendor dropdown overlaps the scrollbar track"),Max.X>Min.X && Max.Y>Min.Y)) return;
+        const FVector2D Point=Geo.LocalToAbsolute(Canvas->LayoutToViewport((Min+Max)*.5));
+        const int32 Row=FMath::FloorToInt(DropGeo.AbsoluteToLocal(Point).Y/DropGeo.GetLocalSize().Y*Gameplay->VendorVisibleFilterIndices.Num());
+        const int32 ExpectedFilter=Gameplay->VendorVisibleFilterIndices[Row];
+        const int32 Before=Gameplay->VendorItemsScrollOffset;
+        auto Press=[&](FVector2D P)
+        {
+            TestTrue(TEXT("Vendor popup press is handled"),Canvas->NativeOnMouseButtonDown(Geo,
+                FPointerEvent(0,P,P,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState())).IsEventHandled());
+            TestFalse(TEXT("Vendor popup never begins a scrollbar drag"),Gameplay->IsScrollbarDragActive());
+            Canvas->NativeOnMouseButtonUp(Geo,FPointerEvent(0,P,P,{},EKeys::LeftMouseButton,0,FModifierKeysState()));
+        };
+        Press(Point);
+        TestEqual(TEXT("Covered scrollbar click selects the visible vendor category"),Gameplay->VendorItemTypeFilter,ExpectedFilter);
+        TestFalse(TEXT("Selecting a category closes the vendor dropdown"),Gameplay->bVendorFilterDropdownOpen);
+        TestEqual(TEXT("Category click leaves the scrollbar offset unchanged"),Gameplay->VendorItemsScrollOffset,Before);
+        Gameplay->ToggleVendorFilterDropdown();
+        CaptureScreen(TEXT("GameplayVendorDropdownDismiss"));
+        // The far right arrow is outside the dropdown but still on the vendor.
+        const FVector2D Arrow=Geo.LocalToAbsolute(Canvas->LayoutToViewport(BarOrigin+FVector2D(Bar->Width-8,Bar->Height*.5)));
+        TestFalse(TEXT("Dismiss click is outside the category popup"),Gameplay->VendorFilterDropdownBg->GetCachedGeometry().IsUnderLocation(Arrow));
+        Press(Arrow);
+        TestFalse(TEXT("Outside click dismisses the category popup"),Gameplay->bVendorFilterDropdownOpen);
+        TestEqual(TEXT("Dismiss click does not activate the scrollbar arrow behind it"),Gameplay->VendorItemsScrollOffset,Before);
+        Press(Arrow);
+        TestEqual(TEXT("Scrollbar arrow works again after popup dismissal"),Gameplay->VendorItemsScrollOffset,Before+1);
+        Gameplay->CloseVendorFilterDropdown();
+    }();
     Gameplay->HideVendorPanel();
     Gameplay->ShowExternalContainer(123);
     Gameplay->TickRefresh();
@@ -1559,7 +1645,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                     // changes; retain the actual canvas hit testing and activation.
                     Manager->OnElementActivated.Remove(Gameplay->ActivatedHandle);
                     UACEUIElementManager::ApplyFloatyResizeLayout(Floaty);
-                    for(const FIntPoint Size:{FIntPoint(1920,1080),FIntPoint(2560,1440),FIntPoint(3840,2160),FIntPoint(800,600)})
+                    for(const FIntPoint Size:{FIntPoint(1920,1080),FIntPoint(2560,1440),FIntPoint(3840,2160),FIntPoint(800,600),FIntPoint(640,480),FIntPoint(800,450),FIntPoint(480,360)})
                     {
                         ScreenSize=Size;
                         CaptureScreen(FString::Printf(TEXT("OptionsWindowResize_%d"),Size.X));
@@ -1575,7 +1661,9 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                         AddInfo(FString::Printf(TEXT("Scaled options %dx%d at %.2f: frame=%s/%d Apply=%s/%d"),
                             Size.X,Size.Y,Scale,*Floaty->GetScreenOrigin().ToString(),Floaty->Height,*Origin.ToString(),Apply->Height));
                         TestTrue(TEXT("Scaled settings frame fits the visible viewport"),
-                            Floaty->GetScreenOrigin().Y>=0 && Floaty->GetScreenOrigin().Y+Floaty->Height<=LogicalSize.Y);
+                            // Fractional float DPI (e.g. .8) can put the double
+                            // logical extent a few millionths below 600 pixels.
+                            Floaty->GetScreenOrigin().Y>=0 && Floaty->GetScreenOrigin().Y+Floaty->Height<=LogicalSize.Y+.01);
                         TestTrue(TEXT("Apply remains entirely onscreen after enlarging the interface"),
                             Origin.X>=0 && Origin.Y>=0 && Origin.X+Apply->Width<=LogicalSize.X && Origin.Y+Apply->Height<=LogicalSize.Y);
                         const FVector2D ScaleOrigin=Canvas->GetCachedGeometry().AbsoluteToLocal(UIScale->GetCachedGeometry().GetAbsolutePosition());
@@ -1603,6 +1691,21 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                         TestTrue(TEXT("Physical click on scaled Apply reaches the control"),Clicked);
                         TestEqual(TEXT("Player can return to 100% using the visible Apply button"),ACERuntimeOptions::Get(TEXT("DesktopUIScale")),1.f);
                     }
+                    const float OldConstrain=ACERuntimeOptions::Get(TEXT("ConstrainUIWindows"));
+                    ACERuntimeOptions::Set(TEXT("ConstrainUIWindows"),0);
+                    Floaty->UserDragX=10000;Floaty->UserDragY=10000;Floaty->RecomputeLayoutOffset();
+                    Gameplay->ShowPanelPage(TEXT("OptionsPanel_Field"));
+                    Gameplay->SyncOptionsPanelTab(TEXT("GameplayOptionsPage"));
+                    CaptureScreen(TEXT("SmallResolutionRecovery"),ACERuntimeOptions::DesktopUIScale(ScreenSize,false));
+                    const auto Recovery=Manager->FindElementByName(TEXT("GameplayOptions_ResetGraphics_Button"));
+                    if(TestTrue(TEXT("Options expose Reset graphics without scrolling"),Recovery.IsValid()))
+                    {
+                        const auto At=Recovery->GetScreenOrigin();
+                        TestTrue(TEXT("Reset graphics stays in the recovery viewport"),At.X>=0 && At.Y>=0 && At.X+Recovery->Width<=800 && At.Y+Recovery->Height<=600);
+                        TestTrue(TEXT("Reset graphics is clickable with offscreen windows allowed"),Manager->HitTestCanvas(At.X+Recovery->Width/2,At.Y+Recovery->Height/2)==Recovery);
+                    }
+                    ACERuntimeOptions::Set(TEXT("ConstrainUIWindows"),OldConstrain);
+                    Gameplay->SyncOptionsPanelTab(TEXT("ConfigPage"));
                     ScreenSize=OriginalScreen;
                     // Refresh cached Slate geometry before restoring sizes. A
                     // tick with the old 800x600 geometry would clamp them again.
@@ -1666,7 +1769,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         {
             auto* Label=Cast<UACERetailTextBlock>(Gameplay->OptionsButtonLabels[Index]);
             if (!Label) continue;
-            const bool ShouldShow=GameplayPage?Index<8:Index>=8;
+            const bool ShouldShow=GameplayPage?Index<9:Index>=9;
             TestEqual(TEXT("Options captions belong only to the active tab"),Label->GetVisibility()!=ESlateVisibility::Collapsed,ShouldShow);
             if (!ShouldShow) continue;
             ++VisibleLabels;
@@ -1683,7 +1786,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
 
             }
         }
-        TestEqual(TEXT("Only the active page's button captions are visible"),VisibleLabels,GameplayPage?8:3);
+        TestEqual(TEXT("Only the active page's button captions are visible"),VisibleLabels,GameplayPage?9:3);
         if (GameplayPage)
         {
             const auto PluginButton=Manager->FindElementUnder(PageName,TEXT("GameplayOptions_Plugins_Button"));
@@ -4859,6 +4962,12 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 TestTrue(TEXT("Inventory ellipsis fits inside native margins"),ACEDatText::Layout(TitleFont,Fitted,InventoryTitleElement->Width-10,true)[0].Width<=InventoryTitleElement->Width-10);
             }
         }
+        // Earlier fixture actions send requests without server replies. This
+        // isolated targeting/scale check starts idle; busy precedence is covered
+        // with real request/completion events in MouseCursors.
+        Client->Session->ResetCursorWaits();
+        const int32 PreviousCursorCombatMode=Client->Session->PlayerVitals.CombatMode;
+        Client->Session->PlayerVitals.CombatMode=1;
         Controller->MouseCursorWidget=NewObject<UACEMouseCursorWidget>(); Controller->MouseCursorWidget->Initialize();
         auto CursorSlate=Controller->MouseCursorWidget->TakeWidget();
         Controller->RetailCursorDefaultTex=Resources->ResolveIconTexture(0x06004D68);
@@ -4891,6 +5000,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             Controller->SetPendingUseTargeting(false);
             TestTrue(TEXT("Completed use restores retail arrow"),CursorArt->GetBrush().GetResourceObject()==Controller->RetailCursorDefaultTex);
         }
+        Client->Session->PlayerVitals.CombatMode=PreviousCursorCombatMode;
         FACEWorldObject Stone; Stone.Guid=9876; Stone.ItemType=ACEItemType::ManaStone;
         Stone.ContainerId=Player.Guid; Stone.ItemUseable=0x000A0008; Stone.TargetType=ACEItemType::Caster|ACEItemType::Creature;
         Client->Session->WorldObjects.Add(Stone.Guid,Stone);
