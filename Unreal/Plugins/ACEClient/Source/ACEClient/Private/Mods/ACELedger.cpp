@@ -103,7 +103,7 @@ FVector2D UACEPluginSubsystem::LedgerSize(const FString& Id) const
 {
     const bool Locked=IsPluginWindowChromeHidden(Id);
     return Id==TEXT("supplyledger")?FVector2D(200,14+FMath::Clamp(LedgerSupplies.Num(),1,15)*26+LedgerChromeHeight(Id,Locked))
-        :FVector2D(290,190+LedgerChromeHeight(Id,Locked));
+        :FVector2D(290,160+LedgerChromeHeight(Id,Locked));
 }
 double UACEPluginSubsystem::LedgerChromeHeight(const FString& Id,bool Hidden) const
 {
@@ -122,7 +122,11 @@ namespace
     public:
         SLATE_BEGIN_ARGS(SACELedgerPanel){} SLATE_ARGUMENT(UACEPluginSubsystem*,Host) SLATE_ARGUMENT(FString,Id) SLATE_END_ARGS()
         void Construct(const FArguments& A)
-        {Host=A._Host;Id=A._Id;Style=FACEPluginStyle::Use(A._Host,Id);ChildSlot[SAssignNew(Body,SVerticalBox)];Rebuild();}
+        {
+            Host=A._Host;Id=A._Id;Style=FACEPluginStyle::Use(A._Host,Id);Body=SNew(SVerticalBox);
+            if(Id==TEXT("huntledger"))ChildSlot[SNew(SScrollBox).ScrollBarVisibility(EVisibility::Collapsed)+SScrollBox::Slot()[Body.ToSharedRef()]];
+            else ChildSlot[Body.ToSharedRef()];Rebuild();
+        }
         virtual void Tick(const FGeometry& G,double T,float D) override
         {SCompoundWidget::Tick(G,T,D);if(Host.IsValid()&&(Revision!=Host->GetSupplyRevision()||Locked!=Host->IsPluginWindowChromeHidden(Id)))Rebuild();UpdateHuntText();}
     private:

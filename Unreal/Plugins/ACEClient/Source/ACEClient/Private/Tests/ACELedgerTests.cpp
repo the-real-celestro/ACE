@@ -175,6 +175,9 @@ bool FACELedgerTest::RunTest(const FString&)
         TestTrue(TEXT("Ledger frame displays its plugin icon"),HasTag(Dock->Windows[Id].Widget.ToSharedRef(),TEXT("PluginFrameIcon")));
     TestTrue(TEXT("Supply names setting is discoverable in window controls"),HasTag(H->MakePluginWindowControls(TEXT("supplyledger")),TEXT("SupplyShowNames")));
     TestEqual(TEXT("Legacy fixed Hunt Ledger height adapts to current rows without duplicate editor chrome"),Dock->DisplaySize(Dock->Windows[TEXT("huntledger")]).Y,H->LedgerSize(TEXT("huntledger")).Y);
+    const double BeforeHuntResize=Dock->DisplaySize(Dock->Windows[TEXT("huntledger")]).Y;
+    Dock->Resize(TEXT("huntledger"),FVector2D(0,-50),false);
+    TestTrue(TEXT("Hunt ledger can shrink below its default content height"),Dock->DisplaySize(Dock->Windows[TEXT("huntledger")]).Y<BeforeHuntResize);
     TestTrue(TEXT("Saved HUD visibility restores without UCM running"),Dock->IsOpen(TEXT("supplyledger"))&&Dock->IsOpen(TEXT("huntledger")));
     TestEqual(TEXT("Supply HUD defaults to a compact width"),Dock->DisplaySize(Dock->Windows[TEXT("supplyledger")]).X,200.);
     const auto InitialSize=Dock->DisplaySize(Dock->Windows[TEXT("supplyledger")]);

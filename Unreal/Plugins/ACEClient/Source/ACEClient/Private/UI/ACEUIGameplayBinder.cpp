@@ -519,6 +519,7 @@ void UACEUIGameplayBinder::Initialize(UACEClientSubsystem* InClient, UACEUIEleme
 	if (Client) for (const auto& Message : Client->GetChatHistory())
 	{
 		TGuardValue<FString> BoldGuard(Client->ActiveChatBoldText,Message.BoldText);
+        TGuardValue<TOptional<FLinearColor>> ColorGuard(Client->ActiveChatLocalColor,Message.LocalColor);
 		HandleChatMessage(Message.Text, Message.Sender, Message.Type, Message.FilterType);
 	}
 }
@@ -6487,7 +6488,7 @@ void UACEUIGameplayBinder::HandleChatMessage(const FString& Text, const FString&
 			FILEWRITE_Append);
 	}
 
-	const FLinearColor Color = ACERetailChat::Color(ChatType);
+	const FLinearColor Color = Client&&Client->ActiveChatLocalColor.IsSet()?Client->ActiveChatLocalColor.GetValue():ACERetailChat::Color(ChatType);
 	// Player-attributed rows become click-to-tell targets (retail <Tell:IIDString>).
 	FString ClickSender;
 	if (!Sender.IsEmpty() && !Sender.Equals(TEXT("You"), ESearchCase::IgnoreCase)

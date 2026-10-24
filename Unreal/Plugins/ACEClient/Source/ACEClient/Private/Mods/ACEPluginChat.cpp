@@ -87,8 +87,10 @@ uint8 UACEPluginSubsystem::FilterPluginChatWindows(const FString& Text,const FSt
 void UACEPluginSubsystem::InspectLootItem(int32 Guid, TSharedPtr<FJsonObject> TestRule)
 {
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
-    FACEWorldObject Previous;
-    if(InspectLootGuid&&C->GetWorldObject(InspectLootGuid,Previous))PrintLootInspection(Previous);
+    const double Now=FPlatformTime::Seconds();
+    if(!TestRule&&Guid&&(Guid==InspectLootGuid||(Guid==LastInspectedItem&&Now-LastInspectedAt<.35)))return;
+    // A second selection callback must not flush a provisional line and start over.
+
     InspectLootGuid=0;InspectLootVM.Reset();InspectLootWaiting=false;InspectLootTestPolicy.Reset();
     const auto P=Find(TEXT("ucm"));FACEWorldObject Item;
     if(!P||!P->Profile||C->GetSessionState()!=EACESessionState::InWorld
@@ -162,7 +164,7 @@ void UACEPluginSubsystem::PrintLootInspection(const FACEWorldObject& Item,const 
     const auto J=LootItemSnapshot(Item)->AsObject();
     const FString Name=J->GetStringField(TEXT("name"));
     const bool Matched=Result&&Result->GetStringField(TEXT("status"))==TEXT("match");
-    FString Text=(InspectLootTestPolicy?TEXT("[Loot test] "):TEXT("[Item] "))+Name;
+    FString Text=(InspectLootTestPolicy?TEXT("[Loot test] "):Matched?TEXT("[MATCH] "):TEXT("[Item] "))+Name;
     const auto* A=Appraisals.Find(Item.Guid);
     if(A&&A->bSuccess)
     {
@@ -170,9 +172,19 @@ void UACEPluginSubsystem::PrintLootInspection(const FACEWorldObject& Item,const 
         {
             const double Low=A->Damage*(1.-FMath::Clamp(double(A->DamageVariance),0.,1.));
             Text+=FString::Printf(TEXT(" | Dmg %g–%d | Speed %d"),Low,A->Damage,A->WeaponTime);
+            Text+=FString::Printf(TEXT(" | Attack %+.1f%% | Damage mod x%.2f"),(A->WeaponOffense-1.)*100.,A->WeaponDamageMod);
+            FString DamageTypes;
+            for(const auto& T:{TPair<int32,const TCHAR*>(1,TEXT("Slash")),{2,TEXT("Pierce")},{4,TEXT("Bludgeon")},{8,TEXT("Cold")},{16,TEXT("Fire")},{32,TEXT("Acid")},{64,TEXT("Electric")},{1024,TEXT("Nether")}})
+                if(A->DamageType&T.Key){if(!DamageTypes.IsEmpty())DamageTypes+=TEXT("/");DamageTypes+=T.Value;}
+            if(!DamageTypes.IsEmpty())Text+=TEXT(" | ")+DamageTypes;
             FString Skill;uint32 Icon=0;
             if(GetGameInstance()->GetSubsystem<UACEDatSubsystem>()->TryGetSkillInfo(A->WeaponSkill,Skill,Icon)&&!Skill.IsEmpty())Text+=TEXT(" | ")+Skill;
         }
+        for(const auto& E:{TPair<int32,const TCHAR*>(29,TEXT("Melee D")),{149,TEXT("Missile D")},{150,TEXT("Magic D")},{144,TEXT("Mana C")}})
+            if(const double* V=A->FloatProperties.Find(E.Key))Text+=FString::Printf(TEXT(" | %s %+.1f%%"),E.Value,(*V-1.)*100.);
+        for(const auto& E:{TPair<int32,const TCHAR*>(136,TEXT("Crit multiplier")),{138,TEXT("Slayer mod")},{147,TEXT("Crit chance")}})
+            if(const double* V=A->FloatProperties.Find(E.Key))Text+=FString::Printf(TEXT(" | %s %g"),E.Value,*V);
+        if(const int32* Bonus=A->IntProperties.Find(204))Text+=FString::Printf(TEXT(" | Damage bonus %d"),*Bonus);
         if(const auto* AL=A->IntProperties.Find(28))Text+=FString::Printf(TEXT(" | AL %d"),*AL);
         if(const auto* Mod=A->FloatProperties.Find(152))Text+=FString::Printf(TEXT(" | Element x%.2f"),*Mod);
         if(const auto* Rating=A->IntProperties.Find(307))Text+=FString::Printf(TEXT(" | Rating %d"),*Rating);
@@ -187,5 +199,6 @@ void UACEPluginSubsystem::PrintLootInspection(const FACEWorldObject& Item,const 
         Text+=FString::Printf(TEXT(" | Matches %s / %s (%s)"),*(Profile.IsEmpty()?TEXT("Default"):Profile),*Result->GetStringField(TEXT("label")),*Result->GetStringField(TEXT("action")));
     }
     else if(InspectLootTestPolicy)Text+=TEXT(" | Does not match this rule");
-    C->ReceiveChatMessage(Text,TEXT(""),Matched?ACEChatMessageType::Broadcast:ACEChatMessageType::Appraisal,INDEX_NONE,Matched?Text:FString());
+    LastInspectedItem=Item.Guid;LastInspectedAt=FPlatformTime::Seconds();
+    C->ReceiveChatMessage(Text,TEXT(""),Matched?ACEChatMessageType::Broadcast:ACEChatMessageType::Appraisal,INDEX_NONE,Matched?Text:FString(),Matched?FLinearColor(.15f,1.f,.15f):FLinearColor::White);
 }

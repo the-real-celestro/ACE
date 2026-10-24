@@ -254,7 +254,7 @@ namespace
                 +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(SBox).WidthOverride(Id==TEXT("ucmmicro")?24.f:FMath::RoundToFloat(56*FACEPluginStyle::HeaderHeight()/42.)).HAlign(HAlign_Center)
                     [SNew(SBox).WidthOverride(24).HeightOverride(24).Tag(TEXT("PluginFrameIcon"))
                         [SNew(SScaleBox).Stretch(EStretch::ScaleToFit)[Args._Icon.IsValid()?Args._Icon.ToSharedRef():SNullWidget::NullWidget]]]]
-                +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(0,0,0,0)[SNew(SACEPluginText).Visibility_Lambda([this](){return Id==TEXT("ucmmicro")&&GetCachedGeometry().GetLocalSize().X<240?EVisibility::Collapsed:EVisibility::Visible;}).OverflowPolicy(ETextOverflowPolicy::Ellipsis).Text_Lambda([T=Args._Title]{return FText::FromString(T.Get());})
+                +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(0,0,0,0)[SNew(SACEPluginText).Visibility_Lambda([this](){return Id==TEXT("ucmmicro")&&GetCachedGeometry().GetLocalSize().X<240?EVisibility::Hidden:EVisibility::Visible;}).OverflowPolicy(ETextOverflowPolicy::Ellipsis).Text_Lambda([T=Args._Title]{return FText::FromString(T.Get());})
                     .Font(FCoreStyle::GetDefaultFontStyle("Fancy",18)).ColorAndOpacity(FACEPluginStyle::Gold())]
                 // Always present so the title buttons stay right-aligned even without a subtitle.
                 +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(Id==TEXT("ucmmicro")?FMargin(0):FMargin(10,0,6,0))[SNew(SBox)[SNew(SACEPluginText).Text_Lambda([T=Args._Subtitle]{return FText::FromString(T.Get().ToUpper());})
@@ -383,8 +383,7 @@ FVector2D SACEPluginDesktop::DisplaySize(const FWindow& W) const
             if(W.Size.Y>0)
             {
                 const double SavedHeight=W.Size.Y+Host->LedgerChromeHeight(W.LedgerId,Host->IsPluginWindowChromeHidden(W.LedgerId));
-                // Hunt rows must fit even when restoring a height saved before a new metric was added.
-                Size.Y=W.LedgerId==TEXT("huntledger")?FMath::Max(Size.Y,SavedHeight):SavedHeight;
+                Size.Y=SavedHeight;
             }
             return Size;
         }

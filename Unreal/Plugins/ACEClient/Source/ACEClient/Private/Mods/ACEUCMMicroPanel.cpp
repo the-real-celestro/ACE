@@ -215,7 +215,7 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMMicroPanel()
     auto Quick=SNew(SVerticalBox).Tag(TEXT("MicroQuickControls"));
     const auto QuickCheck=[&](const TCHAR* Key,const TCHAR* Label,const TCHAR* Short,const TCHAR* Help,TFunction<bool()> Read,TFunction<void(bool)> Write,TAttribute<bool> Enabled)
     {
-        Quick->AddSlot().AutoHeight().Padding(0,1)[SNew(SCheckBox).Tag(FName(*(FString(TEXT("MicroQuick."))+Key)))
+        Quick->AddSlot().AutoHeight().HAlign(HAlign_Right).Padding(0,1)[SNew(SCheckBox).Tag(FName(*(FString(TEXT("MicroQuick."))+Key)))
             .Style(&FACEPluginStyle::Current()->Check).IsFocusable(false).IsEnabled(Enabled)
             .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(Help)))
             .IsChecked_Lambda([Read]{return Read()?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})

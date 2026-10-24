@@ -10,6 +10,8 @@
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Input/SButton.h"
+#include "Widgets/Text/STextBlock.h"
+#include "Styling/CoreStyle.h"
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SSpinBox.h"
@@ -45,14 +47,14 @@ namespace
             Host=A._Host;Send=A._Send;Page=A._Settings?1:0;FACEPluginStyle::Use(A._Host,TEXT("thirdeye"));
             for(auto P:A._Host->Plugins)if(P->Id==TEXT("thirdeye"))Plugin=P;
             auto Header=SNew(SHorizontalBox);
-            Header->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,8,0)[Check(TEXT("Watch"),TEXT("watching"),true)];
             for(int32 I=0;I<3;++I)
                 Header->AddSlot().AutoWidth().Padding(1,0)[SNew(SACEPluginTab).Tag(FName(*FString::Printf(TEXT("ThirdEye.Tab.%d"),I)))
                     .Text(FText::FromString(I==0?TEXT("Found"):I==1?TEXT("Setup"):TEXT("Options"))).ContentPadding(FMargin(4,1))
                     .Selected_Lambda([this,I]{return Page==I;}).OnClicked_Lambda([this,I]{Page=I;Rebuild();return FReply::Handled();})];
             ChildSlot[SNew(SBorder).BorderImage(&FACEPluginStyle::Current()->Background).Padding(FMargin(4,4,4,16))
                 [SAssignNew(Root,SVerticalBox)+SVerticalBox::Slot().AutoHeight()[Header]
-                +SVerticalBox::Slot().AutoHeight().Padding(0,3,0,0)[SAssignNew(Body,SVerticalBox)]]];
+                +SVerticalBox::Slot().AutoHeight().Padding(0,3,0,0)[SAssignNew(Body,SVerticalBox)]
+                +SVerticalBox::Slot().FillHeight(1).VAlign(VAlign_Bottom).Padding(0,8,0,0)[Check(TEXT("Watch"),TEXT("watching"),true)]]];
             Rebuild();
         }
         void Tick(const FGeometry& G,double Time,float Delta) override
@@ -85,6 +87,12 @@ namespace
                 .IsChecked_Lambda([this,Key,Default]{return EyeBool(State(),*Key,Default)?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
                 .OnCheckStateChanged_Lambda([this,Key](ECheckBoxState V){Send(TEXT("change"),Key,MakeShared<FJsonValueBoolean>(V==ECheckBoxState::Checked));})[Text(Label)];
         }
+        void AddDraft()
+        {
+            Send(TEXT("change"),TEXT("draft"),MakeShared<FJsonValueString>(Draft));
+            Send(TEXT("change"),TEXT("exact"),MakeShared<FJsonValueBoolean>(Exact));
+            Send(TEXT("click"),TEXT("add"),nullptr);Draft.Empty();NameInput->SetText(FText::GetEmpty());
+        }
         FString Feedback()const
         {
             auto P=Plugin.Pin();if(!P)return FString();
@@ -111,8 +119,18 @@ namespace
                 {
                     auto D=Value->AsObject();const uint32 Id=uint32(D->GetNumberField(TEXT("id"))),Wcid=uint32(D->GetNumberField(TEXT("wcid")));
                     const FString Key=FString::Printf(TEXT("%u"),Id),Name=D->GetStringField(TEXT("name"));
-                    auto Label=SNew(SACEPluginText).Text(FText::FromString(FString::Printf(TEXT("%s  %.1f m"),*Name,D->GetNumberField(TEXT("distance")))))
-                        .Font(FACEPluginStyle::NativeFont("Regular",13)).AutoWrapText(false);
+                    auto Label=SNew(STextBlock).Tag(FName(*(TEXT("ThirdEye.Name.")+Key)))
+                        .Text(FText::FromString(FString::Printf(TEXT("%s  %.1f m"),*Name,D->GetNumberField(TEXT("distance")))))
+                        .Font_Lambda([H=Host,Id,Wcid]
+                        {
+                            bool Unopened=false;
+                            if(H.IsValid())
+                            {
+                                FACEWorldObject O;auto* C=H->GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+                                Unopened=C->GetWorldObject(int32(Id),O)&&uint32(O.WeenieClassId)==Wcid&&H->IsCorpseUnopened(O);
+                            }
+                            return FCoreStyle::GetDefaultFontStyle(Unopened?"Bold":"Regular",FACEPluginStyle::IsCodex()?10:13);
+                        }).ColorAndOpacity(FACEPluginStyle::Cream()).AutoWrapText(false);
                     Label->SetClipping(EWidgetClipping::ClipToBounds);
                     Add(SNew(SHorizontalBox).Tag(FName(*(TEXT("ThirdEye.Item.")+Key)))
                         +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[CursorSafe(SNew(SButton).ClickMethod(EButtonClickMethod::MouseDown).ButtonStyle(&EyeTextStyle()).ContentPadding(FMargin(0,0)).HAlign(HAlign_Left).IsFocusable(false)
@@ -144,9 +162,10 @@ namespace
             {
                 Add(SNew(SHorizontalBox)+SHorizontalBox::Slot().FillWidth(1)[SAssignNew(NameInput,SEditableTextBox)
                     .Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",13)).HintText(FText::FromString(TEXT("Name to watch")))
-                    .Text(FText::FromString(Draft)).OnTextChanged_Lambda([this](const FText& T){Draft=T.ToString().Left(256);})]
+                    .Text(FText::FromString(Draft)).OnTextChanged_Lambda([this](const FText& T){Draft=T.ToString().Left(256);})
+                    .OnTextCommitted_Lambda([this](const FText&,ETextCommit::Type Kind){if(Kind==ETextCommit::OnEnter)AddDraft();})]
                     +SHorizontalBox::Slot().AutoWidth().Padding(4,0)[Action(TEXT("+"),TEXT("ThirdEye.Add"),[this]
-                    {Send(TEXT("change"),TEXT("draft"),MakeShared<FJsonValueString>(Draft));Send(TEXT("change"),TEXT("exact"),MakeShared<FJsonValueBoolean>(Exact));Send(TEXT("click"),TEXT("add"),nullptr);Draft.Empty();NameInput->SetText(FText::GetEmpty());})]);
+                    {AddDraft();})]);
                 Add(SNew(SHorizontalBox)+SHorizontalBox::Slot().AutoWidth()[SNew(SCheckBox).Style(&FACEPluginStyle::Current()->Check)
                     .IsChecked_Lambda([this]{return Exact?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
                     .OnCheckStateChanged_Lambda([this](ECheckBoxState V){Exact=V==ECheckBoxState::Checked;})[Text(TEXT("Exact name"))]]
@@ -165,6 +184,9 @@ namespace
                             .OnCheckStateChanged_Lambda([this,Key](ECheckBoxState V){Send(TEXT("change"),TEXT("enabled_")+Key,MakeShared<FJsonValueBoolean>(V==ECheckBoxState::Checked));})
                             .ToolTip(FACEPluginStyle::Tooltip(FText::FromString((EyeBool(R,TEXT("exact"))?TEXT("Equals: "):TEXT("Contains: "))+EyeString(R,TEXT("name")))))
                             [Text((EyeBool(R,TEXT("exact"))?TEXT("= "):TEXT("~ "))+EyeString(R,TEXT("name")))]]
+                        +SHorizontalBox::Slot().AutoWidth().Padding(4,0)[SNew(SCheckBox).Tag(FName(*(TEXT("ThirdEye.Sound.")+Key))).Style(&FACEPluginStyle::Current()->Check)
+                            .IsChecked(EyeBool(R,TEXT("sound"))?ECheckBoxState::Checked:ECheckBoxState::Unchecked)
+                            .OnCheckStateChanged_Lambda([this,Key](ECheckBoxState V){Send(TEXT("change"),TEXT("sound_")+Key,MakeShared<FJsonValueBoolean>(V==ECheckBoxState::Checked));})[Text(TEXT("Sound"))]]
                         +SHorizontalBox::Slot().AutoWidth().Padding(5,0,0,0)[SNew(SBox).WidthOverride(16)
                             [Action(TEXT("x"),FName(*(TEXT("ThirdEye.Remove.")+Key)),[this,Key]{Send(TEXT("click"),TEXT("remove_")+Key,nullptr);})]]);
                 }

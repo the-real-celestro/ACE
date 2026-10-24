@@ -4,6 +4,7 @@ local config, draft, exact, feedback = nil, "", false, ""
 local cache, seen, dismissed = {}, {}, {}
 local rule_page, detected_page, filter = 1, 1, ""
 local alerts, alert_inflight, next_alert = {}, false, 0
+local sound_pending, sound_inflight, next_sound = false, false, 0
 local rule_size, detected_size, MAX_RULES = 6, 8, 128
 
 local function trim(text)
@@ -44,7 +45,7 @@ return function(s)
             if #config.rules == MAX_RULES then break end
             if type(r)=="table" and type(r.name)=="string" and #r.name>0 and #r.name<=256 then
                 config.rules[#config.rules+1] = {id=config.next_id, name=r.name,
-                    exact=r.exact==true, enabled=r.enabled~=false}
+                    exact=r.exact==true, enabled=r.enabled~=false, sound=r.sound==true}
                 config.next_id = config.next_id + 1
             end
         end
@@ -74,7 +75,10 @@ return function(s)
         draft=""; feedback="Added "..name; changed=true; rules_changed=true
     end
     for _, e in ipairs(s.events or {}) do
-        if e.type=="result" and e.id=="detected_alert" then
+        if e.type=="result" and e.id=="detected_sound" then
+            sound_inflight=false
+            if e.ok or not string.contains(e.error or "","rate limit") then sound_pending=false end
+        elseif e.type=="result" and e.id=="detected_alert" then
             alert_inflight=false
             if e.ok or not string.contains(e.error or "","rate limit") then table.remove(alerts,1) end
             if not e.ok then feedback=e.error or "Could not display alert." end
@@ -85,6 +89,9 @@ return function(s)
             elseif e.id=="range" then config.range=math.max(5,math.min(240,tonumber(e.value) or 240)); changed=true
             elseif e.id=="watching" or e.id=="chat_alerts" or e.id=="world_markers" or e.id=="map_markers" then
                 config[e.id]=e.value==true; changed=true
+            elseif string.sub(e.id or "",1,6)=="sound_" then
+                local id=tonumber(string.sub(e.id,7))
+                for _, r in ipairs(config.rules) do if r.id==id then r.sound=e.value==true; changed=true end end
             elseif string.sub(e.id or "",1,8)=="enabled_" then
                 local id=tonumber(string.sub(e.id,9))
                 for _, r in ipairs(config.rules) do if r.id==id then r.enabled=e.value==true; changed=true; rules_changed=true end end
@@ -116,7 +123,7 @@ return function(s)
         end
     end
     local matches, markers, new_names, next_cache, next_seen = {}, {}, {}, {}, {}
-    local new_count, scanning = 0, false
+    local new_count, scanning, play_sound = 0, false, false
     local now=s.time or 0
     -- Brief awareness/range flicker must not repeatedly announce the same spawn.
     local retained=0
@@ -142,6 +149,13 @@ return function(s)
                     local previous=seen[o.id]
                     if not previous or previous.name~=o.name or previous.wcid~=o.wcid then
                         new_count=new_count+1
+                        for _, r in ipairs(config.rules) do
+                            if not workavailable() then break end
+                            if r.enabled and r.sound then
+                                local wanted=string.lower(r.name)
+                                if (r.exact and name==wanted) or (not r.exact and string.contains(name,wanted)) then play_sound=true; break end
+                            end
+                        end
                         if #new_names<3 then new_names[#new_names+1]=short(o.name).." ("..math.floor(o.distance).." m)" end
                     end
                     next_seen[o.id]={name=o.name, wcid=o.wcid, time=now}
@@ -163,6 +177,12 @@ return function(s)
     if #alerts>0 and not alert_inflight and now>=next_alert then
         requests[1]={id="detected_alert",service="notice",operation="show",text=alerts[1]}
         alert_inflight=true; next_alert=now+1
+    end
+    if play_sound then sound_pending=true end
+    if not config.watching then sound_pending=false end
+    if sound_pending and not sound_inflight and now>=next_sound then
+        requests[#requests+1]={id="detected_sound",service="notice",operation="sound"}
+        sound_inflight=true;next_sound=now+1
     end
     local visible={}
     for _, o in ipairs(matches) do
@@ -207,6 +227,7 @@ return function(s)
         local r=config.rules[i]
         setup[#setup+1]={id="rule_"..r.id,type="row",children={
             {id="enabled_"..r.id,type="checkbox",text=(r.exact and "Equals: " or "Contains: ")..r.name,wrap=false,tooltip=r.name,value=r.enabled},
+            {id="sound_"..r.id,type="checkbox",text="Sound",value=r.sound==true},
             button("remove_"..r.id,"Remove")
         }}
     end

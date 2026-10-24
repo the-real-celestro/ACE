@@ -128,6 +128,10 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
     friend class FACEPluginCosmeticsTest;
     friend class FACEActionDeckTest;
 public:
+    void ObserveOpenedCorpse(const FACEWorldObject& Object)
+    {if(Object.IsCorpse())OpenedCorpses.Add(Object.Guid,{Object.Position,FPlatformTime::Seconds()});}
+    bool IsCorpseUnopened(const FACEWorldObject& Object) const
+    {return Object.IsCorpse()&&!OpenedCorpses.Contains(Object.Guid)&&!LootedCorpses.Contains(Object.Guid);}
     void InspectLootItem(int32 Guid, TSharedPtr<FJsonObject> TestRule=nullptr);
     void PrintLootInspection(const FACEWorldObject& Item, const TSharedPtr<FJsonObject>& Result=nullptr);
     virtual void Initialize(FSubsystemCollectionBase& Collection) override;
@@ -332,6 +336,8 @@ private:
     void TickLootInspection();
     TSharedPtr<FJsonValue> LootItemSnapshot(const FACEWorldObject& Item);
     int32 InspectLootGuid=0;
+    int32 LastInspectedItem=0;
+    double LastInspectedAt=0;
     double InspectLootDeadline=0;
     bool InspectLootWaiting=false;
     TSharedPtr<FACEPluginVM> InspectLootVM;
@@ -485,6 +491,7 @@ private:
     TMap<int32, double> CorpseFirstSeen;
     struct FLootedCorpse { FACEPosition Position; double LastSeen=0; };
     TMap<int32, FLootedCorpse> LootedCorpses;
+    TMap<int32, FLootedCorpse> OpenedCorpses;
     TMap<int32, double> AppraisalRequests;
     TArray<TSharedPtr<FJsonValue>> CachedInventory;
     TMap<int32,int32> CachedInventoryIndices;

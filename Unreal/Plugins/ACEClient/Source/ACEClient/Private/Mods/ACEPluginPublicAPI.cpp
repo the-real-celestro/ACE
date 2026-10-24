@@ -2,6 +2,7 @@
 #include "ACEClientSubsystem.h"
 #include "ACEPlayerController.h"
 #include "ACESession.h"
+#include "ACEScriptComponent.h"
 #include "ACEVTProfile.h"
 #include "Engine/GameInstance.h"
 #include "HAL/FileManager.h"
@@ -316,6 +317,16 @@ bool UACEPluginSubsystem::ApplyPluginServices(FACEClientPlugin& P,const TSharedP
                 Ok=true;
             }
             else Failure=TEXT("A local notice requires one line, 1-500 characters");
+        }
+        else if(Service==TEXT("notice")&&Op==TEXT("sound")&&P.Id==TEXT("thirdeye"))
+        {
+            if(auto* Controller=GetGameInstance()->GetFirstLocalPlayerController())
+            {
+                auto* Audio=Controller->FindComponentByClass<UACEScriptComponent>();
+                if(!Audio){Audio=NewObject<UACEScriptComponent>(Controller);Audio->RegisterComponent();}
+                Audio->PlayCenteredSoundFromTable(0x2000004B,0x77,1.f); // Retail UI_Bell.
+            }
+            Ok=true;
         }
         else if(Service==TEXT("chat")&&Op==TEXT("send"))
         {

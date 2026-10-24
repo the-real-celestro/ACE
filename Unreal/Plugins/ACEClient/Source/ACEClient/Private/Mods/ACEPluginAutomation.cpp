@@ -307,6 +307,9 @@ void UACEPluginSubsystem::ObserveTargetCreated(const FACEWorldObject& Object)
     }
     // VT fo retains opened corpse IDs across Stop and visibility releases,
     // but a new corpse at a different position can reuse an old ID.
+    if(const auto* Record=OpenedCorpses.Find(Object.Guid);Record&&Object.bHasPosition)
+        if(!Object.IsCorpse()||Object.Position.CellId!=Record->Position.CellId
+            ||!Object.Position.Location.Equals(Record->Position.Location,.01))OpenedCorpses.Remove(Object.Guid);
     if(const auto* Record=LootedCorpses.Find(Object.Guid);Record&&Object.bHasPosition)
         if(!Object.IsCorpse()||Object.Position.CellId!=Record->Position.CellId
             ||!Object.Position.Location.Equals(Record->Position.Location,.01))LootedCorpses.Remove(Object.Guid);
@@ -568,7 +571,7 @@ void UACEPluginSubsystem::RefreshAutomationData()
         SaveItemBuffTimers();
         CombatTarget=0;DefeatedTargets.Empty();LastCombatDeath.Reset();LastCombatVitals=FIntVector(-1,-1,-1);
         ConfirmedBuffAckAt=BuffRetryAt=0;ConfirmedBuffOwner.Empty();DeferredBuffIntent.Reset();DeferredBuffOwner.Empty();PendingBuffResultDriven=false;
-        DataPlayer=0;Appraisals.Empty();CorpseFirstSeen.Empty();LootedCorpses.Empty();AppraisalRequests.Empty();ItemBuffs.Empty();CachedInventory.Empty();CachedInventoryIndices.Empty();DirtyInventoryAppraisals.Empty();ClearBuffRequests();
+        DataPlayer=0;Appraisals.Empty();CorpseFirstSeen.Empty();LootedCorpses.Empty();OpenedCorpses.Empty();AppraisalRequests.Empty();ItemBuffs.Empty();CachedInventory.Empty();CachedInventoryIndices.Empty();DirtyInventoryAppraisals.Empty();ClearBuffRequests();
         PendingSpell=0;PendingSpellOwner.Empty();FastCastOwner.Empty();PendingManaRefresh=false;PendingResourceRefresh.Empty();Debuffs.Empty();PendingDebuffCasts.Empty();OffensiveCasts.Empty();InventoryRevision=MAX_uint64;C->BackgroundAppraisals.Empty();return;
     }
     if(DataPlayer!=C->GetPlayerGuid()||DataServer!=C->GetServerName()||ObservedSession.Pin()!=Session)
@@ -589,7 +592,7 @@ void UACEPluginSubsystem::RefreshAutomationData()
         CombatVitalsHandle=Session->OnVitalsUpdated.AddUObject(this,&UACEPluginSubsystem::ObserveCombatVitals);
         PhysicalAttackTarget=0;PhysicalAttackOwner.Empty();CombatOutcomes.Empty();OffensiveCasts.Empty();
         TellHandle=Session->OnPlayerTell.AddUObject(this,&UACEPluginSubsystem::ObservePlayerTell);ClearBuffRequests();
-        DataPlayer=C->GetPlayerGuid();DataServer=C->GetServerName();NextAppraisalScan=0;Appraisals.Empty();CachedSpeciesNames.Reset();CorpseFirstSeen.Empty();LootedCorpses.Empty();AppraisalRequests.Empty();ItemBuffs.Empty();
+        DataPlayer=C->GetPlayerGuid();DataServer=C->GetServerName();NextAppraisalScan=0;Appraisals.Empty();CachedSpeciesNames.Reset();CorpseFirstSeen.Empty();LootedCorpses.Empty();OpenedCorpses.Empty();AppraisalRequests.Empty();ItemBuffs.Empty();
         LoadItemBuffTimers();
         CachedInventory.Empty();CachedInventoryIndices.Empty();DirtyInventoryAppraisals.Empty();
         PendingSpell=0;PendingSpellOwner.Empty();FastCastOwner.Empty();PendingResourceRefresh.Empty();PendingManaRefresh=false;Debuffs.Empty();PendingDebuffCasts.Empty();InventoryRevision=MAX_uint64;++DataRevision;C->BackgroundAppraisals.Empty();
@@ -615,6 +618,11 @@ void UACEPluginSubsystem::RefreshAutomationData()
     for(auto It=Appraisals.CreateIterator();It;++It)if(!Session->GetWorldObjects().Contains(It.Key()))It.RemoveCurrent();
     for(auto It=DirtyInventoryAppraisals.CreateIterator();It;++It)if(!Session->GetWorldObjects().Contains(*It))It.RemoveCurrent();
     for(auto It=CorpseFirstSeen.CreateIterator();It;++It)if(!Session->GetWorldObjects().Contains(It.Key()))It.RemoveCurrent();
+    for(auto It=OpenedCorpses.CreateIterator();It;++It)
+    {
+        if(Session->GetWorldObjects().Contains(It.Key()))It.Value().LastSeen=Now;
+        else if(Now-It.Value().LastSeen>=3600)It.RemoveCurrent();
+    }
     for(auto It=LootedCorpses.CreateIterator();It;++It)
     {
         if(Session->GetWorldObjects().Contains(It.Key()))It.Value().LastSeen=Now;

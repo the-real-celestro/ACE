@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "Widgets/Text/STextBlock.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Misc/Parse.h"
@@ -47,6 +48,16 @@ bool FACEThirdEyeTest::RunTest(const FString&)
     FString Script,Error;TSharedPtr<FJsonObject> Out;auto Empty=MakeShared<FJsonObject>();
     if(!TestTrue(TEXT("Third Eye Lua is bundled"),FFileHelper::LoadFileToString(Script,*(Base/TEXT("ClientMods/thirdeye/main.lua")))))return false;
     FACEPluginVM VM;if(!TestTrue(TEXT("Third Eye compiles in the real sandbox"),VM.Load(Script,Error)))return false;
+    FACEPluginVM AudioVM;AudioVM.Load(Script,Error);
+    auto AudioSnapshot=EyeJSON(TEXT(R"({"time":10,"state":{"chat_alerts":false,"rules":[{"name":"Hoary Mattekar","sound":true},{"name":"Plant","sound":false}]},"objects":[{"id":30,"name":"Hoary Mattekar","wcid":1,"distance":5,"dead":false},{"id":31,"name":"Plant","wcid":2,"distance":3,"dead":false}]})"));
+    TSharedPtr<FJsonObject> AudioOut;
+    TestTrue(TEXT("Per-item audio settings evaluate"),AudioVM.Step(AudioSnapshot,Empty,AudioOut,Error));
+    TestEqual(TEXT("Sound-enabled Hoary raises one audio request without chat"),AudioOut->GetArrayField(TEXT("requests")).Num(),1);
+    TestEqual(TEXT("Per-item audio uses the local sound operation"),AudioOut->GetArrayField(TEXT("requests"))[0]->AsObject()->GetStringField(TEXT("operation")),FString(TEXT("sound")));
+    FACEPluginVM QuietVM;QuietVM.Load(Script,Error);AudioSnapshot->GetArrayField(TEXT("objects"));
+    auto Plant=AudioSnapshot->GetArrayField(TEXT("objects"))[1];AudioSnapshot->SetArrayField(TEXT("objects"),{Plant});
+    QuietVM.Step(AudioSnapshot,Empty,AudioOut,Error);TestTrue(TEXT("Plant with sound off stays silent"),AudioOut->GetArrayField(TEXT("requests")).IsEmpty());
+
     auto Snapshot=EyeJSON(TEXT(R"({"time":100,"state":{},"selected":1,"plugins":{"waypoint":{"enabled":true}},"objects":[
         {"id":1,"name":"Black Coral Golem","wcid":10,"distance":5,"dead":false},
         {"id":2,"name":"Black Coral Crystal","wcid":11,"distance":12,"dead":false},
@@ -209,6 +220,21 @@ bool FACEThirdEyeTest::RunTest(const FString&)
             FVector2D Destination;uint32 Dungeon=0;
             TestTrue(TEXT("Third Eye row also points the waypoint arrow at the object"),H->GetWaypoint(Destination,Dungeon)&&Destination.Equals(ACEWaypoint::Coordinates(Golem.Position),.002));
         }
+        auto NameLabel=StaticCastSharedPtr<STextBlock>(FindTag(Panel,TEXT("ThirdEye.Name.1")));
+        FACEWorldObject Corpse=Golem;Corpse.ItemType=ACEItemType::Container;Corpse.ObjectDescriptionFlags=ACEObjectDescFlag::Corpse;
+        Session.WorldObjects[1]=Corpse;
+        auto RefreshWeight=[&]{for(int I=0;I<2;++I){++GFrameCounter;Renderer.DrawWidget(ClickTarget,Panel,FVector2D(320,150),0);FlushRenderingCommands();}};
+        RefreshWeight();
+        if(TestTrue(TEXT("Corpse row has a text label"),NameLabel.IsValid()))
+        {
+            TestEqual(TEXT("Unopened corpse is bold"),NameLabel->GetFont().TypefaceFontName,FName(TEXT("Bold")));
+            H->ObserveOpenedCorpse(Corpse);RefreshWeight();
+            TestEqual(TEXT("Manually opening a corpse changes it to normal text"),NameLabel->GetFont().TypefaceFontName,FName(TEXT("Regular")));
+            H->OpenedCorpses.Remove(1);H->LootedCorpses.Add(1,{Corpse.Position,FPlatformTime::Seconds()});RefreshWeight();
+            TestEqual(TEXT("UCM-looted corpse stays normal text"),NameLabel->GetFont().TypefaceFontName,FName(TEXT("Regular")));
+            H->LootedCorpses.Remove(1);
+        }
+        Session.WorldObjects[1]=Golem;
         auto Dismiss=FindTag(Panel,TEXT("ThirdEye.Dismiss.1"));
         if(TestTrue(TEXT("Slim row exposes a dismiss X"),Dismiss.IsValid()))StaticCastSharedPtr<SButton>(Dismiss)->SimulateClick();
         NativeStep();TestEqual(TEXT("Dismiss removes the detected line"),P->DetectedObjects.Num(),0);

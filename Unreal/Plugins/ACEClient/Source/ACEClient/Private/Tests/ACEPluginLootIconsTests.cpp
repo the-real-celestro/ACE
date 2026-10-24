@@ -189,13 +189,18 @@ bool FACEPluginLootIconsTest::RunTest(const FString&)
         TestTrue(TEXT("Stat line includes public value and burden"),Message.Text.Contains(TEXT("Value"))&&Message.Text.Contains(TEXT("Burden")));
     }
     Host->TickLootInspection();TestEqual(TEXT("Completed inspection does not spam chat"),Client->ChatHistory.Num(),Before+1);
+    Client->SelectInventoryObject(ClickItem.Guid);Host->TickLootInspection();
+    TestEqual(TEXT("Duplicate selection callbacks do not print a second line"),Client->ChatHistory.Num(),Before+1);
+    TestTrue(TEXT("Matched item is explicitly flagged"),Client->ChatHistory.Last().Text.StartsWith(TEXT("[MATCH]")));
+    TestTrue(TEXT("Matched item carries an explicit green color"),Client->ChatHistory.Last().LocalColor.IsSet()&&Client->ChatHistory.Last().LocalColor.GetValue().G>.9f);
+
     // Appraisal names can differ from the public name used by both the inventory
     // and the basic editor. Name (1) must refer to the same public identity.
     FACEAppraisalInfo RawName;RawName.ObjectGuid=ClickItem.Guid;RawName.bSuccess=true;
     RawName.StringProperties.Add(1,TEXT("raw template name"));Host->Appraisals.Add(ClickItem.Guid,RawName);
     TestEqual(TEXT("Appraisal cannot replace public Name (1)"),Host->LootItemSnapshot(ClickItem)->AsObject()->GetObjectField(TEXT("string_properties"))->GetStringField(TEXT("1")),ClickItem.Name);
     const int32 CheckBefore=Client->ChatHistory.Num();
-    Client->SelectInventoryObject(ClickItem.Guid);Host->TickLootInspection();
+    Host->LastInspectedAt=0;Client->SelectInventoryObject(ClickItem.Guid);Host->TickLootInspection();
     TestEqual(TEXT("Saved Lucky Gold then Ravener regex/exact rules match after appraisal"),Client->ChatHistory.Num(),CheckBefore+1);
     auto Draft=MakeShared<FJsonObject>();Draft->SetStringField(TEXT("name"),TEXT("Different item"));Draft->SetStringField(TEXT("name_mode"),TEXT("exact"));
     Host->InspectLootItem(ClickItem.Guid,Draft);Host->TickLootInspection();
@@ -204,27 +209,30 @@ bool FACEPluginLootIconsTest::RunTest(const FString&)
     Host->Appraisals.Remove(ClickItem.Guid);
     Client->ChatHistory.SetNum(Before+1);
 
-    ClickRule->SetBoolField(TEXT("enabled"),false);Client->SelectInventoryObject(ClickItem.Guid);Host->TickLootInspection();
+    Host->LastInspectedAt=0;ClickRule->SetBoolField(TEXT("enabled"),false);Client->SelectInventoryObject(ClickItem.Guid);Host->TickLootInspection();
     TestEqual(TEXT("Disabled rule still prints a basic stat line"),Client->ChatHistory.Num(),Before+2);
     TestTrue(TEXT("Nonmatched stat line is plain text"),Client->ChatHistory.Last().BoldText.IsEmpty());
     TestFalse(TEXT("Disabled rule never reports a loot match"),Client->ChatHistory.Last().Text.Contains(TEXT("Matches")));
-    ClickRule->SetBoolField(TEXT("enabled"),true);Client->SelectInventoryObject(ClickItem.Guid);Client->SelectInventoryObject(0);Host->TickLootInspection();
-    TestEqual(TEXT("Changing selection retains the prior click basic stat line"),Client->ChatHistory.Num(),Before+3);
+    TestTrue(TEXT("Nonmatching stat line is explicitly white"),Client->ChatHistory.Last().LocalColor.IsSet()&&Client->ChatHistory.Last().LocalColor.GetValue()==FLinearColor::White);
+    Host->LastInspectedAt=0;ClickRule->SetBoolField(TEXT("enabled"),true);Client->SelectInventoryObject(ClickItem.Guid);Client->SelectInventoryObject(0);Host->TickLootInspection();
+    TestEqual(TEXT("Changing selection does not print a provisional duplicate"),Client->ChatHistory.Num(),Before+2);
 
     auto NeedsId=MakeShared<FJsonObject>();NeedsId->SetStringField(TEXT("field"),TEXT("int"));
     NeedsId->SetNumberField(TEXT("key"),265);NeedsId->SetStringField(TEXT("op"),TEXT("ge"));NeedsId->SetNumberField(TEXT("value"),1);
     ClickRule->SetArrayField(TEXT("conditions"),{MakeShared<FJsonValueObject>(NeedsId)});
     Client->SelectInventoryObject(ClickItem.Guid);Host->TickLootInspection();
     TestTrue(TEXT("Unknown item qualities defer the match"),Host->InspectLootWaiting);
-    TestEqual(TEXT("Unknown qualities never print a speculative match"),Client->ChatHistory.Num(),Before+3);
+    TestEqual(TEXT("Unknown qualities never print a speculative match"),Client->ChatHistory.Num(),Before+2);
     FACEAppraisalInfo ClickAppraisal;ClickAppraisal.ObjectGuid=ClickItem.Guid;ClickAppraisal.bSuccess=true;
     ClickAppraisal.IntProperties.Add(265,1);Host->ObserveAppraisal(ClickAppraisal);Host->TickLootInspection();
-    TestEqual(TEXT("Completed appraisal resumes the clicked item match"),Client->ChatHistory.Num(),Before+4);
+    TestEqual(TEXT("Completed appraisal resumes the clicked item match"),Client->ChatHistory.Num(),Before+3);
     Policy->Profile->SetArrayField(TEXT("loot_rules"),{});Policy->Enabled=false;
     Session->WorldObjects[ClickItem.Guid].ItemType=ACEItemType::MeleeWeapon;
     ClickAppraisal.bHasWeaponProfile=true;ClickAppraisal.Damage=40;ClickAppraisal.DamageVariance=.25;ClickAppraisal.WeaponTime=30;
+    Host->LastInspectedAt=0;ClickAppraisal.FloatProperties.Add(29,1.2);ClickAppraisal.FloatProperties.Add(149,1.1);ClickAppraisal.FloatProperties.Add(150,1.05);ClickAppraisal.IntProperties.Add(204,12);
     Host->ObserveAppraisal(ClickAppraisal);Client->SelectInventoryObject(ClickItem.Guid);Host->TickLootInspection();
     TestTrue(TEXT("Weapon click prints appraised damage and speed without any loot rules or enabled UCM"),Client->ChatHistory.Last().Text.Contains(TEXT("Dmg 30–40"))&&Client->ChatHistory.Last().Text.Contains(TEXT("Speed 30")));
+    TestTrue(TEXT("Weapon includes attack, three defenses and damage bonuses"),Client->ChatHistory.Last().Text.Contains(TEXT("Attack"))&&Client->ChatHistory.Last().Text.Contains(TEXT("Melee D"))&&Client->ChatHistory.Last().Text.Contains(TEXT("Missile D"))&&Client->ChatHistory.Last().Text.Contains(TEXT("Magic D"))&&Client->ChatHistory.Last().Text.Contains(TEXT("Damage bonus 12")));
     TestTrue(TEXT("Unmatched weapon stat line stays unbolded"),Client->ChatHistory.Last().BoldText.IsEmpty());
     TestFalse(TEXT("Inspecting loot never starts UCM"),Policy->Running);
     return true;

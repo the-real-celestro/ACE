@@ -24,14 +24,15 @@
 static TAutoConsoleVariable<int32> CVarACEFrameHitches(TEXT("ace.Performance.Hitches"),1,
 	TEXT("Log up to 20 slow gameplay frames per session, at least 10 seconds apart. No capture or GPU readback."));
 
-void UACEClientSubsystem::ReceiveChatMessage(const FString& Text, const FString& Sender, int32 Type, int32 FilterType, const FString& BoldText)
+void UACEClientSubsystem::ReceiveChatMessage(const FString& Text, const FString& Sender, int32 Type, int32 FilterType, const FString& BoldText, TOptional<FLinearColor> LocalColor)
 {
 	TGuardValue<FString> BoldGuard(ActiveChatBoldText,BoldText);
+    TGuardValue<TOptional<FLinearColor>> ColorGuard(ActiveChatLocalColor,LocalColor);
 	// Transient notices should not reappear after changing the HUD.
 	if (!ACEChatMessageType::IsTransientNotice(Type))
 	{
 		if (ChatHistory.Num() >= 256) ChatHistory.RemoveAt(0);
-		ChatHistory.Add({Text.Left(16384), Sender.Left(256), Type, FilterType, BoldText});
+		ChatHistory.Add({Text.Left(16384), Sender.Left(256), Type, FilterType, BoldText, LocalColor});
 	}
 	OnChatMessage.Broadcast(Text, Sender, Type);
 	OnRoutedChatMessage.Broadcast(Text, Sender, Type, FilterType);
@@ -153,6 +154,10 @@ void UACEClientSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	});
 	Session->OnViewContentsExternal.AddLambda([this](int32 Guid)
 	{
+        FACEWorldObject Corpse;
+        if(GetWorldObject(Guid,Corpse)&&Corpse.IsCorpse())
+            if(auto* Host=GetGameInstance()->GetSubsystem<UACEPluginSubsystem>())
+                Host->ObserveOpenedCorpse(Corpse);
 		OnExternalContainerOpened.Broadcast(Guid);
 	});
 	Session->OnCloseGroundContainer.AddLambda([this](int32 Guid)
