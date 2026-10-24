@@ -29,10 +29,17 @@ namespace
         virtual FVector2D ComputeDesiredSize(float) const override { return FVector2D(16,16); }
         virtual int32 OnPaint(const FPaintArgs&,const FGeometry& G,const FSlateRect&,FSlateWindowElementList& Out,int32 Layer,const FWidgetStyle&,bool) const override
         {
-            static const FSlateRoundedBoxBrush Ring(FLinearColor(.025f,.035f,.045f),FLinearColor(.68f,.62f,.45f),1.2f);
-            static const FSlateRoundedBoxBrush Dot(FLinearColor(.18f,.78f,.32f));
-            FSlateDrawElement::MakeBox(Out,Layer,G.ToPaintGeometry(FVector2D(14,14),FSlateLayoutTransform(FVector2D(1,1))),&Ring,ESlateDrawEffect::None,FLinearColor(.025f,.035f,.045f));
-            if(On.Get(false))FSlateDrawElement::MakeBox(Out,Layer+1,G.ToPaintGeometry(FVector2D(6,6),FSlateLayoutTransform(FVector2D(5,5))),&Dot,ESlateDrawEffect::None,FLinearColor(.18f,.78f,.32f));
+            static const FLinearColor Green(.02f,1.f,.12f);
+            static const FSlateRoundedBoxBrush Dot(Green);
+            TArray<FVector2D> Ring;
+            for(int32 I=0;I<=32;++I)
+            {
+                const float Angle=2.f*PI*I/32.f;
+                Ring.Add(FVector2D(8+6.5f*FMath::Cos(Angle),8+6.5f*FMath::Sin(Angle)));
+            }
+            FSlateDrawElement::MakeLines(Out,Layer,G.ToPaintGeometry(),Ring,ESlateDrawEffect::None,
+                On.Get(false)?Green:FLinearColor(.72f,.75f,.68f),true,1.5f);
+            if(On.Get(false))FSlateDrawElement::MakeBox(Out,Layer+1,G.ToPaintGeometry(FVector2D(8,8),FSlateLayoutTransform(FVector2D(4,4))),&Dot,ESlateDrawEffect::None,Green);
             return Layer+1;
         }
     private:
@@ -179,7 +186,6 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMMicroPanel()
     auto Root=SNew(SBorder).BorderImage(&FACEPluginStyle::Current()->Background).Padding(6);
     auto Rows=SNew(SVerticalBox);
     auto Toggles=SNew(SMicroActivities).AvailableWidth_Lambda([Root=TWeakPtr<SBorder>(Root)](){auto Panel=Root.Pin();return Panel?float(Panel->GetCachedGeometry().GetLocalSize().X)-12.f:0.f;}).Condensed_Lambda([Host](){return Host.IsValid()&&Host->LedgerOption(TEXT("ucmmicro"),TEXT("condensed"));});
-    const auto ExtraVisibility=[Toggles](){return Toggles->IsCondensed()?EVisibility::Collapsed:EVisibility::Visible;};
     const auto Row=[Toggles](const TCHAR* Label,TFunction<bool()> Read,TFunction<void(bool)> Write)
     {
         Toggles->Add(SNew(SCheckBox).Tag(FName(*(FString(TEXT("MicroToggle."))+Label))).Style(MicroIndicatorStyle()).IsFocusable(false).ClickMethod(EButtonClickMethod::MouseDown)
@@ -198,7 +204,7 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMMicroPanel()
                 if(State==ECheckBoxState::Checked&&!P->Running)Host->Start(P->Id);
                 else if(State==ECheckBoxState::Unchecked&&P->Running)Host->Stop(P->Id,TEXT("Stopped"),true);
             }
-        })[MicroLabel(TEXT("UCM"),[UCM](){auto P=UCM();return P&&P->Running;})]];
+        })[MicroLabel(TEXT("On"),[UCM](){auto P=UCM();return P&&P->Running;})]];
     Header->AddSlot().AutoWidth().VAlign(VAlign_Center)[SNew(SACEPluginButton).Tag(TEXT("MicroCompact"))
         .Visibility_Lambda([Toggles](){return Toggles->IsSingleColumn()?EVisibility::Visible:EVisibility::Collapsed;})
         .ButtonStyle(&FACEPluginStyle::Current()->DockButton).ContentPadding(FMargin(4,1)).IsFocusable(false)
@@ -206,34 +212,33 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMMicroPanel()
         .OnClicked_Lambda([Host](){if(Host.IsValid())Host->SetLedgerOption(TEXT("ucmmicro"),TEXT("condensed"),!Host->LedgerOption(TEXT("ucmmicro"),TEXT("condensed")));return FReply::Handled();})
         [SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",13)).Text_Lambda([Toggles](){return FText::FromString(Toggles->IsCondensed()?TEXT("More"):TEXT("Less"));})]];
     Rows->AddSlot().AutoHeight().Padding(2,2)[Header];
-    auto Quick=SNew(SWrapBox).Visibility_Lambda(ExtraVisibility).UseAllottedSize(true).InnerSlotPadding(FVector2D(3,3));
-    const auto QuickButton=[&](const TCHAR* Label,const TCHAR* Help,TFunction<void()> Click,TAttribute<bool> Enabled)
+    auto Quick=SNew(SVerticalBox).Tag(TEXT("MicroQuickControls"));
+    const auto QuickCheck=[&](const TCHAR* Key,const TCHAR* Label,const TCHAR* Short,const TCHAR* Help,TFunction<bool()> Read,TFunction<void(bool)> Write,TAttribute<bool> Enabled)
     {
-        Quick->AddSlot()[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::CompactButtonPadding)).ButtonStyle(FACEPluginStyle::IsCodex()?&FACEPluginStyle::Current()->DockButton:&FACEPluginStyle::Current()->Button)
-            .IsFocusable(false).ToolTip(FACEPluginStyle::Tooltip(FText::FromString(Help))).IsEnabled(Enabled)
-            .OnClicked_Lambda([Click](){Click();return FReply::Handled();})
-            [SNew(SACEPluginText).Text(FText::FromString(Label)).Font(FACEPluginStyle::NativeFont("Regular",14))]];
+        Quick->AddSlot().AutoHeight().Padding(0,1)[SNew(SCheckBox).Tag(FName(*(FString(TEXT("MicroQuick."))+Key)))
+            .Style(&FACEPluginStyle::Current()->Check).IsFocusable(false).IsEnabled(Enabled)
+            .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(Help)))
+            .IsChecked_Lambda([Read]{return Read()?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
+            .OnCheckStateChanged_Lambda([Write](ECheckBoxState V){Write(V==ECheckBoxState::Checked);})
+            [SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",13)).AutoWrapText(false)
+                .Text_Lambda([Root=TWeakPtr<SBorder>(Root),Label,Short]{auto P=Root.Pin();return FText::FromString(P&&P->GetCachedGeometry().GetLocalSize().X>=330?Label:Short);})]];
     };
-    QuickButton(TEXT("F"),TEXT("Force Buff: refresh enabled buffs, even while UCM is stopped."),[Host](){if(Host.IsValid())Host->RequestForceBuff();},true);
-    QuickButton(TEXT("CF"),TEXT("Cancel Force Buff after the current cast."),[Host](){if(Host.IsValid())Host->CancelForceBuff();},
-        TAttribute<bool>::CreateLambda([Host](){return Host.IsValid()&&Host->IsForceBuffRequested();}));
-    Quick->AddSlot()[SNew(SCheckBox).Style(MicroIndicatorStyle()).IsFocusable(false)
-        .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Follow Character: select a player, enable FC, then start UCM. Disable to stop following."))))
-        .IsChecked_Lambda([Host](){return Host.IsValid()&&Host->IsUCMFollowEnabled()?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
-        .OnCheckStateChanged_Lambda([Host](ECheckBoxState V){if(Host.IsValid())Host->SetUCMFollowSelected(V==ECheckBoxState::Checked);})
-        [MicroLabel(TEXT("FC"),[Host](){return Host.IsValid()&&Host->IsUCMFollowEnabled();})]];
-    Quick->AddSlot()[SNew(SCheckBox).Style(MicroIndicatorStyle()).IsFocusable(false)
-        .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Corners: follow the player's observed footsteps in order instead of heading directly toward them."))))
-        .IsChecked_Lambda([UCM](){auto P=UCM();bool On=false;if(P)P->Profile->TryGetBoolField(TEXT("follow_corners"),On);return On?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
-        .OnCheckStateChanged_Lambda([Host,UCM](ECheckBoxState V){if(auto P=UCM();P&&Host.IsValid()){P->Profile->SetBoolField(TEXT("follow_corners"),V==ECheckBoxState::Checked);Host->SaveCurrentProfile(P->Id,false);}})
-        [MicroLabel(TEXT("C"),[UCM](){auto P=UCM();bool On=false;if(P)P->Profile->TryGetBoolField(TEXT("follow_corners"),On);return On;})]];
-    Rows->AddSlot().AutoHeight()[SNew(SBox).Visibility_Lambda(ExtraVisibility).Padding(FMargin(2,4))[Quick]];
-    // Text length must never change the Micro window/drag-bar dimensions.
-    Rows->AddSlot().AutoHeight().Padding(2,4)[SNew(SBox).Visibility_Lambda(ExtraVisibility).WidthOverride(1).HeightOverride(24).Clipping(EWidgetClipping::ClipToBounds)
-        .ToolTip(FACEPluginStyle::Tooltip(TAttribute<FText>::CreateLambda([Host](){return FText::FromString(Host.IsValid()?Host->UCMCurrentStatus():FString());})))
-        [SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight()[SNew(SACEPluginText).AutoWrapText(false).Font(FACEPluginStyle::NativeFont("Regular",14))
-            .Text_Lambda([Host](){return FText::FromString(Host.IsValid()?Host->UCMCurrentStatus():FString());})]]];
-    Rows->AddSlot().AutoHeight()[Toggles];
+    QuickCheck(TEXT("ForceBuff"),TEXT("Force Buff"),TEXT("F"),TEXT("Force Buff: check to refresh enabled buffs. Uncheck to cancel after the current cast."),
+        [Host]{return Host.IsValid()&&Host->IsForceBuffRequested();},
+        [Host](bool On){if(Host.IsValid()){if(On)Host->RequestForceBuff();else Host->CancelForceBuff();}},true);
+    QuickCheck(TEXT("FollowCharacter"),TEXT("Follow Character"),TEXT("FC"),TEXT("Follow Character: select another player, check Follow, then turn On."),
+        [Host]{return Host.IsValid()&&Host->IsUCMFollowEnabled();},
+        [Host](bool On){if(Host.IsValid())Host->SetUCMFollowSelected(On);},true);
+    QuickCheck(TEXT("CancelForce"),TEXT("Cancel Force"),TEXT("CF"),TEXT("Check to cancel forced buffing after the current cast. This action resets immediately."),
+        []{return false;},[Host](bool On){if(On&&Host.IsValid())Host->CancelForceBuff();},
+        TAttribute<bool>::CreateLambda([Host]{return Host.IsValid()&&Host->IsForceBuffRequested();}));
+    QuickCheck(TEXT("Corners"),TEXT("Corners"),TEXT("C"),TEXT("Follow the player's observed footsteps rather than heading directly toward them."),
+        [UCM]{auto P=UCM();bool On=false;if(P)P->Profile->TryGetBoolField(TEXT("follow_corners"),On);return On;},
+        [Host,UCM](bool On){if(auto P=UCM();P&&Host.IsValid()){P->Profile->SetBoolField(TEXT("follow_corners"),On);Host->SaveCurrentProfile(P->Id,false);}},true);
+    Rows->AddSlot().AutoHeight()[SNew(SHorizontalBox)
+        +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Top)[Toggles]
+        +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Top).Padding(4,0,0,0)[SNew(SBox)
+            .WidthOverride_Lambda([Root=TWeakPtr<SBorder>(Root)]{auto P=Root.Pin();return P&&P->GetCachedGeometry().GetLocalSize().X>=330?140.f:44.f;})[Quick]]];
     for(const auto& Entry:TArray<TPair<FString,FString>>{
         {TEXT("meta_enabled"),TEXT("Metas")},{TEXT("buffing"),TEXT("Buffing")},
         {TEXT("combat"),TEXT("Combat")},{TEXT("looting"),TEXT("Looting")},
@@ -255,10 +260,6 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMMicroPanel()
             Host->SaveCurrentProfile(P->Id,false);
         });
     }
-    Rows->AddSlot().AutoHeight().HAlign(HAlign_Left).Padding(2,4)[SNew(SACEPluginButton).Visibility_Lambda(ExtraVisibility).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(FACEPluginStyle::IsCodex()?&FACEPluginStyle::Current()->DockButton:&FACEPluginStyle::Current()->Button).IsFocusable(false)
-
-        .OnClicked_Lambda([Host](){if(Host.IsValid())Host->TogglePluginWindow(TEXT("ucm.log"));return FReply::Handled();})
-        [SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",14)).Text(FText::FromString(TEXT("Open UCM Log")))]];
-    Root->SetContent(SNew(SScrollBox)+SScrollBox::Slot()[Rows]);
+    Root->SetContent(SNew(SScrollBox).ScrollBarVisibility(EVisibility::Collapsed)+SScrollBox::Slot()[Rows]);
     return Root;
 }

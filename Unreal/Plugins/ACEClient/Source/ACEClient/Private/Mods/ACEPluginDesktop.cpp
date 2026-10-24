@@ -34,6 +34,7 @@ namespace
     FString SizeKey(const FString& Id){return Id+(Id==TEXT("huntledger")?TEXT(".body_size"):TEXT(".size"));}
     FString PanelSizeKey(const FString& Id)
     {
+        if(Id==TEXT("thirdeye"))return Id+TEXT(".slim_size");
         return Id+((Id==TEXT("looteditor")||Id==TEXT("itemtools")||Id==TEXT("autocraft")||Id==TEXT("ucmmicro")||Id==TEXT("ucm.log")||Id==TEXT("thirdeye"))?TEXT(".compact_size"):TEXT(".size"));
     }
     const FButtonStyle& DockButtonStyle(){return FACEPluginStyle::Current()->DockButton;}
@@ -390,6 +391,9 @@ FVector2D SACEPluginDesktop::DisplaySize(const FWindow& W) const
         if(W.MapOverlay&&Host->WaypointOption(TEXT("map_minimized"),false))return FVector2D(70,26);
     }
     auto Size=W.Size;
+    if(W.Id==TEXT("thirdeye")&&Host.IsValid())
+        for(const auto& P:Host->Plugins)if(P->Id==W.Id&&P->PanelSize.Y>0)
+            Size.Y=P->PanelSize.Y+ACELedger::ChromeHeaderHeight();
     if(W.Id==TEXT("ucmmicro"))Size.X=FMath::Max(160.,Size.X);
     if(W.Id==TEXT("ucmmicro")&&Size.X<312&&Host.IsValid()&&Host->LedgerOption(TEXT("ucmmicro"),TEXT("condensed")))
         Size.Y=FMath::Max(220.,Size.Y*.5);
@@ -447,7 +451,7 @@ void SACEPluginDesktop::Tick(const FGeometry& G,double Time,float Delta)
     for(auto& Pair:Windows)
     {
         const bool Hidden=Host.IsValid()&&Host->IsPluginWindowChromeHidden(Pair.Key);
-        if(BoundsChanged||Hidden!=Pair.Value.HiddenChrome||!Pair.Value.LedgerId.IsEmpty()||Pair.Key==TEXT("actiondeck")||Pair.Key==TEXT("ucmmicro"))Layout(Pair.Value);
+        if(BoundsChanged||Hidden!=Pair.Value.HiddenChrome||!Pair.Value.LedgerId.IsEmpty()||Pair.Key==TEXT("actiondeck")||Pair.Key==TEXT("thirdeye")||Pair.Key==TEXT("ucmmicro"))Layout(Pair.Value);
         Pair.Value.HiddenChrome=Hidden;
     }
 }
@@ -538,7 +542,7 @@ void SACEPluginDesktop::Toggle(const FString& Id)
     if(Id==TEXT("itemtools"))W.Size=Host->GetPluginWindowPosition(TEXT("itemtools.compact_size"),FVector2D(480,380));
     if(Id==TEXT("ucmmicro"))W.Size=Host->GetPluginWindowPosition(PanelSizeKey(Id),FVector2D(360,340));
     if(Id==TEXT("autocraft"))W.Size=Host->GetPluginWindowPosition(PanelSizeKey(Id),FVector2D(520,460));
-    if(Id==TEXT("thirdeye"))W.Size=Host->GetPluginWindowPosition(PanelSizeKey(Id),FVector2D(520,480));
+    if(Id==TEXT("thirdeye"))W.Size=Host->GetPluginWindowPosition(TEXT("thirdeye.slim_size"),FVector2D(320,100));
     if(Id==TEXT("actiondeck"))W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(530,203));
     if(Id==TEXT("ucm.log"))W.Size=Host->GetPluginWindowPosition(PanelSizeKey(Id),FVector2D(620,360));
     if(Manager)W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FACEPluginStyle::IsCodex()?FVector2D(880,640):FVector2D(740,600));

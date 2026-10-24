@@ -321,4 +321,5 @@ namespace ACEPluginCompanionPanelPrivate
 } // anonymous namespace
 TSharedRef<SWidget> UACEPluginSubsystem::MakeCompanionPanel(const FString& Id)
 {
+    if(Id==TEXT("thirdeye"))return MakeThirdEyePanel(true);
     using namespace ACEPluginCompanionPanelPrivate;return SNew(SACECompanionRows).Host(this).Id(Id);}

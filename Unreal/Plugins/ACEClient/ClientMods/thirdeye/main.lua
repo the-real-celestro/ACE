@@ -1,7 +1,7 @@
 -- Passive, bounded observer. Only configuration is saved; world GUIDs and alert
 -- suppression belong to this login. Matching is literal, never a regular expression.
 local config, draft, exact, feedback = nil, "", false, ""
-local cache, seen = {}, {}
+local cache, seen, dismissed = {}, {}, {}
 local rule_page, detected_page, filter = 1, 1, ""
 local alerts, alert_inflight, next_alert = {}, false, 0
 local rule_size, detected_size, MAX_RULES = 6, 8, 128
@@ -49,6 +49,12 @@ return function(s)
             end
         end
     end
+    local present={}
+    for _,o in ipairs(s.objects or {}) do present[o.id]=o end
+    for id,old in pairs(dismissed) do
+        local o=present[id]
+        if not o or o.name~=old.name or o.wcid~=old.wcid then dismissed[id]=nil end
+    end
     local changed, rules_changed = false, false
     local selected
     for _, o in ipairs(s.objects or {}) do if o.id == s.selected then selected=o end end
@@ -84,7 +90,10 @@ return function(s)
                 for _, r in ipairs(config.rules) do if r.id==id then r.enabled=e.value==true; changed=true; rules_changed=true end end
             end
         elseif e.type=="click" then
-            if e.id=="add" then add(draft)
+            if string.sub(e.id or "",1,8)=="dismiss_" then
+                local id=tonumber(string.sub(e.id,9));local o=present[id]
+                if o then dismissed[id]={name=o.name,wcid=o.wcid} end
+            elseif e.id=="add" then add(draft)
             elseif e.id=="add_selected" then add(selected and selected.name or "")
             elseif e.id=="rules_prev" then rule_page=rule_page-1
             elseif e.id=="rules_next" then rule_page=rule_page+1
@@ -128,7 +137,7 @@ return function(s)
                     end
                 end
                 if match==nil then scanning=true else next_cache[name]=match end
-                if match then
+                if match and not dismissed[o.id] then
                     matches[#matches+1]=o
                     local previous=seen[o.id]
                     if not previous or previous.name~=o.name or previous.wcid~=o.wcid then
@@ -206,5 +215,7 @@ return function(s)
             {id="setup_tab",type="column",text="Setup",children=setup},
             {id="options_tab",type="column",text="Options",children=options}}}}
     if s.error and s.error~="" then ui[#ui+1]={id="error",text=s.error,color="red"} end
-    return {status=#matches.." matches",ui=ui,markers=markers,requests=requests,state=changed and config or nil}
+    local detections={}
+    for _,o in ipairs(matches) do detections[#detections+1]={id=o.id,name=o.name,distance=o.distance,wcid=o.wcid or 0} end
+    return {status=#matches.." matches",detected_objects=detections,ui=ui,markers=markers,requests=requests,state=changed and config or nil}
 end

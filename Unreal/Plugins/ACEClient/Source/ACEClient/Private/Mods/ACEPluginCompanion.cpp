@@ -145,7 +145,7 @@ void UACEPluginSubsystem::StopCompanion(FACEClientPlugin& P,const FString& Reaso
 {
     using namespace ACEPluginCompanionPrivate; using ACEPluginCompanionPrivate::S; using ACEPluginCompanionPrivate::N;
     FlushPluginState(P);P.Running=false;P.CompanionStopped=true;P.VM.Reset();
-    P.Markers.Reset();P.PanelRows.Reset();P.PluginEvents.Reset();P.ChatFilters.Reset();++P.PanelRevision;P.Status=Reason+(P.StateDirty?TEXT("; ")+P.CompanionError:FString());
+    P.Markers.Reset();P.DetectedObjects.Reset();++P.DetectedRevision;P.PanelRows.Reset();P.PluginEvents.Reset();P.ChatFilters.Reset();++P.PanelRevision;P.Status=Reason+(P.StateDirty?TEXT("; ")+P.CompanionError:FString());
     // Observational plugin lifecycle never cancels UCM movement, casts or attacks.
 }
 
@@ -279,6 +279,24 @@ bool UACEPluginSubsystem::ApplyCompanionOutput(FACEClientPlugin& P,const TShared
         if(!P.Permissions.Contains(TEXT("ui"))||!List(O,TEXT("ui"),128,Rows)){Error=TEXT("UI requires ui permission and at most 128 rows");return false;}
         if(!ValidatePluginUI(*Rows,Error))return false;
     }
+    const TArray<TSharedPtr<FJsonValue>>* Detections=nullptr;
+    if(O->HasField(TEXT("detected_objects")))
+    {
+        if(P.Id!=TEXT("thirdeye")||!P.Permissions.Contains(TEXT("ui"))||!List(O,TEXT("detected_objects"),512,Detections))
+        {Error=TEXT("Third Eye detections require at most 512 items");return false;}
+        TSet<uint32> Seen;
+        for(const auto& V:*Detections)
+        {
+            if(!V||V->Type!=EJson::Object){Error=TEXT("Invalid detection");return false;}
+            auto D=V->AsObject();double Guid=0,Distance=0,Wcid=0;FString Name;
+            if(!D->TryGetNumberField(TEXT("id"),Guid)||!FMath::IsFinite(Guid)||Guid<1||Guid>MAX_uint32||Guid!=FMath::FloorToDouble(Guid)||Seen.Contains(uint32(Guid))
+                ||!D->TryGetStringField(TEXT("name"),Name)||Name.Len()>256
+                ||!D->TryGetNumberField(TEXT("distance"),Distance)||!FMath::IsFinite(Distance)||Distance<0||Distance>240
+                ||!D->TryGetNumberField(TEXT("wcid"),Wcid)||!FMath::IsFinite(Wcid)||Wcid<0||Wcid>MAX_uint32||Wcid!=FMath::FloorToDouble(Wcid))
+            {Error=TEXT("Invalid Third Eye detection fields");return false;}
+            Seen.Add(uint32(Guid));
+        }
+    }
     const TArray<TSharedPtr<FJsonValue>>* ChatFilters=nullptr;
     TArray<FACEPluginChatFilter> ParsedFilters;
     if(O->HasField(TEXT("chat_filters")))
@@ -308,6 +326,7 @@ bool UACEPluginSubsystem::ApplyCompanionOutput(FACEClientPlugin& P,const TShared
     if(ChatFilters)P.ChatFilters=MoveTemp(ParsedFilters);
     if(State&&(!P.SavedState||!FJsonValue::CompareEqual(FJsonValueObject(P.SavedState),FJsonValueObject(*State)))){P.SavedState=*State;P.StateDirty=true;}
     if(Rows&&!FJsonValue::CompareEqual(FJsonValueArray(P.PanelRows),FJsonValueArray(*Rows))){P.PanelRows=*Rows;++P.PanelRevision;}
+    if(Detections&&!FJsonValue::CompareEqual(FJsonValueArray(P.DetectedObjects),FJsonValueArray(*Detections))){P.DetectedObjects=*Detections;++P.DetectedRevision;}
     if(Markers)P.Markers=MoveTemp(Parsed);
     if(Messages)for(const auto& V:*Messages)
     {

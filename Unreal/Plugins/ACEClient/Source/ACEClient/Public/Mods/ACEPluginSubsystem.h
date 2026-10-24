@@ -74,7 +74,8 @@ struct FACEClientPlugin
     TArray<TSharedPtr<FJsonValue>> LogEntries;
     FString StatePath, CompanionError;
     TSharedPtr<FJsonObject> SavedState;
-    TArray<TSharedPtr<FJsonValue>> PanelRows, PluginEvents;
+    TArray<TSharedPtr<FJsonValue>> PanelRows, PluginEvents, DetectedObjects;
+    uint32 DetectedRevision=0;
     TArray<FACEPluginMarker> Markers;
     uint64 ChatCursor=0;
     TArray<FACEPluginChatFilter> ChatFilters;
@@ -245,6 +246,7 @@ public:
     bool IsManagerOpen() const { return DesktopPanel.IsValid(); }
     TSharedRef<SWidget> MakeUCMPanel(const FString& InitialPage=FString(), bool bShowTitle=true);
     TSharedRef<SWidget> MakeUCMMicroPanel();
+    TSharedRef<SWidget> MakeThirdEyePanel(bool Settings=false);
     TSharedRef<SWidget> MakeItemToolsPanel(bool bShowTitle=true);
     bool RunItemToolsCommand(const FString& Arguments);
     bool StartItemTools(const FString& Mode);

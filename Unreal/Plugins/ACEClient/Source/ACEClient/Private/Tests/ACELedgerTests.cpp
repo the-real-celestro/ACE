@@ -441,6 +441,14 @@ bool FACELedgerTest::RunTest(const FString&)
                 auto Meta=FindTagged(Panel,TEXT("MicroToggle.Metas")),Buff=FindTagged(Panel,TEXT("MicroToggle.Buffing")),Combat=FindTagged(Panel,TEXT("MicroToggle.Combat")),Last=FindTagged(Panel,TEXT("MicroToggle.Peace when idle"));
                 if(TestTrue(TEXT("Micro keeps quick activity controls"),Meta&&Buff&&Combat&&Last))
                 {
+                    auto Right=FindTagged(Panel,TEXT("MicroQuickControls"));
+                    for(const TCHAR* Key:{TEXT("ForceBuff"),TEXT("FollowCharacter"),TEXT("CancelForce"),TEXT("Corners")})
+                    {
+                        auto Control=FindTagged(Panel,FName(*(FString(TEXT("MicroQuick."))+Key)));
+                        TestTrue(TEXT("Micro right-side controls are checkboxes"),Control.IsValid()&&Control->GetType()==TEXT("SCheckBox"));
+                        if(Control)TestTrue(TEXT("Micro auxiliary controls stay right of activities"),Control->GetCachedGeometry().GetAbsolutePosition().X>Meta->GetCachedGeometry().GetAbsolutePosition().X);
+                    }
+                    TestTrue(TEXT("Micro retains a distinct right-side control group"),Right.IsValid());
                     TestTrue(TEXT("Micro activities share rows"),FMath::IsNearlyEqual(Meta->GetCachedGeometry().GetAbsolutePosition().Y,Buff->GetCachedGeometry().GetAbsolutePosition().Y));
                     TestTrue(TEXT("All Micro activities fit the compact viewport"),Last->GetCachedGeometry().GetAbsolutePosition().Y+Last->GetCachedGeometry().GetAbsoluteSize().Y<=Viewport.Y);
                     auto UCM=H->Find(TEXT("ucm"));const auto SavedProfile=MakeShared<FJsonObject>(*UCM->Profile);
@@ -462,6 +470,8 @@ bool FACELedgerTest::RunTest(const FString&)
                     TestTrue(TEXT("Narrow Micro activities stack in one column"),FMath::IsNearlyEqual(Buff->GetCachedGeometry().GetAbsolutePosition().X,Combat->GetCachedGeometry().GetAbsolutePosition().X)&&Combat->GetCachedGeometry().GetAbsolutePosition().Y>Buff->GetCachedGeometry().GetAbsolutePosition().Y);
                     TestTrue(TEXT("Narrow Micro keeps its final activity within the scroll viewport"),Last->GetCachedGeometry().GetAbsolutePosition().Y+Last->GetCachedGeometry().GetAbsoluteSize().Y<NarrowSize.Y);
                     TArray<FColor> NarrowPixels;NarrowTarget->GameThread_GetRenderTargetResource()->ReadPixels(NarrowPixels);
+                    int32 BrightGreen=0;for(const auto& Pixel:NarrowPixels)if(Pixel.G>=235&&Pixel.R<90&&Pixel.B<150)++BrightGreen;
+                    TestTrue(TEXT("Enabled Micro dots render vivid green"),BrightGreen>=16);
                     TArray64<uint8> NarrowPNG;FImageUtils::PNGCompressImageArray(NarrowTarget->SizeX,NarrowTarget->SizeY,NarrowPixels,NarrowPNG);
                     FFileHelper::SaveArrayToFile(NarrowPNG,*(H->StorageRoot/TEXT("ucmmicro-narrow.png")));NarrowTarget->ReleaseResource();
                     TestTrue(TEXT("Micro primary order begins Metas, Buffing, Combat"),Meta->GetCachedGeometry().GetAbsolutePosition().Y<Buff->GetCachedGeometry().GetAbsolutePosition().Y&&Buff->GetCachedGeometry().GetAbsolutePosition().Y<Combat->GetCachedGeometry().GetAbsolutePosition().Y);

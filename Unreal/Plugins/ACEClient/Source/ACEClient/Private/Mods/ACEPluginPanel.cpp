@@ -607,6 +607,7 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakePanel(const FString& PluginId)
     if(PluginId==TEXT("autocraft"))return MakeAutoCraftPanel(false);
     if(PluginId==TEXT("ucm.log"))return MakeUCMLogPanel();
     if(PluginId==TEXT("ucmmicro"))return MakeUCMMicroPanel();
+    if(PluginId==TEXT("thirdeye"))return MakeThirdEyePanel();
     if(PluginId==TEXT("actiondeck"))return GetGameInstance()->GetSubsystem<UACEActionDeckSubsystem>()->MakePanel();
     if(PluginId==TEXT("waypoint")||PluginId==TEXT("waypoint.map"))return MakeWaypointPanel(true,false,false);
     if(PluginId==TEXT("looteditor"))return MakeUCMPanel(TEXT("Standalone loot"),false);

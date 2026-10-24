@@ -2,6 +2,8 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Misc/Parse.h"
+#include "Misc/CommandLine.h"
 #include "Misc/ScopeExit.h"
 #include "Interfaces/IPluginManager.h"
 #include "Mods/ACEPluginSubsystem.h"
@@ -106,6 +108,7 @@ bool FACEThirdEyeTest::RunTest(const FString&)
     }
     TestTrue(TEXT("Every crowded-area name is eventually scanned"),Finished);
     TestEqual(TEXT("Markers remain bounded"),Out->GetArrayField(TEXT("markers")).Num(),32);
+    TestEqual(TEXT("All 512 detections reach the native list without UI-control pagination limits"),Out->GetArrayField(TEXT("detected_objects")).Num(),512);
     // Traverse full lists, including the final partial page. Pagination must
     // reach everything even in a short window, without requiring scrolling.
     Busy->SetObjectField(TEXT("panel"),EyeJSON(TEXT(R"({"width":480,"height":440})")));
@@ -176,7 +179,8 @@ bool FACEThirdEyeTest::RunTest(const FString&)
     TestEqual(TEXT("Original watch list restored from disk"),P->SavedState->GetArrayField(TEXT("rules")).Num(),1);
     if(FApp::CanEverRender())
     {
-        GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"));
+        FString DatDirectory=TEXT("C:/Turbine/Asheron's Call");FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),DatDirectory);
+        TestTrue(TEXT("Retail DAT loads for slim Third Eye"),GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(DatDirectory));
         TestFalse(TEXT("Third Eye opts out of host scrolling"),P->ScrollPanel());
         FWidgetRenderer Renderer(false,true);auto Panel=H->MakePanel(P->Id);
         TFunction<TSharedPtr<SWidget>(TSharedRef<SWidget>,FName)> FindTag;
@@ -193,7 +197,22 @@ bool FACEThirdEyeTest::RunTest(const FString&)
             auto* Children=Widget->GetChildren();for(int32 I=0;I<Children->Num();++I)if(HasScroll(Children->GetChildAt(I)))return true;
             return false;
         };
-        // Fresh crowded VM starts on page one; resize the same retained panel.
+        // Click and dismiss the native row; dismissal survives ticks until awareness ends.
+        auto* ClickTarget=FWidgetRenderer::CreateTargetFor(FVector2D(320,150),TF_Bilinear,true);
+        for(int I=0;I<4;++I){++GFrameCounter;Renderer.DrawWidget(ClickTarget,Panel,FVector2D(320,150),0);FlushRenderingCommands();}
+        auto Select=FindTag(Panel,TEXT("ThirdEye.Select.1"));
+        if(TestTrue(TEXT("Slim detection is a clickable text row"),Select.IsValid()))
+        {C->SelectObject(0);StaticCastSharedPtr<SButton>(Select)->SimulateClick();TestEqual(TEXT("Native text row selects the real object"),C->GetSelectedObject().Guid,1);}
+        auto Dismiss=FindTag(Panel,TEXT("ThirdEye.Dismiss.1"));
+        if(TestTrue(TEXT("Slim row exposes a dismiss X"),Dismiss.IsValid()))StaticCastSharedPtr<SButton>(Dismiss)->SimulateClick();
+        NativeStep();TestEqual(TEXT("Dismiss removes the detected line"),P->DetectedObjects.Num(),0);
+        NativeStep();TestEqual(TEXT("Dismissed line does not reappear on the next tick"),P->DetectedObjects.Num(),0);
+        Session.WorldObjects.Remove(1);NativeStep();Session.WorldObjects.Add(1,Golem);NativeStep();
+        TestEqual(TEXT("Object can be detected again after leaving awareness"),P->DetectedObjects.Num(),1);ClickTarget->ReleaseResource();
+        auto NativeRules=Stress->GetArrayField(TEXT("rules"));
+        for(int I=0;I<NativeRules.Num();++I)NativeRules[I]->AsObject()->SetNumberField(TEXT("id"),I+1);
+        P->SavedState=Stress;
+        // Resize the same retained native panel, with every matching object attached.
         Crowded.Load(Script,Error);
         for(const FVector2D Size:{FVector2D(780,650),FVector2D(480,440),FVector2D(1000,360)})
         {
@@ -202,43 +221,37 @@ bool FACEThirdEyeTest::RunTest(const FString&)
             {
                 auto Public=H->PublicSnapshot(*P);const TSharedPtr<FJsonObject>* Available=nullptr;
                 if(Public->TryGetObjectField(TEXT("panel"),Available))Busy->SetObjectField(TEXT("panel"),*Available);
-                if(Crowded.Step(Busy,Empty,Out,Error)){P->PanelRows=Out->GetArrayField(TEXT("ui"));++P->PanelRevision;}
+                if(Crowded.Step(Busy,Empty,Out,Error)){P->PanelRows=Out->GetArrayField(TEXT("ui"));++P->PanelRevision;P->DetectedObjects=Out->GetArrayField(TEXT("detected_objects"));++P->DetectedRevision;}
                 else AddError(Error);
                 ++GFrameCounter;Renderer.DrawWidget(Target,Panel,Size,0);FlushRenderingCommands();
             };
             for(int I=0;I<12;++I)Frame();
             for(const TCHAR* Page:{TEXT("detected"),TEXT("setup"),TEXT("options")})
             {
-                auto Tab=FindTag(Panel,FName(*FString::Printf(TEXT("PluginTab.tabs.%s_tab"),Page)));
+                auto Tab=FindTag(Panel,FName(*FString::Printf(TEXT("ThirdEye.Tab.%d"),FString(Page)==TEXT("detected")?0:FString(Page)==TEXT("setup")?1:2)));
                 if(!TestTrue(TEXT("Third Eye tab exists"),Tab.IsValid()))continue;
                 StaticCastSharedPtr<SACEPluginTab>(Tab)->SimulateClick();for(int I=0;I<4;++I)Frame();
                 TestFalse(TEXT("Third Eye has no visible scrollbar or scroll box"),HasScroll(Panel));
-                const FString Prefix=FString(Page)==TEXT("setup")?TEXT("rules"):TEXT("detected");
-                if(FString(Page)!=TEXT("options"))
+                TestFalse(TEXT("Native list has no paging buttons"),FindTag(Panel,TEXT("PluginRow.detected_next")).IsValid());
+                if(FString(Page)==TEXT("detected"))
                 {
-                    auto Prev=FindTag(Panel,FName(*(TEXT("PluginRow.")+Prefix+TEXT("_prev"))));
-                    auto Next=FindTag(Panel,FName(*(TEXT("PluginRow.")+Prefix+TEXT("_next"))));
-                    if(TestTrue(TEXT("Both pagination buttons present"),Prev&&Next))
-                    {
-                        TestTrue(TEXT("Pagination arrows keep compact widths"),Prev->GetCachedGeometry().GetLocalSize().X<60&&Next->GetCachedGeometry().GetLocalSize().X<60);
-                        TestTrue(TEXT("Pagination arrows stay together"),Next->GetCachedGeometry().GetAbsolutePosition().X-Prev->GetCachedGeometry().GetAbsolutePosition().X<180);
-                    }
-                    const auto TabId=FString(Page)==TEXT("setup")?TEXT("setup_tab"):TEXT("detected_tab");
-                    const auto& Children=EyeControl(P->PanelRows,TabId)->GetArrayField(TEXT("children"));
-                    const FString LastId=Children.Last()->AsObject()->GetStringField(TEXT("id"));
-                    auto LastRow=FindTag(Panel,FName(*(TEXT("PluginControl.")+LastId)));
-                    if(TestTrue(TEXT("Last page row is arranged"),LastRow.IsValid()))
-                    {
-                        const auto& G=LastRow->GetCachedGeometry();
-                        TestTrue(FString::Printf(TEXT("%s rows fit %.0fx%.0f"),Page,Size.X,Size.Y),G.GetAbsolutePosition().Y+G.GetLocalSize().Y<=Size.Y+1);
-                    }
+                    TestTrue(TEXT("The last of 512 detections is attached without paging"),FindTag(Panel,TEXT("ThirdEye.Item.521")).IsValid());
+                    TestTrue(TEXT("Native panel grows past a fixed viewport instead of scrolling"),P->PanelSize.Y>Size.Y);
                 }
+                if(FString(Page)==TEXT("setup"))TestTrue(TEXT("The last watch rule is attached without paging"),FindTag(Panel,TEXT("ThirdEye.Rule.128")).IsValid());
                 TArray<FColor> Pixels;FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags);
                 TArray64<uint8> Png;FImageUtils::PNGCompressImageArray(int32(Size.X),int32(Size.Y),Pixels,Png);
                 FFileHelper::SaveArrayToFile(Png,*(FPaths::ProjectSavedDir()/FString::Printf(TEXT("ThirdEye-%s-%.0f.png"),Page,Size.X)));
             }
             Target->ReleaseResource();
         }
+        P->DetectedObjects.SetNum(12);++P->DetectedRevision;
+        auto FoundTab=FindTag(Panel,TEXT("ThirdEye.Tab.0"));if(FoundTab)StaticCastSharedPtr<SACEPluginTab>(FoundTab)->SimulateClick();
+        auto* Slim=FWidgetRenderer::CreateTargetFor(FVector2D(320,320),TF_Bilinear,true);
+        for(int I=0;I<4;++I){++GFrameCounter;Renderer.DrawWidget(Slim,Panel,FVector2D(320,320),0);FlushRenderingCommands();}
+        TArray<FColor> Pixels;Slim->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);
+        TArray64<uint8> Png;FImageUtils::PNGCompressImageArray(320,320,Pixels,Png);
+        FFileHelper::SaveArrayToFile(Png,*(FPaths::ProjectSavedDir()/TEXT("ThirdEye-slim.png")));Slim->ReleaseResource();
     }
     H->SetEnabled(P->Id,false);TestFalse(TEXT("Manager disable stops Third Eye"),P->Running);
     TestEqual(TEXT("Disabling Third Eye leaves UCM alone"),H->MovementOwner,FString(TEXT("ucm")));
