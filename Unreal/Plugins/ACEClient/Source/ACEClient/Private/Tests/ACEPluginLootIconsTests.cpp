@@ -160,6 +160,41 @@ bool FACEPluginLootIconsTest::RunTest(const FString&)
     TestFalse(TEXT("Death animation no longer blocks the next eligible summon"),Host->Snapshot()->GetBoolField(TEXT("owned_pet")));
     Session->WorldObjects[Pet.Guid].bDying=false;Session->WorldObjects[Pet.Guid].bHasPosition=false;
     TestFalse(TEXT("Retained positionless pet record does not block summoning forever"),Host->Snapshot()->GetBoolField(TEXT("owned_pet")));
+
+    // Click diagnostics use the same predicate and native item qualities while UCM is stopped.
+    TestTrue(TEXT("Initialize isolated click profile"),Host->InitializeUCMSelection());
+    auto Policy=Host->Find(TEXT("ucm"));Policy->Enabled=true;Policy->Running=false;
+    auto ClickRule=MakeShared<FJsonObject>();ClickRule->SetStringField(TEXT("label"),TEXT("Guts"));
+    ClickRule->SetStringField(TEXT("name"),TEXT("Ravener Guts"));ClickRule->SetStringField(TEXT("name_mode"),TEXT("exact"));
+    ClickRule->SetStringField(TEXT("action"),TEXT("keep"));
+    Policy->Profile->SetArrayField(TEXT("loot_rules"),{MakeShared<FJsonValueObject>(ClickRule)});
+    FACEWorldObject ClickItem;ClickItem.Guid=77;ClickItem.Name=TEXT("Ravener Guts");ClickItem.ItemType=ACEItemType::Misc;
+    ClickItem.ContainerId=Self.Guid;Session->WorldObjects.Add(ClickItem.Guid,ClickItem);
+    auto* Client=GI->GetSubsystem<UACEClientSubsystem>();const int32 Before=Client->ChatHistory.Num();
+    Client->SelectInventoryObject(ClickItem.Guid);Host->TickLootInspection();
+    TestEqual(TEXT("Matching inventory click prints one local message"),Client->ChatHistory.Num(),Before+1);
+    if(Client->ChatHistory.Num()>Before)
+    {
+        const auto& Message=Client->ChatHistory.Last();
+        TestTrue(TEXT("Chat names profile and matching rule"),Message.Text.Contains(Host->UCMSectionName(TEXT("Loot")))&&Message.Text.Contains(TEXT("Guts (keep)")));
+        TestEqual(TEXT("Only the item name is marked bold"),Message.BoldText,ClickItem.Name);
+    }
+    Host->TickLootInspection();TestEqual(TEXT("Completed inspection does not spam chat"),Client->ChatHistory.Num(),Before+1);
+    ClickRule->SetBoolField(TEXT("enabled"),false);Client->SelectInventoryObject(ClickItem.Guid);Host->TickLootInspection();
+    TestEqual(TEXT("Disabled rule does not announce a match"),Client->ChatHistory.Num(),Before+1);
+    ClickRule->SetBoolField(TEXT("enabled"),true);Client->SelectInventoryObject(ClickItem.Guid);Client->SelectInventoryObject(0);Host->TickLootInspection();
+    TestEqual(TEXT("Changing selection cancels pending match"),Client->ChatHistory.Num(),Before+1);
+
+    auto NeedsId=MakeShared<FJsonObject>();NeedsId->SetStringField(TEXT("field"),TEXT("int"));
+    NeedsId->SetNumberField(TEXT("key"),265);NeedsId->SetStringField(TEXT("op"),TEXT("ge"));NeedsId->SetNumberField(TEXT("value"),1);
+    ClickRule->SetArrayField(TEXT("conditions"),{MakeShared<FJsonValueObject>(NeedsId)});
+    Client->SelectInventoryObject(ClickItem.Guid);Host->TickLootInspection();
+    TestTrue(TEXT("Unknown item qualities defer the match"),Host->InspectLootWaiting);
+    TestEqual(TEXT("Unknown qualities never print a speculative match"),Client->ChatHistory.Num(),Before+1);
+    FACEAppraisalInfo ClickAppraisal;ClickAppraisal.ObjectGuid=ClickItem.Guid;ClickAppraisal.bSuccess=true;
+    ClickAppraisal.IntProperties.Add(265,1);Host->ObserveAppraisal(ClickAppraisal);Host->TickLootInspection();
+    TestEqual(TEXT("Completed appraisal resumes the clicked item match"),Client->ChatHistory.Num(),Before+2);
+    TestFalse(TEXT("Inspecting loot never starts UCM"),Policy->Running);
     return true;
 }
 #endif

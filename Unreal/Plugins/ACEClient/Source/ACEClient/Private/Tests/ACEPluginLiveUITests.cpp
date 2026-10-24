@@ -329,18 +329,21 @@ bool FACEPluginLiveUITest::RunTest(const FString&)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEPluginTooltipTest,"ACE.Plugins.Tooltips",
-    EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
 bool FACEPluginTooltipTest::RunTest(const FString&)
 {
     if(!FApp::CanEverRender()||!FSlateApplication::IsInitialized())return true;
     auto* GI=NewObject<UGameInstance>();GI->Init();ON_SCOPE_EXIT{GI->Shutdown();};
-    if(!TestTrue(TEXT("Load inventory tooltip artwork"),GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))))return false;
+    FString DatDirectory=TEXT("C:/Turbine/Asheron's Call");FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),DatDirectory);
+    if(!TestTrue(TEXT("Load inventory tooltip artwork"),GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(DatDirectory)))return false;
     const auto Style=FACEPluginStyle::Use(GI->GetSubsystem<UACEPluginSubsystem>());
     auto* Inventory=NewObject<UBorder>(GI);
     FText HoverText;
     const auto Button=SNew(SACEPluginButton).ButtonStyle(&Style->Button)
         .ToolTip(FACEPluginStyle::Tooltip(TAttribute<FText>::CreateLambda([&HoverText]{return HoverText;})));
     const auto PluginTip=Button->GetToolTip();
+    TestTrue(TEXT("Plugin buttons reserve cursor space before popup placement"),Button->HasToolTipForceField());
+    TestTrue(TEXT("Plugin cursor exclusion follows the pointer"),Button->GetToolTipForceFieldExpansion().IsSet());
     TestTrue(TEXT("An empty bound plugin tooltip stays hidden"),PluginTip->IsEmpty());
     auto Render=[&](TSharedRef<SWidget> Widget,const TCHAR* Capture)
     {

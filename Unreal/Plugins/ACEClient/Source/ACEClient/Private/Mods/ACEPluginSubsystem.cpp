@@ -1399,6 +1399,7 @@ bool UACEPluginSubsystem::Tick(float)
     ACE_PROFILE_SCOPE(Plugins);
     TickPluginPreview();
     TickLocalServices();
+    TickLootInspection();
     if(FPlatformTime::Seconds()>=NextUCMLogSave){NextUCMLogSave=FPlatformTime::Seconds()+10;FlushUCMLog();}
     UpdateWorldRendering();
     // VT cLogic.SchedulePoke wakes on cast completion instead of waiting for

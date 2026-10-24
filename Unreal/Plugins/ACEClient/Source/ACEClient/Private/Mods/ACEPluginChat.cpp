@@ -1,6 +1,7 @@
 #include "Mods/ACEPluginSubsystem.h"
 #include "ACEClientSubsystem.h"
 #include "Engine/GameInstance.h"
+#include "ACEPluginVM.h"
 
 bool UACEPluginSubsystem::ValidatePluginChatFilters(const TArray<TSharedPtr<FJsonValue>>& Values,
     TArray<FACEPluginChatFilter>& Filters,FString& Error) const
@@ -78,4 +79,74 @@ uint8 UACEPluginSubsystem::FilterPluginChatWindows(const FString& Text,const FSt
         }
     }
     return Hidden;
+}
+
+// This VM only evaluates the shared rule predicate. It cannot issue game actions.
+void UACEPluginSubsystem::InspectLootItem(int32 Guid)
+{
+    InspectLootGuid=0;InspectLootVM.Reset();InspectLootWaiting=false;
+    auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+    const auto P=Find(TEXT("ucm"));FACEWorldObject Item;
+    if(!P||!P->Enabled||!P->Profile||C->GetSessionState()!=EACESessionState::InWorld
+        ||!Guid||!C->GetWorldObject(Guid,Item)||(Item.ItemType&ACEItemType::Creature)||Item.IsCorpse())return;
+    const TArray<TSharedPtr<FJsonValue>>* Rules=nullptr;
+    if(!P->Profile->TryGetArrayField(TEXT("loot_rules"),Rules)||Rules->IsEmpty())return;
+    InspectLootGuid=Guid;InspectLootSession=C->GetSession();InspectLootProfile=P->Profile;
+    InspectLootDeadline=FPlatformTime::Seconds()+12;
+}
+void UACEPluginSubsystem::TickLootInspection()
+{
+    if(!InspectLootGuid)return;
+    auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+    const auto P=Find(TEXT("ucm"));FACEWorldObject Item;
+    auto Cancel=[this]{InspectLootGuid=0;InspectLootVM.Reset();InspectLootWaiting=false;};
+    if(!P||!P->Enabled||C->GetSessionState()!=EACESessionState::InWorld||C->GetSession()!=InspectLootSession.Pin()
+        ||P->Profile!=InspectLootProfile.Pin()||C->GetSelectedObject().Guid!=InspectLootGuid
+        ||FPlatformTime::Seconds()>InspectLootDeadline||!C->GetWorldObject(InspectLootGuid,Item)){Cancel();return;}
+    if(InspectLootWaiting)
+    {
+        const auto* A=Appraisals.Find(InspectLootGuid);
+        if(!A)return;
+        if(!A->bSuccess){Cancel();return;}
+        InspectLootWaiting=false;InspectLootVM.Reset();
+    }
+    FString Error;
+    if(!InspectLootVM)
+    {
+        InspectLootVM=MakeShared<FACEPluginVM>();
+        if(!InspectLootVM->Load(TEXT(R"lua(
+local index,scan=1,{}
+return function(s,p)
+ local item=s.clicked_item
+ while index<=#(p.loot_rules or {}) do
+  if not workavailable() then return {status='pending'} end
+  local rule=p.loot_rules[index]
+  local result=lootmatch(rule,item,s,scan)
+  if result=='pending' then return {status='pending'} end
+  if result==nil then return {status='identify'} end
+  if result then return {status='match',label=rule.label or ('Rule '..index),action=rule.action or 'keep'} end
+  index=index+1;scan={}
+ end
+ return {status='none'}
+end
+)lua"),Error)){Cancel();return;}
+    }
+    auto S=Snapshot();ExtendSnapshot(S);S->SetField(TEXT("clicked_item"),LootItemSnapshot(Item));
+    TSharedPtr<FJsonObject> Result;
+    if(!InspectLootVM->Step(S,P->Profile,Result,Error)||!Result){Cancel();return;}
+    const FString Status=Result->GetStringField(TEXT("status"));
+    if(Status==TEXT("pending"))return;
+    if(Status==TEXT("identify"))
+    {
+        InspectLootWaiting=true;C->RequestBackgroundAppraisal(InspectLootGuid);return;
+    }
+    if(Status==TEXT("match"))
+    {
+        const FString Name=S->GetObjectField(TEXT("clicked_item"))->GetStringField(TEXT("name"));
+        const FString Profile=UCMSectionName(TEXT("Loot"));
+        const FString Text=FString::Printf(TEXT("[Loot] %s matches %s / %s (%s)."),*Name,
+            *(Profile.IsEmpty()?TEXT("Default"):Profile),*Result->GetStringField(TEXT("label")),*Result->GetStringField(TEXT("action")));
+        C->ReceiveChatMessage(Text,TEXT(""),ACEChatMessageType::System,INDEX_NONE,Name);
+    }
+    Cancel();
 }

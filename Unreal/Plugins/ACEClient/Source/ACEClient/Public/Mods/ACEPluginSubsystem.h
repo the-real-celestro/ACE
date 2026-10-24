@@ -127,6 +127,7 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
     friend class FACEPluginCosmeticsTest;
     friend class FACEActionDeckTest;
 public:
+    void InspectLootItem(int32 Guid);
     virtual void Initialize(FSubsystemCollectionBase& Collection) override;
     virtual void Deinitialize() override;
     void Discover();
@@ -325,6 +326,14 @@ public:
     void ApplyMovement(AACEPlayerController* Controller, float& Forward, float& Right, float& Turn,
         bool Manual, bool Blocked, bool VR, const FVector& Facing, float MaxFrameTravel = 0.f);
 private:
+    void TickLootInspection();
+    TSharedPtr<FJsonValue> LootItemSnapshot(const FACEWorldObject& Item);
+    int32 InspectLootGuid=0;
+    double InspectLootDeadline=0;
+    bool InspectLootWaiting=false;
+    TSharedPtr<FACEPluginVM> InspectLootVM;
+    TWeakPtr<FACESession> InspectLootSession;
+    TWeakPtr<FJsonObject> InspectLootProfile;
     bool SaveProfileData(const FString& Id, const FString& Name, TSharedPtr<FJsonObject> Profile, bool bStopRunning);
     void UpdateLedgers();
     bool UpdateLedgerCharacter();

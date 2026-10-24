@@ -263,6 +263,10 @@ public:
 							Geometry.ToPaintGeometry(PixelSize * Scale, FSlateLayoutTransform(Pos)), &Brush, Effects,
 								!bBackground && bTint ? Label->GetGlyphColor(I, TextColor)
 								* Style.GetColorAndOpacityTint() : Tint);
+                        if(!bBackground && I>=Label->BoldRange.X && I<Label->BoldRange.Y)
+                            FSlateDrawElement::MakeBox(Elements,Layer+1,
+                                Geometry.ToPaintGeometry(PixelSize*Scale,FSlateLayoutTransform(Pos+FVector2D(Scale.X,0))),&Brush,Effects,
+                                bTint?Label->GetGlyphColor(I,TextColor)*Style.GetColorAndOpacityTint():Tint);
 					}
 					X += (Ch->Width + static_cast<int8>(Ch->HorizontalOffsetAfter)) * Scale.X;
 				}

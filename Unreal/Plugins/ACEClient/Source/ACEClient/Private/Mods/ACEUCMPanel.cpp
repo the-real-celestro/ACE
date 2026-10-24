@@ -138,10 +138,10 @@ namespace ACEUCMPanelPrivate
                     +SVerticalBox::Slot().AutoHeight().Padding(4,5,4,0)[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",10)).ColorAndOpacity(FACEPluginStyle::Muted())
                         .Text_Lambda([this](){return FText::FromString(FooterText());})]]];
             }
-            else ChildSlot[SNew(SBorder).BorderImage(&FACEPluginStyle::Current()->Background).Padding(14)
+            else ChildSlot[SNew(SBorder).BorderImage(&FACEPluginStyle::Current()->Background).Padding(EditorOnly?6:14)
                 [SNew(SVerticalBox)
                 +SVerticalBox::Slot().AutoHeight()[SNew(SBox).IsEnabled_Lambda(Enabled)[Header()]]
-                +SVerticalBox::Slot().AutoHeight().Padding(0,12)[SNew(SBox).IsEnabled_Lambda(Enabled)[Tabs()]]
+                +SVerticalBox::Slot().AutoHeight().Padding(0,EditorOnly?3:12)[SNew(SBox).IsEnabled_Lambda(Enabled)[Tabs()]]
                 +SVerticalBox::Slot().FillHeight(1)[BodyScroll.ToSharedRef()]
                 +SVerticalBox::Slot().AutoHeight().Padding(0,8)[Notice]]];
             Rebuild();
@@ -183,7 +183,7 @@ namespace ACEUCMPanelPrivate
             }
             RenderedProfile=P();if(ExternalChange)Rebuild();
         }
-        void Add(TSharedRef<SWidget> W){(SectionBody?SectionBody:Body)->AddSlot().AutoHeight().Padding(0,0,0,FACEPluginStyle::IsCodex()&&!EditorOnly?6:10)[W];}
+        void Add(TSharedRef<SWidget> W){(SectionBody?SectionBody:Body)->AddSlot().AutoHeight().Padding(0,0,0,EditorOnly?4:FACEPluginStyle::IsCodex()?6:10)[W];}
         void Heading(const FString& Title,const FString& Description)
         {
             const FString Key=Page+TEXT("/")+Title;
@@ -287,7 +287,7 @@ namespace ACEUCMPanelPrivate
                 Row->AddSlot().AutoWidth()[SNew(SBox).IsEnabled(!Name.IsEmpty()&&!Name.Equals(TEXT("Default"),ESearchCase::IgnoreCase))
                     [Button(TEXT("Delete"),[this,Section,Name](){if(!CanLeaveLootRule())return;DeletingSection=Section;DeletingName=Name;CreatingSection.Empty();Rebuild();})]];
             }
-            if(!HeaderCovers)Add(Tile(Row));
+            if(!HeaderCovers)Add(EditorOnly?StaticCastSharedRef<SWidget>(Row):Tile(Row));
             if(Manage&&CreatingSection==Section)
             {
                 Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(EditFont())
@@ -307,7 +307,7 @@ namespace ACEUCMPanelPrivate
                     if(Host->DeleteUCMSection(Section,DeletingName)){ResetProfileEditors();DeletingSection.Empty();}Rebuild();})];
                 Actions->AddSlot()[Button(TEXT("Cancel"),[this](){DeletingSection.Empty();Rebuild();})];Add(Actions);
             }
-            if(Manage&&!(FACEPluginStyle::IsCodex()&&!EditorOnly))Add(Text(TEXT("Changes save to this shared ")+Section+TEXT(" profile."),13,Muted));
+            if(Manage&&!EditorOnly&&!FACEPluginStyle::IsCodex())Add(Text(TEXT("Changes save to this shared ")+Section+TEXT(" profile."),13,Muted));
         }
         void Configuration()
         {
@@ -393,6 +393,7 @@ namespace ACEUCMPanelPrivate
         TSharedRef<SWidget> Header()
         {
             if(FACEPluginStyle::IsCodex()&&!EditorOnly)return CodexHeader();
+            if(EditorOnly&&!ShowTitle)return SNullWidget::NullWidget;
             if(EditorOnly)return SNew(SVerticalBox)
                 +SVerticalBox::Slot().AutoHeight()[SNew(SBox).Visibility(ShowTitle?EVisibility::Visible:EVisibility::Collapsed)[Text(TEXT("Loot Profile Editor"),28)]]
                 +SVerticalBox::Slot().AutoHeight().Padding(0,4,0,0)[Text(TEXT("Edits UCM's active loot profile. Opening or closing this window does not toggle looting."),14,Muted)];
@@ -409,6 +410,15 @@ namespace ACEUCMPanelPrivate
         TSharedRef<SWidget> Tabs()
         {
             if(FACEPluginStyle::IsCodex()&&!EditorOnly)return CodexTabs();
+            if(EditorOnly)
+            {
+                auto Compact=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4,2));
+                for(const FString Name:{TEXT("Loot"),TEXT("Vendors"),TEXT("Import tools")})
+                    Compact->AddSlot()[SNew(SACEPluginTab).Tag(TEXT("UCMTab")).Text(FText::FromString(Name==TEXT("Loot")?TEXT("Loot rules"):Name==TEXT("Import tools")?TEXT("Import"):Name))
+                        .ContentPadding(FMargin(6,2)).Selected_Lambda([this,Name]{return Page==Name;})
+                        .OnClicked_Lambda([this,Name]{if(!CanLeaveLootRule())return FReply::Handled();Page=Name;BodyScroll->ScrollToStart();Rebuild();return FReply::Handled();})];
+                return Compact;
+            }
             auto Row=SNew(SUniformWrapPanel).SlotPadding(FMargin(2)).MinDesiredSlotWidth(92).MinDesiredSlotHeight(38).MaxDesiredSlotHeight(38).HAlign(HAlign_Fill).EvenRowDistribution(true);
             const TArray<FString> Names=EditorOnly?TArray<FString>{TEXT("Vendors"),TEXT("Loot rules"),TEXT("Import")}
                 :TArray<FString>{TEXT("Overview"),TEXT("Buffs"),TEXT("Buff others"),TEXT("Combat"),TEXT("Recovery"),TEXT("Route"),TEXT("Loot"),TEXT("Vendors"),TEXT("Monsters"),TEXT("Metas"),TEXT("Import"),TEXT("Log")};
@@ -1201,11 +1211,12 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMPanel(const FString& InitialPage
 #include "RenderingThread.h"
 namespace ACEUCMPanelPrivate
 {
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMLootEditorTest,"ACE.Plugins.LootEditor",EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMLootEditorTest,"ACE.Plugins.LootEditor",EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
 bool FACEUCMLootEditorTest::RunTest(const FString&)
 {
     auto* GI=NewObject<UGameInstance>();GI->Init();ON_SCOPE_EXIT{GI->Shutdown();};
-    TestTrue(TEXT("Retail fonts load for the actual loot editor"),GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")));
+    FString DatDirectory=TEXT("C:/Turbine/Asheron's Call");FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),DatDirectory);
+    if(!TestTrue(TEXT("Retail fonts load for the actual loot editor"),GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(DatDirectory)))return false;
     auto* Host=GI->GetSubsystem<UACEPluginSubsystem>();TSharedPtr<FACEClientPlugin> Plugin;
     for(auto P:Host->Plugins)if(P->Id==TEXT("ucm"))Plugin=P;
     if(!Plugin)return false;
@@ -1333,13 +1344,13 @@ bool FACEUCMLootEditorTest::RunTest(const FString&)
             Panel->LootSearch.Reset();Panel->LootPage=0;Panel->Rebuild();Target->ReleaseResource();
         }
         Plugin->Profile=SampleProfile;Panel->Rebuild();
-        for(int Width:{780,450})for(const FString View:{TEXT("Rules"),TEXT("Condition"),TEXT("Classic"),TEXT("Imported")})
+        for(int Width:{780,720,450})for(const FString View:{TEXT("Rules"),TEXT("Condition"),TEXT("Classic"),TEXT("Imported")})
         {
             Plugin->Profile=View==TEXT("Imported")&&ImportedProfile?ImportedProfile:SampleProfile;
             Panel->Page=TEXT("Loot");Panel->LootDraft.Reset();Panel->ConditionDraft.Reset();
             if(View==TEXT("Condition")){Panel->LootDraft=ACEUCMLootPresentation::Clone(Rule);Panel->ConditionDraft=Parse(TEXT(R"({"field":"legacy","key":2008,"args":[70,1.15,1.12]})"));}
             if(View==TEXT("Classic")){Panel->Page=TEXT("Legacy loot");Panel->LegacyDocument=Document;Panel->LegacyRule=Parse(TEXT(R"({"label":"Amuli chest color","action_id":10,"amount":4,"priority":0,"expression":"","requirements":[{"type":15,"body":"255\r\n0\r\n0\r\n10\r\n0.1\r\nAmuli Coat (Chest)\r\n"}]})"));}
-            Panel->Rebuild();const FVector2D Size(Width,1100);auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);
+            Panel->Rebuild();const FVector2D Size(Width,Width==720?560:1100);auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);
             for(int Pass=0;Pass<6;++Pass){++GFrameCounter;Renderer.DrawWidget(Target,Panel,Size,0);FlushRenderingCommands();}
             TArray<TSharedRef<SWidget>> Tabs;int Lists=0,Details=0;TSet<const SWidget*> Seen;
             TFunction<void(TSharedRef<SWidget>)> Inspect=[&](TSharedRef<SWidget> W)
@@ -1356,13 +1367,13 @@ bool FACEUCMLootEditorTest::RunTest(const FString&)
             TestEqual(TEXT("Standalone editor has three tabs"),Tabs.Num(),3);
             if(Tabs.Num()==3)for(int32 I=1;I<3;++I)
             {
-                TestTrue(TEXT("Editor tabs have uniform sizes"),Tabs[0]->GetCachedGeometry().GetLocalSize().Equals(Tabs[I]->GetCachedGeometry().GetLocalSize(),.1f));
+                TestTrue(TEXT("Editor tabs stay compact"),Tabs[I]->GetCachedGeometry().GetLocalSize().X<160&&Tabs[I]->GetCachedGeometry().GetLocalSize().Y<48);
                 TestTrue(TEXT("Editor tabs stay in one row"),FMath::IsNearlyEqual(Tabs[0]->GetCachedGeometry().GetAbsolutePosition().Y,Tabs[I]->GetCachedGeometry().GetAbsolutePosition().Y,.1));
             }
             if(View!=TEXT("Classic")){TestEqual(TEXT("Loot rules are in the visible widget tree"),Lists,1);TestEqual(TEXT("Loot details are in the visible widget tree"),Details,1);}
             TArray<FColor> Pixels;FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags);
-            TestEqual(TEXT("Loot editor renders at desktop and narrow widths"),Pixels.Num(),Width*1100);
-            TArray64<uint8> PNG;FImageUtils::PNGCompressImageArray(Width,1100,Pixels,PNG);
+            TestEqual(TEXT("Loot editor renders at desktop and narrow widths"),Pixels.Num(),int32(Size.X*Size.Y));
+            TArray64<uint8> PNG;FImageUtils::PNGCompressImageArray(Width,int32(Size.Y),Pixels,PNG);
             FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/TEXT("Automation")/FString::Printf(TEXT("LootEditor-%s-%d.png"),*View,Width)));Target->ReleaseResource();
         }
     }

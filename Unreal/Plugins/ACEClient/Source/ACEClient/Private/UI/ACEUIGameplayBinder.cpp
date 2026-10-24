@@ -517,7 +517,10 @@ void UACEUIGameplayBinder::Initialize(UACEClientSubsystem* InClient, UACEUIEleme
 	EnsureOverlays();
 	RefreshStatusIndicators();
 	if (Client) for (const auto& Message : Client->GetChatHistory())
+	{
+		TGuardValue<FString> BoldGuard(Client->ActiveChatBoldText,Message.BoldText);
 		HandleChatMessage(Message.Text, Message.Sender, Message.Type, Message.FilterType);
+	}
 }
 
 void UACEUIGameplayBinder::Shutdown()

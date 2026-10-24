@@ -1,4 +1,5 @@
 #include "ACEClientSubsystem.h"
+#include "Mods/ACEPluginSubsystem.h"
 #include "ACECameraSettings.h"
 #include "ACECharacterOptions.h"
 #include "ACETerrainPresenterComponent.h"
@@ -23,13 +24,14 @@
 static TAutoConsoleVariable<int32> CVarACEFrameHitches(TEXT("ace.Performance.Hitches"),1,
 	TEXT("Log up to 20 slow gameplay frames per session, at least 10 seconds apart. No capture or GPU readback."));
 
-void UACEClientSubsystem::ReceiveChatMessage(const FString& Text, const FString& Sender, int32 Type, int32 FilterType)
+void UACEClientSubsystem::ReceiveChatMessage(const FString& Text, const FString& Sender, int32 Type, int32 FilterType, const FString& BoldText)
 {
+	TGuardValue<FString> BoldGuard(ActiveChatBoldText,BoldText);
 	// Transient notices should not reappear after changing the HUD.
 	if (!ACEChatMessageType::IsTransientNotice(Type))
 	{
 		if (ChatHistory.Num() >= 256) ChatHistory.RemoveAt(0);
-		ChatHistory.Add({Text.Left(16384), Sender.Left(256), Type, FilterType});
+		ChatHistory.Add({Text.Left(16384), Sender.Left(256), Type, FilterType, BoldText});
 	}
 	OnChatMessage.Broadcast(Text, Sender, Type);
 	OnRoutedChatMessage.Broadcast(Text, Sender, Type, FilterType);
@@ -618,12 +620,17 @@ void UACEClientSubsystem::SelectObject(int32 ObjectGuid)
 	if (Session)
 	{
 		Session->SelectObject(ObjectGuid);
+		if(auto* Host=GetGameInstance()->GetSubsystem<UACEPluginSubsystem>())Host->InspectLootItem(ObjectGuid);
 	}
 }
 
 void UACEClientSubsystem::SelectInventoryObject(int32 ObjectGuid)
 {
-	if (Session) Session->SelectObject(ObjectGuid, true);
+	if (Session)
+	{
+		Session->SelectObject(ObjectGuid, true);
+		if(auto* Host=GetGameInstance()->GetSubsystem<UACEPluginSubsystem>())Host->InspectLootItem(ObjectGuid);
+	}
 }
 
 void UACEClientSubsystem::SendSetInscription(int32 ObjectGuid, const FString& Text)

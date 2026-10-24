@@ -41,6 +41,7 @@ public:
 	/** Chat-only selection; normal DAT labels remain noninteractive. */
 	void SetSelectable(bool Value) { bSelectable = Value; }
 	bool IsSelectable() const { return bSelectable; }
+	FIntPoint BoldRange=FIntPoint(INDEX_NONE,INDEX_NONE);
 	FSimpleDelegate OnTextClicked;
 	// Chat links use character offsets so wrapping and drag-to-copy remain intact.
 	TArray<FIntPoint> TextLinks;

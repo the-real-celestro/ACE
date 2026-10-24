@@ -34,7 +34,7 @@ namespace
     FString SizeKey(const FString& Id){return Id+(Id==TEXT("huntledger")?TEXT(".body_size"):TEXT(".size"));}
     FString PanelSizeKey(const FString& Id)
     {
-        return Id+((Id==TEXT("itemtools")||Id==TEXT("autocraft")||Id==TEXT("ucmmicro")||Id==TEXT("ucm.log")||Id==TEXT("thirdeye"))?TEXT(".compact_size"):TEXT(".size"));
+        return Id+((Id==TEXT("looteditor")||Id==TEXT("itemtools")||Id==TEXT("autocraft")||Id==TEXT("ucmmicro")||Id==TEXT("ucm.log")||Id==TEXT("thirdeye"))?TEXT(".compact_size"):TEXT(".size"));
     }
     const FButtonStyle& DockButtonStyle(){return FACEPluginStyle::Current()->DockButton;}
     TSharedRef<SWidget> DockIcon(const FString& Id)
@@ -534,6 +534,7 @@ void SACEPluginDesktop::Toggle(const FString& Id)
     W.MapOverlay=Dungeon;
     const bool Ledger=UACEPluginSubsystem::IsLedger(Id);
     if(Ledger){W.LedgerId=Id;W.Size=Host->GetPluginWindowPosition(SizeKey(Id),FVector2D(Id==TEXT("supplyledger")?200:290,0));}
+    if(Id==TEXT("looteditor"))W.Size=Host->GetPluginWindowPosition(TEXT("looteditor.compact_size"),FVector2D(720,560));
     if(Id==TEXT("itemtools"))W.Size=Host->GetPluginWindowPosition(TEXT("itemtools.compact_size"),FVector2D(480,380));
     if(Id==TEXT("ucmmicro"))W.Size=Host->GetPluginWindowPosition(PanelSizeKey(Id),FVector2D(360,340));
     if(Id==TEXT("autocraft"))W.Size=Host->GetPluginWindowPosition(PanelSizeKey(Id),FVector2D(520,460));

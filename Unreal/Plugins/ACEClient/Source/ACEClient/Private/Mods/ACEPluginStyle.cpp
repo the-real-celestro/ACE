@@ -16,6 +16,7 @@
 #include "Widgets/SToolTip.h"
 #include "Widgets/Layout/SBox.h"
 #include "ACELobbyArt.h"
+#include "Framework/Application/SlateApplication.h"
 
 namespace
 {
@@ -478,6 +479,13 @@ namespace
 }
 void SACEPluginButton::Construct(const FArguments& A)
 {
+    // Reserve the full scaled retail cursor at the source, before Slate places
+    // the first tooltip frame (the popup's later Tick cannot protect that frame).
+    EnableToolTipForceField(true);
+    SetToolTipForceFieldExpansion(TAttribute<TOptional<FSlateRect>>::CreateLambda([]
+    {
+        return TOptional<FSlateRect>(UACEHoverTooltipWidget::GetCursorExclusionRect(FSlateApplication::Get().GetCursorPos()));
+    }));
     auto Args=A;ContentStyle=A._ButtonStyle;
     const auto Padding=A._ContentPadding;
     if(FlatRail){SButton::Construct(Args);return;}

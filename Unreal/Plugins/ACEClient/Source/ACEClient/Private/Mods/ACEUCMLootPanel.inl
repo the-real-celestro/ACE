@@ -1,6 +1,7 @@
 // SUCMPanel members. The same editor is rendered on desktop and VR.
 TSharedPtr<FJsonObject> LootDraft;
 TSharedPtr<SScrollBox> LootRuleScroll;
+TSharedPtr<SWidget> LootRequirementActions;
 FString LootRowsSignature,LootRowsSearch;
 int32 LootRowsPage=INDEX_NONE;
 int32 LootEditIndex=INDEX_NONE;
@@ -119,11 +120,11 @@ void LootPanel()
     FString Name=Host->UCMSectionName(TEXT("Loot"));
     if(Name.IsEmpty())Name=!Source.IsEmpty()?FPaths::GetCleanFilename(Source):Saved;
     if(Name.IsEmpty())Name=Rules.IsEmpty()?TEXT("No loot profile"):TEXT("Custom rules in ")+Host->UCMSectionName(TEXT("Loot"));
-    Add(Text(TEXT("Active: ")+Name+(Bool(P(),TEXT("loot_modified"))?TEXT(" (edited)"):TEXT("")),16,Accent));
+    if(!EditorOnly)Add(Text(TEXT("Active: ")+Name+(Bool(P(),TEXT("loot_modified"))?TEXT(" (edited)"):TEXT("")),16,Accent));
     LootTabs();
     if(ShowLootFiles){LootProfileFiles();return;}
     if(ShowLootOptions){LootSettings();return;}
-    Add(Text(TEXT("Rules run from top to bottom. The first match decides what to do with an item."),14,Muted));
+
     const auto Outer=Body,OuterSection=SectionBody;SectionBody.Reset();
     auto RuleList=SNew(SVerticalBox).Tag(TEXT("LootRuleList"));Body=RuleList;
     Add(Text(TEXT("Loot rules"),18));
@@ -175,19 +176,20 @@ void LootPanel()
     {
         auto Fields=SNew(SVerticalBox);Body=Fields;LootDetails();Body=Detail;SectionBody.Reset();
         Detail->AddSlot().FillHeight(1)[SNew(SScrollBox)+SScrollBox::Slot()[Fields]];
-        Add(Text(TEXT("Apply rule saves these changes and stops UCM."),13,Accent));
+        Add(Text(ConditionDraft?TEXT("Apply or discard the requirement to return to the rule."):TEXT("Apply rule saves changes and stops UCM."),13,Accent));
         auto Footer=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(6,4));
-        Footer->AddSlot()[LootTool(TEXT("Apply rule"),[this](){ApplyLootRule();})];
-        Footer->AddSlot()[LootTool(TEXT("Discard changes"),[this](){DiscardLootRule();})];Add(Footer);
+        if(ConditionDraft&&LootRequirementActions)Footer->AddSlot()[LootRequirementActions.ToSharedRef()];
+        if(!ConditionDraft)Footer->AddSlot()[LootTool(TEXT("Apply rule"),[this](){ApplyLootRule();})];
+        if(!ConditionDraft)Footer->AddSlot()[LootTool(TEXT("Discard changes"),[this](){DiscardLootRule();})];Add(Footer);
     }
     else Add(Text(TEXT("Select a rule on the left, or choose New. Changes are applied only when you save the rule."),15,Muted));
     Body=Outer;SectionBody=OuterSection;
     if(LootNarrow)Add(SNew(SVerticalBox)
-        +SVerticalBox::Slot().AutoHeight()[SNew(SBox).HeightOverride(280)[Tile(RuleList)]]
-        +SVerticalBox::Slot().AutoHeight().Padding(0,8)[SNew(SBox).HeightOverride(640)[Tile(Detail)]]);
-    else Add(SNew(SBox).HeightOverride_Lambda([this](){return FMath::Clamp(GetCachedGeometry().GetLocalSize().Y-350.f,390.f,1000.f);})
-        [SNew(SHorizontalBox)+SHorizontalBox::Slot().FillWidth(.34f).Padding(0,0,8,0)[Tile(RuleList)]
-         +SHorizontalBox::Slot().FillWidth(.66f)[Tile(Detail)]]);
+        +SVerticalBox::Slot().AutoHeight()[SNew(SBox).HeightOverride(175)[Tile(RuleList)]]
+        +SVerticalBox::Slot().AutoHeight().Padding(0,8)[SNew(SBox).HeightOverride(380)[Tile(Detail)]]);
+    else Add(SNew(SBox).HeightOverride_Lambda([this](){return FMath::Clamp(GetCachedGeometry().GetLocalSize().Y-(EditorOnly?150.f:300.f),260.f,850.f);})
+        [SNew(SHorizontalBox)+SHorizontalBox::Slot().FillWidth(.29f).Padding(0,0,8,0)[Tile(RuleList)]
+         +SHorizontalBox::Slot().FillWidth(.71f)[Tile(Detail)]]);
 }
 
 TSharedRef<SWidget> LootPropertyPicker(const FString& Field,int32 Current,TFunction<void(int32)> Changed)
@@ -278,6 +280,9 @@ bool WriteLootRules(const TArray<TSharedPtr<FJsonValue>>& Rules)
 }
 void LootDetails()
 {
+    // Focus on one requirement while editing; the rule form returns after apply/discard.
+    if(ConditionDraft){LootConditions();return;}
+
         const TArray<TSharedPtr<FJsonValue>>* Problems=nullptr;
         const bool NeedsAdapter=LootDraft->TryGetArrayField(TEXT("compatibility_issues"),Problems)&&Problems->Num();
         Add(SNew(SCheckBox).Style(&FACEPluginStyle::Current()->Check).IsEnabled(!NeedsAdapter).IsChecked(Bool(LootDraft,TEXT("enabled"),true)?ECheckBoxState::Checked:ECheckBoxState::Unchecked)
@@ -380,7 +385,7 @@ void LootConditions()
             [this,I](){SelectLootRequirement(I);})];
     }
     if(Conditions.IsEmpty())List->AddSlot().AutoHeight()[Text(TEXT("No requirements. Add one below, or set basic item filters."),14,Muted)];
-    Add(SNew(SBox).HeightOverride(150)[SNew(SScrollBox)+SScrollBox::Slot()[List]]);
+    Add(SNew(SBox).MaxDesiredHeight(90)[SNew(SScrollBox)+SScrollBox::Slot()[List]]);
     auto Tools=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4,4));
     Tools->AddSlot()[LootTool(TEXT("New"),[this](){if(!CanLeaveLootRequirement())return;ConditionDraft=MakeShared<FJsonObject>();ConditionDraft->SetStringField(TEXT("field"),TEXT("int"));ConditionDraft->SetStringField(TEXT("op"),TEXT("ge"));ConditionDraft->SetNumberField(TEXT("key"),19);ConditionIndex=INDEX_NONE;Rebuild();})];
     Tools->AddSlot()[SNew(SBox).IsEnabled(Conditions.IsValidIndex(ConditionIndex))[LootTool(TEXT("Clone"),[this,Conditions](){if(!Conditions.IsValidIndex(ConditionIndex))return;if(!CanLeaveLootRequirement())return;ConditionDraft=ACEUCMLootPresentation::Clone(Conditions[ConditionIndex]->AsObject());ConditionIndex=INDEX_NONE;Rebuild();})]];
@@ -461,14 +466,16 @@ void LootConditions()
         Add(SNew(SSpinBox<double>).Style(&FACEPluginStyle::Current()->Spin).MaxFractionalDigits(12).MinValue(TOptional<double>()).MaxValue(TOptional<double>()).MinSliderValue(TOptional<double>()).MaxSliderValue(TOptional<double>()).Value(Num(ConditionDraft,TEXT("value"))).OnValueChanged_Lambda([this](double V){ConditionDraft->SetNumberField(TEXT("value"),V);}));
         Add(Button(Bool(ConditionDraft,TEXT("missing_zero"))?TEXT("Missing value: use 0 (VT)"):TEXT("Missing value: does not match"),[this](){ConditionDraft->SetBoolField(TEXT("missing_zero"),!Bool(ConditionDraft,TEXT("missing_zero")));Rebuild();}));
     }
-    Add(Button(TEXT("Apply requirement"),[this,Conditions]()mutable
+    auto RequirementActions=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(6,2));
+    RequirementActions->AddSlot()[LootTool(TEXT("Apply requirement"),[this,Conditions]()mutable
     {
         if(!ACEVTProfile::IsSupportedPattern(Str(ConditionDraft,TEXT("pattern")))||!ACEVTProfile::IsSupportedPattern(Str(ConditionDraft,TEXT("exclude")))){Host->Notice=TEXT("Invalid or unsupported regular expression (maximum 2,048 characters and 32 capture groups).");return;}
         if(ConditionIndex==INDEX_NONE){if(Conditions.Num()>=ACEVTProfile::MaxLootConditions){Host->Notice=FString::Printf(TEXT("Maximum %d conditions per rule."),ACEVTProfile::MaxLootConditions);return;}ConditionIndex=Conditions.Num();Conditions.Add(MakeShared<FJsonValueObject>(ConditionDraft));}
         else if(Conditions.IsValidIndex(ConditionIndex))Conditions[ConditionIndex]=MakeShared<FJsonValueObject>(ConditionDraft);
         LootDraft->SetArrayField(TEXT("conditions"),Conditions);ConditionDraft.Reset();Rebuild();
-    }));
-    Add(Button(TEXT("Discard requirement changes"),[this](){ConditionDraft.Reset();Rebuild();}));
+    })];
+    RequirementActions->AddSlot()[LootTool(TEXT("Discard"),[this](){ConditionDraft.Reset();Rebuild();})];
+    LootRequirementActions=RequirementActions;
 }
 
 void SalvagePanel()

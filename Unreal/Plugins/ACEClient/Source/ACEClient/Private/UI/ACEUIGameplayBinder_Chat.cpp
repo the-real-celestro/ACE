@@ -722,7 +722,12 @@ void UACEUIGameplayBinder::AppendChatLineToLog(int32 Window, const FString& Line
 			return false;
 		};
 	}
-	Row->SetText(FText::FromString(Line));
+	if(Client&&!Client->ActiveChatBoldText.IsEmpty())
+    {
+        const int32 Begin=Line.Find(Client->ActiveChatBoldText,ESearchCase::CaseSensitive);
+        if(Begin!=INDEX_NONE)Row->BoldRange=FIntPoint(Begin,Begin+Client->ActiveChatBoldText.Len());
+    }
+    Row->SetText(FText::FromString(Line));
 	Row->SetAutoWrapText(true);
 	Row->SetColorAndOpacity(FSlateColor(Color));
 	Row->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 9));
