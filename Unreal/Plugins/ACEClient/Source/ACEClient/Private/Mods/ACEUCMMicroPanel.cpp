@@ -183,7 +183,8 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMMicroPanel()
     const TWeakObjectPtr<UACEPluginSubsystem> Host(this);
     const auto UCM=[Host]() -> TSharedPtr<FACEClientPlugin>
     {if(Host.IsValid())for(auto P:Host->Plugins)if(P->Id==TEXT("ucm"))return P;return nullptr;};
-    auto Root=SNew(SBorder).BorderImage(&FACEPluginStyle::Current()->Background).Padding(6);
+    // The shared plugin window owns the backing and its opacity.
+    auto Root=SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("NoBrush")).Padding(6);
     auto Rows=SNew(SVerticalBox);
     auto Toggles=SNew(SMicroActivities).AvailableWidth_Lambda([Root=TWeakPtr<SBorder>(Root)](){auto Panel=Root.Pin();return Panel?float(Panel->GetCachedGeometry().GetLocalSize().X)-12.f:0.f;}).Condensed_Lambda([Host](){return Host.IsValid()&&Host->LedgerOption(TEXT("ucmmicro"),TEXT("condensed"));});
     const auto Row=[Toggles](const TCHAR* Label,TFunction<bool()> Read,TFunction<void(bool)> Write)

@@ -20,6 +20,7 @@
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Input/SSlider.h"
 #include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMProfileStorageTest, "ACE.Plugins.LinkedProfiles",
@@ -260,8 +261,21 @@ bool FACEUCMProfilePanelTest::RunTest(const FString&)
     TestTrue(TEXT("Distinct loot and route import actions"),ImportText.Contains(TEXT("Import vTank Loot Profile (*.utl)"))&&ImportText.Contains(TEXT("Import vTank Route (*.nav)")));
     TestTrue(TEXT("Import all and clear notices available"),ImportText.Contains(TEXT("Import all files"))&&ImportText.Contains(TEXT("Clear")));
     auto UCM=Host->Find(TEXT("ucm"));auto Micro=Host->MakeUCMMicroPanel();
-    TestTrue(TEXT("Micro retains its Start UCM action"),CollectText(Micro).Contains(TEXT("Start UCM")));
-    UCM->Running=true;TestTrue(TEXT("Micro action updates to Stop UCM"),CollectText(Micro).Contains(TEXT("Stop UCM")));UCM->Running=false;
+    TFunction<TSharedPtr<SWidget>(TSharedRef<SWidget>)> FindRun=[&](TSharedRef<SWidget> Widget)->TSharedPtr<SWidget>
+    {
+        if(Widget->GetTag()==FName(TEXT("MicroRun")))return Widget;
+        auto* Children=Widget->GetChildren();
+        for(int32 I=0;I<Children->Num();++I)if(auto Match=FindRun(Children->GetChildAt(I)))return Match;
+        return nullptr;
+    };
+    auto Run=FindRun(Micro);
+    if(TestTrue(TEXT("Micro retains its compact On/Off control"),Run.IsValid()))
+    {
+        auto Toggle=StaticCastSharedPtr<SCheckBox>(Run);
+        UCM->Running=false;TestFalse(TEXT("Micro shows stopped UCM as off"),Toggle->IsChecked());
+        UCM->Running=true;TestTrue(TEXT("Micro shows running UCM as on"),Toggle->IsChecked());
+        UCM->Running=false;
+    }
     TestFalse(TEXT("Micro removes running checkbox"),CollectText(Micro).Contains(TEXT("UCM running")));
     auto Rat=MakeShared<FJsonObject>();Rat->SetStringField(TEXT("name"),TEXT("Brown Rat"));UCM->Profile->SetArrayField(TEXT("monsters"),{MakeShared<FJsonValueObject>(Rat)});
     const FString Monsters=CollectText(Host->MakeUCMPanel(TEXT("Monsters")));
