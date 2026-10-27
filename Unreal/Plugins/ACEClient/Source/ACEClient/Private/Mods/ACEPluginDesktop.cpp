@@ -535,6 +535,7 @@ void SACEPluginDesktop::Toggle(const FString& Id)
     }
     FWindow W;W.Id=Id;W.Position=Host->GetPluginWindowPosition(Id,FVector2D(84+24*(Windows.Num()-1),80+24*(Windows.Num()-1)));W.Size=Host->GetPluginWindowPosition(PanelSizeKey(Id),FVector2D(780,700));
     const bool Arrow=Id==TEXT("waypoint.arrow");
+    if(Id==TEXT("wiki"))W.Size=Host->GetPluginWindowPosition(PanelSizeKey(Id),FVector2D(520,540));
     const bool Dungeon=Id==TEXT("waypoint.dungeon");
     W.MapOverlay=Dungeon;
     const bool Ledger=UACEPluginSubsystem::IsLedger(Id);

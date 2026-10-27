@@ -603,6 +603,7 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakePanel(const FString& PluginId)
     FACEPluginStyle::Use(this,PluginId);
     // Named panels live inside the desktop frame, which already supplies their title.
     if(IsLedger(PluginId))return MakeLedgerPanel(PluginId);
+    if(PluginId==TEXT("wiki"))return MakeWikiPanel();
     if(PluginId==TEXT("itemtools"))return MakeItemToolsPanel(false);
     if(PluginId==TEXT("autocraft"))return MakeAutoCraftPanel(false);
     if(PluginId==TEXT("ucm.log"))return MakeUCMLogPanel();

@@ -26,6 +26,7 @@ class UComboBoxString;
 class UScrollBox;
 class USlider;
 class UButton;
+class UNativeWidgetHost;
 class UWidget;
 class UImage;
 class UUserWidget;
@@ -1645,6 +1646,10 @@ private:
 		const FLinearColor& Tint, int32 ZOrder);
 	static FLinearColor ColorFromSelectionMarker(uint8 RadarColor);
 	void RefreshExaminationOverlay();
+    void RefreshExaminationWikiLink(bool bShow);
+    UPROPERTY(Transient) TObjectPtr<UNativeWidgetHost> ExamWikiLink;
+    FString ExamWikiName;
+    TSharedPtr<FACEUIElement> ExamWikiRegion;
 	void RefreshInventoryOverlays();
 	uint64 HashInventoryOverlayState() const;
 	uint64 HashVendorOverlayState() const;

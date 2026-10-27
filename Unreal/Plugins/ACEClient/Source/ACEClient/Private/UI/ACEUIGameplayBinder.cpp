@@ -11464,6 +11464,7 @@ void UACEUIGameplayBinder::RefreshExaminationOverlay()
 	}
 	TSharedPtr<FACEUIElement> ExamRoot = Manager->FindElementByName(TEXT("RootGameplay_FloatyExamination_Field"));
 	const bool bShow = ExamRoot.IsValid() && ExamRoot->bVisible;
+    RefreshExaminationWikiLink(bShow && !ExaminedSpellId);
 	if (ExamInscriptionScroll) ExamInscriptionScroll->SetVisibility(ESlateVisibility::Collapsed);
 	Manager->SetElementVisibleByName(TEXT("ItemInscriptionScrollbar"),false);
 	auto HideExamExtras = [this]()

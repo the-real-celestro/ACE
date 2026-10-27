@@ -15,6 +15,7 @@ class FACEPluginVM;
 namespace ACEWaypoint { struct FRoutePoint; }
 namespace ACEUCMPanelPrivate { class FACEUCMImportUITest; }
 class SWidget;
+struct FACEWikiState;
 class AACEPlayerController;
 class UGameViewportClient;
 struct FACEWaypointLandmark { FVector2D Coordinates; FString Name, Type; };
@@ -208,6 +209,11 @@ public:
     FString UserDirectory() const;
     TSharedRef<SWidget> MakePanel(const FString& PluginId = FString());
     void TogglePluginWindow(const FString& Id);
+    /** Native, read-only ACPedia reference panel. Independent of Examine selection. */
+    TSharedPtr<FACEWikiState> WikiState;
+    TSharedRef<SWidget> MakeWikiPanel();
+    TSharedRef<SWidget> MakeWikiLink(const FString& ObjectName);
+    void OpenWiki(const FString& Title);
     bool IsPluginWindowOpen(const FString& Id) const;
     bool IsPointInsidePluginWindow(const FString& Id, FVector2D Absolute) const;
     bool WasPluginWindowOpen(const FString& Id) const;
