@@ -14,6 +14,75 @@
 #include "Engine/GameViewportClient.h"
 #include "Engine/Texture2D.h"
 #include "Framework/Application/SlateApplication.h"
+#include "HAL/IConsoleManager.h"
+#include "Widgets/Layout/SBox.h"
+#include "Widgets/SWindow.h"
+
+namespace
+{
+	class SACECursorSafeTooltip : public SBox
+	{
+	public:
+		SACECursorSafeTooltip() { SetCanTick(true); ForceVolatile(true); }
+		virtual int32 OnPaint(const FPaintArgs& Args, const FGeometry& Geometry, const FSlateRect& Culling,
+			FSlateWindowElementList& Elements, int32 Layer, const FWidgetStyle& Style, bool Enabled) const override
+		{
+			// SGameLayerManager routes inventory/plugin tips to STooltipPresenter.
+			// That presenter uses a fixed 12px cursor size and ignores native-popup
+			// force fields. Correct its noninteractive content in the same paint,
+			// using the presenter's viewport (including PIE offsets and UI scaling).
+			for (auto Parent = GetParentWidget(); Parent; Parent = Parent->GetParentWidget())
+			{
+				if (Parent->GetType() != FName(TEXT("STooltipPresenter"))) continue;
+				const FSlateRect View = Parent->GetCachedGeometry().GetLayoutBoundingRect();
+				const auto& DesktopGeometry = GetCachedGeometry();
+				const float Scale = DesktopGeometry.GetAccumulatedLayoutTransform().GetScale();
+				if (View.GetSize().X <= 0 || View.GetSize().Y <= 0 || Scale <= 0) break;
+				const FVector2D Origin(View.Left, View.Top);
+				const FVector2D Position = Origin + UACEHoverTooltipWidget::CalculateTooltipPosition(
+					FSlateApplication::Get().GetCursorPos() - Origin,
+					DesktopGeometry.GetLocalSize() * Scale, FVector2D(View.GetSize()), Scale);
+				const FVector2D Offset = (Position - DesktopGeometry.GetAbsolutePosition()) / Scale;
+				const FGeometry Adjusted = Geometry.MakeChild(Geometry.GetLocalSize(), FSlateLayoutTransform(Offset));
+				return SBox::OnPaint(Args, Adjusted, Culling, Elements, Layer, Style, Enabled);
+			}
+			// Slate can reposition its popup after the widget tick. Enforce cursor
+			// clearance at the final paint as well. Paint geometry is window-local:
+			// move the window, never translate/clamp the text within that window.
+			EnsureCursorClearance();
+			return SBox::OnPaint(Args,Geometry,Culling,Elements,Layer,Style,Enabled);
+		}
+		virtual void Tick(const FGeometry& Geometry, double Time, float Delta) override
+		{
+			SBox::Tick(Geometry, Time, Delta);
+			EnsureCursorClearance();
+		}
+	private:
+		void EnsureCursorClearance() const
+		{
+			auto& Slate = FSlateApplication::Get();
+			const auto Window = Slate.FindWidgetWindow(AsShared());
+			// World hovers are positioned in the viewport by their controller.
+			if (!Window || Window->GetType() != EWindowType::ToolTip) return;
+			const FVector2D Cursor = Slate.GetCursorPos();
+			const FVector2D Position = Window->GetPositionInScreen();
+			const FVector2D Size = Window->GetDesiredSizeDesktopPixels();
+			const FSlateRect WorkArea = Slate.GetWorkArea(FSlateRect(Cursor, Cursor + FVector2D(1)));
+			const FSlateRect TipRect(Position, Position + Size);
+			if (!FSlateRect::DoRectanglesIntersect(TipRect, UACEHoverTooltipWidget::GetCursorExclusionRect(Cursor))
+				&& TipRect.Left >= WorkArea.Left && TipRect.Top >= WorkArea.Top
+				&& TipRect.Right <= WorkArea.Right && TipRect.Bottom <= WorkArea.Bottom) return;
+			// Slate's final popup clamp only protects the pointer tip, and its
+			// force-field direction is cached across movement/scale changes.
+			// Check the final window after that placement, before it is drawn.
+			const FVector2D Origin(WorkArea.Left, WorkArea.Top);
+			const FVector2D Adjusted = Origin + UACEHoverTooltipWidget::CalculateTooltipPosition(
+				Cursor - Origin, Size, FVector2D(WorkArea.GetSize()), Window->GetDPIScaleFactor());
+			Window->SetCachedScreenPosition(Adjusted);
+			Window->MoveWindowTo(Adjusted);
+		}
+	};
+}
 
 void UACEHoverTooltipWidget::SetWidgetTooltip(UWidget* Widget, const FText& Text, uint32 TemplateId)
 {
@@ -57,12 +126,17 @@ FSlateRect UACEHoverTooltipWidget::GetCursorExclusionRect(const FVector2D& Curso
 		{
 			if (auto Widget = GEngine->GameViewport->GetSoftwareCursorWidget(Cursor))
 			{
+				// Scale/art can change while hovering. Cursor painting happens after
+				// tooltips, so its last desired size may still describe the old art.
+				Widget->SlatePrepass();
 				const FVector2D HalfSize = Widget->GetDesiredSize() * .5f;
 				Extent.X = FMath::Max(Extent.X, HalfSize.X);
 				Extent.Y = FMath::Max(Extent.Y, HalfSize.Y);
 			}
 		}
 	}
+	static const auto* SoftwareScale = IConsoleManager::Get().FindConsoleVariable(TEXT("Slate.SoftwareCursorScale"));
+	if (SoftwareScale) Extent *= FMath::Max(1.f, SoftwareScale->GetFloat());
 	return FSlateRect(CursorPixels - Extent, CursorPixels + Extent);
 }
 
@@ -89,7 +163,8 @@ TSharedRef<SWidget> UACEHoverTooltipWidget::RebuildWidget()
 	// are built, keeping native texture tiling independent of layout thickness.
 	Fill->SetDesiredSizeOverride(FVector2D::ZeroVector);
 	for (const auto& Edge : Edges) Edge->SetDesiredSizeOverride(FVector2D(1, 1));
-	return Slate;
+	// A Slate wrapper also ticks for plugin tooltips without an owning UWorld.
+	return SNew(SACECursorSafeTooltip)[Slate];
 }
 
 void UACEHoverTooltipWidget::EnsureDefaultLayout()

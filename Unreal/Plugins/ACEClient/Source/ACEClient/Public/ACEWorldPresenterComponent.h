@@ -25,14 +25,17 @@ class ACECLIENT_API UACEWorldPresenterComponent : public UActorComponent
 	friend class FACERetailInteriorStreamingTest;
 	friend class FACERetailParticleTimingTest;
 	friend class FACEMovementReviewTest;
+	friend class FACERemoteTurnTargetsTest;
 	friend class FACEProjectileLifetimeTest;
 	friend class FACEPortalLifetimeTest;
 	friend class FACEDesktopHighlightTest;
 	friend class FACEEntityLookupTest;
+    friend class FACEPluginWorldPlateTest;
 	friend class FACEDeferredWorldAppearanceTest;
 	friend class FACECustomWorldPresentationTest;
 	friend class FACEHouseHookAnimationTest;
 	friend class FACEGroundItemPlacementTest;
+	friend class FACESpawnSupportTest;
 
 public:
 	UACEWorldPresenterComponent();

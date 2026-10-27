@@ -126,6 +126,85 @@ bool FACEUCMBuffParityTest::RunTest(const FString&)
             TestEqual(TEXT("Other buff does not repeat a confirmed family"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("buff_request_done")));
         }
     }
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();
+        auto Spell=S->GetArrayField(TEXT("spells"))[0]->AsObject();
+        Spell->SetNumberField(TEXT("school"),3);Spell->SetNumberField(TEXT("category"),162);Spell->SetNumberField(TEXT("target_type"),6);
+        auto ArmorTimer=BuffJson(TEXT(R"({"target":1,"category":162,"power":100,"duration":1800,"expires":1900,"missing_equipment":[50]})"));
+        auto Shield=BuffJson(TEXT(R"({"id":50,"type":2,"name":"Shield","equipped":true,"can_wield":true})"));
+        auto Inventory=S->GetArrayField(TEXT("inventory"));Inventory.Add(MakeShared<FJsonValueObject>(Shield));S->SetArrayField(TEXT("inventory"),Inventory);
+        S->SetArrayField(TEXT("item_buffs"),{MakeShared<FJsonValueObject>(ArmorTimer)});
+        TestEqual(TEXT("New shield receives a direct buff without recasting all armor"),Step(VM,S,P)->GetNumberField(TEXT("target")),50.);
+        Shield->SetBoolField(TEXT("equipped"),false);S->SetNumberField(TEXT("time"),113);
+        TestEqual(TEXT("Shield remains the buff recipient after swapping to wand"),Step(VM,S,P)->GetNumberField(TEXT("target")),50.);
+        auto ShieldTimer=MakeShared<FJsonObject>(*ArmorTimer);ShieldTimer->SetNumberField(TEXT("target"),50);ShieldTimer->RemoveField(TEXT("missing_equipment"));
+        S->SetArrayField(TEXT("item_buffs"),{MakeShared<FJsonValueObject>(ArmorTimer),MakeShared<FJsonValueObject>(ShieldTimer)});
+        for(int Time:{114,130,150})
+        {
+            Shield->SetBoolField(TEXT("equipped"),true);S->SetNumberField(TEXT("time"),Time);
+            TestFalse(TEXT("Returning to combat gear cannot restart confirmed item buffs"),Step(VM,S,P)->HasField(TEXT("spell")));
+        }
+        P->SetBoolField(TEXT("auto_buffs"),false);
+        P->SetArrayField(TEXT("item_buff_targets"),{MakeShared<FJsonValueObject>(BuffJson(TEXT(R"({"item":50,"spell":10})")))});
+        S->SetArrayField(TEXT("item_buffs"),{MakeShared<FJsonValueObject>(ArmorTimer)});
+        FACEPluginVM Explicit;Start(Explicit);
+        TestEqual(TEXT("An explicit armor binding also covers the newly equipped shield"),Step(Explicit,S,P)->GetNumberField(TEXT("target")),50.);
+        S->SetArrayField(TEXT("item_buffs"),{});P->SetBoolField(TEXT("item_buffs_enabled"),false);
+        P->SetBoolField(TEXT("auto_buffs"),true);
+        P->SetArrayField(TEXT("buffs"),{MakeShared<FJsonValueNumber>(10)});
+        P->SetArrayField(TEXT("item_buff_targets"),{MakeShared<FJsonValueObject>(BuffJson(TEXT(R"({"item":50,"spell":10})")))});
+        S->SetNumberField(TEXT("time"),180);
+        TestFalse(TEXT("Item buff switch overrides automatic, included and explicit item buffs"),Step(VM,S,P)->HasField(TEXT("spell")));
+        S->SetNumberField(TEXT("force_buff_request"),1);
+        TestFalse(TEXT("Force Buff respects disabled item magic"),Step(VM,S,P)->HasField(TEXT("spell")));
+        Shield->SetBoolField(TEXT("usable"),true);
+        P->SetArrayField(TEXT("buff_items"),{MakeShared<FJsonValueObject>(BuffJson(TEXT(R"({"name":"Shield","spell":10})")))});
+        FACEPluginVM Consumable;Start(Consumable);
+        TestFalse(TEXT("Item magic disabled also prevents a configured item from applying it"),Step(Consumable,S,P)->HasField(TEXT("item")));
+    }
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMUnenchantableEquipmentTest,"ACE.Plugins.UnenchantableEquipment",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACEUCMUnenchantableEquipmentTest::RunTest(const FString&)
+{
+    FString Source,Error;
+    FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
+    for(int Resist:{0,9998,9999,10000})for(bool Equipped:{false,true})
+    {
+        FACEPluginVM VM;TestTrue(TEXT("Buff policy loads"),VM.Load(Source,Error));
+        auto S=BuffJson(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"ready":true,"busy":false,"action_serial":0,"action_error":0,"combat_mode":8,"components_required":false,"spells":[{"id":10,"category":162,"power":100,"skill":300,"school":3,"duration":1800,"self_buff":true,"beneficial":true,"caster_target":true,"target_type":6}],"item_buffs":[{"target":1,"category":162,"power":100,"duration":1800,"expires":1900,"missing_equipment":[50]}],"inventory":[{"id":99,"type":32768,"name":"Wand","equipped":true,"identified":true,"can_wield":true}]})"));
+        auto P=BuffJson(TEXT(R"({"buffing":true,"recovery":false,"combat":"off","refresh_seconds":60})"));
+        auto Shield=BuffJson(TEXT(R"({"id":50,"type":2,"name":"Any shield","identified":true,"can_wield":true})"));
+        auto Ints=MakeShared<FJsonObject>();Ints->SetNumberField(TEXT("36"),Resist);Shield->SetObjectField(TEXT("int_properties"),Ints);
+        Shield->SetBoolField(TEXT("equipped"),Equipped);
+        auto Inventory=S->GetArrayField(TEXT("inventory"));Inventory.Add(MakeShared<FJsonValueObject>(Shield));S->SetArrayField(TEXT("inventory"),Inventory);
+        auto Step=[&](){TSharedPtr<FJsonObject> I;TestTrue(*Error,VM.Step(S,P,I,Error));return I?I:MakeShared<FJsonObject>();};
+        auto I=Step();
+        TestEqual(TEXT("Direct shield buffs honor the retail ResistMagic threshold in either slot"),I->HasField(TEXT("spell")),Resist<9999);
+        if(Resist>=9999)for(int Time:{113,150,301,600})
+        {
+            S->SetNumberField(TEXT("time"),Time);
+            TestFalse(TEXT("Unenchantable gear never starts a later buff retry or wand swap"),Step()->HasField(TEXT("action")));
+        }
+        // No appraisal yet: identify before trying a direct bane, even when a
+        // cached missing-equipment queue survived a previous client version.
+        FACEPluginVM Unknown;TestTrue(TEXT("Fresh appraisal policy loads"),Unknown.Load(Source,Error));
+        Shield->RemoveField(TEXT("int_properties"));Shield->SetBoolField(TEXT("identified"),false);
+        TSharedPtr<FJsonObject> Intent;TestTrue(*Error,Unknown.Step(S,P,Intent,Error));
+        TestEqual(TEXT("Unknown shield is assessed before casting or switching equipment"),Intent->GetStringField(TEXT("action")),FString(TEXT("identify")));
+        Shield->SetObjectField(TEXT("int_properties"),Ints);Shield->SetBoolField(TEXT("identified"),true);
+        S->SetNumberField(TEXT("data_revision"),1);S->SetNumberField(TEXT("time"),601);
+        TestTrue(*Error,Unknown.Step(S,P,Intent,Error));
+        TestEqual(TEXT("Returned appraisal determines whether the direct buff is allowed"),Intent->HasField(TEXT("spell")),Resist<9999);
+        // Explicit item-target bindings must respect the same restriction.
+        FACEPluginVM Explicit;TestTrue(TEXT("Explicit buff policy loads"),Explicit.Load(Source,Error));
+        P->SetBoolField(TEXT("auto_buffs"),false);
+        P->SetArrayField(TEXT("item_buff_targets"),{MakeShared<FJsonValueObject>(BuffJson(TEXT(R"({"item":50,"spell":10})")))});
+        S->SetArrayField(TEXT("item_buffs"),{});
+        TestTrue(*Error,Explicit.Step(S,P,Intent,Error));
+        TestEqual(TEXT("Explicit bindings also skip unenchantable equipment"),Intent->HasField(TEXT("spell")),Resist<9999);
+    }
     return true;
 }
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMBuffEquipmentHandoffTest,"ACE.Plugins.BuffEquipmentHandoff",

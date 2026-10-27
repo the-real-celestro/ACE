@@ -62,7 +62,37 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::PublicSnapshot(FACEClientPlugin& P)
 {
     using namespace ACEPluginPublicAPIPrivate; using ACEPluginPublicAPIPrivate::S; using ACEPluginPublicAPIPrivate::N;
     auto Common=CompanionSnapshot(P);
-    auto Result=(!P.Companion||P.Permissions.Contains(TEXT("data")))?ItemToolsSnapshot(&P):MakeShared<FJsonObject>();
+    const bool DataAllowed=!P.Companion||P.Permissions.Contains(TEXT("data"));
+    // Character-only observers should never build inventory, spell tables,
+    // navigation visibility, or vendor transaction data just to discard it.
+    static const TSet<FString> Lightweight={TEXT("char_strings"),TEXT("char_ints"),TEXT("char_quads"),TEXT("char_doubles"),TEXT("char_bools"),
+        TEXT("level"),TEXT("character_name"),TEXT("action_serial"),TEXT("action_error"),TEXT("last_spell"),TEXT("last_spell_confirmed"),
+        TEXT("profile_name"),TEXT("waiting_action"),TEXT("log"),TEXT("panel"),TEXT("activity_failure"),TEXT("capabilities"),TEXT("automation_owner"),
+        TEXT("objects"),TEXT("objects_truncated"),TEXT("selection"),TEXT("tracked_targets"),TEXT("target_effects")};
+    bool FullData=!P.SelectiveSnapshot;
+    if(P.SelectiveSnapshot)for(const auto& Field:P.SnapshotFields)if(!Common->HasField(Field)&&!Lightweight.Contains(Field)){FullData=true;break;}
+    auto Result=(DataAllowed&&FullData)?ItemToolsSnapshot(&P):MakeShared<FJsonObject>();
+    if(DataAllowed && !FullData)
+    {
+        auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();const auto& V=C->GetPlayerVitalsView();
+        auto Qualities=[&](const TCHAR* Field,const auto& Map)
+        {
+            if(!P.WantsSnapshotField(Field))return;
+            auto J=MakeShared<FJsonObject>();for(const auto& Pair:Map)J->SetNumberField(FString::FromInt(Pair.Key),double(Pair.Value));Result->SetObjectField(Field,J);
+        };
+        Qualities(TEXT("char_ints"),V.StatQualityInts);Qualities(TEXT("char_quads"),V.QualityInt64s);
+        Qualities(TEXT("char_doubles"),V.QualityDoubles);Qualities(TEXT("char_bools"),V.QualityBools);
+        if(P.WantsSnapshotField(TEXT("char_strings")))
+        {
+            auto J=MakeShared<FJsonObject>();for(const auto& Pair:V.QualityStrings)J->SetStringField(FString::FromInt(Pair.Key),Pair.Value);
+            if(!J->HasField(TEXT("1"))&&C->GetSession())J->SetStringField(TEXT("1"),C->GetSession()->GetPlayerName());Result->SetObjectField(TEXT("char_strings"),J);
+        }
+        Result->SetNumberField(TEXT("level"),V.Level);Result->SetNumberField(TEXT("action_serial"),ActionSerial);
+        Result->SetNumberField(TEXT("action_error"),LastActionError);Result->SetNumberField(TEXT("last_spell"),LastCompletedSpell);
+        Result->SetBoolField(TEXT("last_spell_confirmed"),LastSpellConfirmed);
+    }
+    if(DataAllowed && P.WantsSnapshotField(TEXT("character_name")))
+        if(auto Session=GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->GetSession())Result->SetStringField(TEXT("character_name"),Session->GetPlayerName());
     // Preserve the extended position (global coordinates) and merge observer data.
     for(const auto& Pair:Common->Values)if(Pair.Key!=TEXT("position")||!Result->HasField(Pair.Key))Result->SetField(Pair.Key,Pair.Value);
     if(!P.Permissions.Contains(TEXT("chat")))Result->RemoveField(TEXT("meta_chat"));
@@ -78,6 +108,15 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::PublicSnapshot(FACEClientPlugin& P)
     auto Capabilities=MakeShared<FJsonObject>();for(const auto& Permission:P.Permissions)Capabilities->SetBoolField(Permission,true);
     Result->SetObjectField(TEXT("capabilities"),Capabilities);
     auto Owner=PolicyPlugin();Result->SetStringField(TEXT("automation_owner"),Owner&&Owner->Running?Owner->Id:FString());
+    if(P.SelectiveSnapshot)
+    {
+        static const TSet<FString> Required={TEXT("api"),TEXT("time"),TEXT("unix_time"),TEXT("player"),TEXT("server"),TEXT("state"),TEXT("error"),TEXT("events"),TEXT("capabilities")};
+        for(auto It=Result->Values.CreateIterator();It;++It)
+        {
+            const FString Key(It.Key());
+            if(!Required.Contains(Key)&&!P.SnapshotFields.Contains(Key))It.RemoveCurrent();
+        }
+    }
     return Result;
 }
 
@@ -130,7 +169,7 @@ bool UACEPluginSubsystem::ValidatePluginUI(const TArray<TSharedPtr<FJsonValue>>&
                 if(R->HasField(Field)&&!R->HasTypedField<EJson::Boolean>(Field))
                 {Error=FString(Field)+TEXT(" must be a boolean");return false;}
             const FString Action=S(R,TEXT("action"));
-            if(!Action.IsEmpty()&&!TArray<FString>{TEXT("event"),TEXT("select"),TEXT("waypoint"),TEXT("command")}.Contains(Action))
+            if(!Action.IsEmpty()&&!TArray<FString>{TEXT("event"),TEXT("select"),TEXT("waypoint"),TEXT("command"),TEXT("content_folder")}.Contains(Action))
             {Error=TEXT("Unknown UI button action");return false;}
             if(Type==TEXT("slider")||Type==TEXT("number"))
             {
@@ -176,7 +215,8 @@ bool UACEPluginSubsystem::ClickPluginRow(const FString& Plugin,const FString& Id
     const FString Type=S(R,TEXT("type"),S(R,TEXT("action")).IsEmpty()?TEXT("text"):TEXT("button"));
     if(Type!=TEXT("button"))return false;
     FString Error;bool Ok=true;const FString Action=S(R,TEXT("action"),TEXT("event"));
-    if(Action!=TEXT("event"))
+    if(Action==TEXT("content_folder"))Ok=ChooseContentFolder(*P,Error);
+    else if(Action!=TEXT("event"))
     {
         auto A=MakeShared<FJsonObject>(*R);if(Action==TEXT("command"))A->SetStringField(TEXT("text"),S(R,TEXT("command")));
         Ok=CompanionAction(*P,A,Error);
@@ -226,11 +266,12 @@ bool UACEPluginSubsystem::ApplyPluginServices(FACEClientPlugin& P,const TSharedP
     {
         auto R=V->AsObject();auto Reply=MakeShared<FJsonObject>();const FString Service=S(R,TEXT("service")),Op=S(R,TEXT("operation")),Key=S(R,TEXT("name"));
         Reply->SetStringField(TEXT("type"),TEXT("result"));Reply->SetStringField(TEXT("id"),S(R,TEXT("id")));bool Ok=false;FString Failure;
-        const FString Permission=Service==TEXT("profiles")||Service==TEXT("import")?TEXT("profiles"):
+        const FString Permission=Service==TEXT("content")?TEXT("admin_content"):Service==TEXT("profiles")||Service==TEXT("import")?TEXT("profiles"):
             Service==TEXT("waypoint")?TEXT("waypoint"):Service==TEXT("route")?TEXT("navigation"):
             Service==TEXT("force_buff")?TEXT("cast"):(Service==TEXT("window")||Service==TEXT("notice"))?TEXT("ui"):Service==TEXT("policy")?TEXT("commands"):Service==TEXT("chat")?TEXT("say"):FString();
         if(Limited)Failure=TEXT("Service rate limit; retry after 0.5 seconds");
         else if(!Permission.IsEmpty()&&!P.Permissions.Contains(Permission))Failure=TEXT("Missing permission: ")+Permission;
+        else if(Service==TEXT("content"))Ok=ContentService(P,R,Reply,Failure);
         else if(Service==TEXT("profiles"))
         {
             const FString Group=S(R,TEXT("group"),TEXT("Default"));

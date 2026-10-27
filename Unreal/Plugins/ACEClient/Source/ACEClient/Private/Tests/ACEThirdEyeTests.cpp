@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "ACETestDatDirectory.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
@@ -45,7 +46,7 @@ bool FACEThirdEyeTest::RunTest(const FString&)
     if(!TestTrue(TEXT("Third Eye Lua is bundled"),FFileHelper::LoadFileToString(Script,*(Base/TEXT("ClientMods/thirdeye/main.lua")))))return false;
     FACEPluginVM VM;if(!TestTrue(TEXT("Third Eye compiles in the real sandbox"),VM.Load(Script,Error)))return false;
     auto Snapshot=EyeJSON(TEXT(R"({"time":100,"state":{},"selected":1,"plugins":{"waypoint":{"enabled":true}},"objects":[
-        {"id":1,"name":"Black Coral Golem","wcid":10,"distance":5,"dead":false},
+        {"id":1,"name":"Black Coral Golem","object_type":"creature","wcid":10,"distance":5,"dead":false},
         {"id":2,"name":"Black Coral Crystal","wcid":11,"distance":12,"dead":false},
         {"id":3,"name":"Red Rat","wcid":12,"distance":15,"dead":false},
         {"id":4,"name":"Black Coral Golem","wcid":10,"distance":18,"dead":true}]})"));
@@ -61,6 +62,17 @@ bool FACEThirdEyeTest::RunTest(const FString&)
     TestEqual(TEXT("Partial name matches ignore case; dying objects excluded"),Out->GetStringField(TEXT("status")),FString(TEXT("2 matches")));
     TestEqual(TEXT("New spawn burst uses one local notification"),Out->GetArrayField(TEXT("requests")).Num(),1);
     TestEqual(TEXT("Default markers include both matches"),Out->GetArrayField(TEXT("markers")).Num(),2);
+    TestTrue(TEXT("Third Eye clears its old plates"),Out->GetArrayField(TEXT("world_plates")).IsEmpty());
+    for(const TCHAR* Id:{TEXT("add_plate"),TEXT("plate_1"),TEXT("plates_tab"),TEXT("opacity"),TEXT("vr_opacity")})
+        TestFalse(TEXT("Third Eye has no plate or opacity controls"),EyeControl(Out->GetArrayField(TEXT("ui")),Id).IsValid());
+    FACEPluginVM Migrated;Migrated.Load(Script,Error);auto RestoreInput=MakeShared<FJsonObject>(*Snapshot);
+    RestoreInput->SetObjectField(TEXT("state"),EyeJSON(TEXT(R"({"rules":[{"name":"Black Coral","plate":true}],"opacity":0.5,"vr_opacity":0.25})")));
+    RestoreInput->SetArrayField(TEXT("events"),{});TSharedPtr<FJsonObject> RestoreOutput;
+    TestTrue(TEXT("Older Third Eye preferences still load"),Migrated.Step(RestoreInput,Empty,RestoreOutput,Error));
+    TestEqual(TEXT("Migration preserves watch matches"),RestoreOutput->GetStringField(TEXT("status")),FString(TEXT("2 matches")));
+    TestTrue(TEXT("Old enabled plate preferences cannot create plates"),RestoreOutput->GetArrayField(TEXT("world_plates")).IsEmpty());
+    TestFalse(TEXT("Obsolete plate settings removed from saved rules"),RestoreOutput->GetObjectField(TEXT("state"))->GetArrayField(TEXT("rules"))[0]->AsObject()->HasField(TEXT("plate")));
+    TestFalse(TEXT("Obsolete opacity preferences removed"),RestoreOutput->GetObjectField(TEXT("state"))->HasField(TEXT("opacity")));
     auto Saved=Out->GetObjectField(TEXT("state"));
     TestEqual(TEXT("Watch list saved without surrounding whitespace"),Saved->GetArrayField(TEXT("rules"))[0]->AsObject()->GetStringField(TEXT("name")),FString(TEXT("bLaCk Coral")));
     if(!Step(TEXT(R"([{"type":"result","id":"detected_alert","ok":false,"error":"Service rate limit; retry after 0.5 seconds"}])")))return false;
@@ -176,7 +188,7 @@ bool FACEThirdEyeTest::RunTest(const FString&)
     TestEqual(TEXT("Original watch list restored from disk"),P->SavedState->GetArrayField(TEXT("rules")).Num(),1);
     if(FApp::CanEverRender())
     {
-        GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"));
+        GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(ACETestDatDirectory());
         TestFalse(TEXT("Third Eye opts out of host scrolling"),P->ScrollPanel());
         FWidgetRenderer Renderer(false,true);auto Panel=H->MakePanel(P->Id);
         TFunction<TSharedPtr<SWidget>(TSharedRef<SWidget>,FName)> FindTag;

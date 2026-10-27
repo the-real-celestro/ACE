@@ -936,7 +936,13 @@ struct ACECLIENT_API FACESkillInfo
 	/** 0 Inactive, 1 Untrained, 2 Trained, 3 Specialized (ACE SkillAdvancementClass). */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 AdvancementClass = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 Current = 0;
+	/** Retail raw value, also used for base-skill equipment requirements. */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 Base = 0;
+	/** Permanent gains applied after enchantment/vitae math, not included in Base. */
+	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 UnscaledAugmentationBonus = 0;
+	/** Unbuffed interface baseline includes every permanent augmentation. */
+	int32 GetDisplayBase() const { return Base + UnscaledAugmentationBonus; }
+	int32 GetDisplayModifier() const { return Current - GetDisplayBase(); }
 	/** Cumulative XP spent raising this skill (PropertySkill.PP). */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 XpSpent = 0;
 };
@@ -1194,6 +1200,8 @@ struct ACECLIENT_API FACEWorldObject
 	GENERATED_BODY()
 	/** Transient event metadata: cached placement is not a fresh physics update. */
 	bool bAppearanceOnlyUpdate = false;
+	/** Transient event metadata: a wield/parent notification, not a new item description. */
+	bool bAttachmentOnlyUpdate = false;
 
 	UPROPERTY(BlueprintReadOnly, Category = "ACE")
 	int32 Guid = 0;
@@ -1512,7 +1520,7 @@ struct ACECLIENT_API FACEWorldObject
 	bool IsWieldOnUse() const { return (ObjectDescriptionFlags & ACEObjectDescFlag::WieldOnUse) != 0; }
 	/** Server DropItem rejects Attuned >= Attuned (incl. Sticky). */
 	bool CanDropToWorld() const { return Attuned < 1; }
-	/** Loose world loot — retail hand/F sends PutItemInContainer into the player, not Use. */
+	/** Portable ground object eligible for pickup; containers may also be opened with Use. */
 	bool IsWorldLootable() const
 	{
 		if (Guid == 0 || bIsPlayer || !bHasPosition)
@@ -1710,6 +1718,8 @@ struct ACECLIENT_API FACEAppraisalInfo
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 Mana = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 MaxMana = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 Strength = 0;
+    /** Presence in the creature appraisal, independent of zero-valued vitals. */
+    bool bHasCreatureHealth = false, bHasCreatureAttributes = false;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 Endurance = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 Quickness = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 Coordination = 0;

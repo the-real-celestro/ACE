@@ -4,13 +4,16 @@
 #include "Mods/ACEPluginSubsystem.h"
 #include "ACEClientSubsystem.h"
 #include "ACEHoverTooltipWidget.h"
+#include "ACEMouseCursorWidget.h"
 #include "ACERuntimeOptions.h"
+#include "UI/ACEUIResourceResolver.h"
 #include "Misc/ConfigCacheIni.h"
 #include "ACEDatSubsystem.h"
 #include "Mods/ACEPluginStyle.h"
 #include "ACESession.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
+#include "Engine/GameViewportClient.h"
 #include "Engine/World.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Slate/WidgetRenderer.h"
@@ -21,10 +24,13 @@
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Application/SlateUser.h"
 #include "Widgets/SVirtualWindow.h"
+#include "Widgets/SWindow.h"
 #include "Input/HittestGrid.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SConstraintCanvas.h"
+#include "Widgets/Layout/SDPIScaler.h"
+#include "Widgets/LayerManager/STooltipPresenter.h"
 #include "Widgets/Layout/SExpandableArea.h"
 #include "Widgets/Input/SComboBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
@@ -429,6 +435,128 @@ bool FACETooltipCursorClearanceTest::RunTest(const FString&)
             TestFalse(TEXT("Screen-edge clamping never puts the name under the scaled cursor"),
                 FSlateRect::DoRectanglesIntersect(TipRect,UACEHoverTooltipWidget::GetCursorExclusionRect(Point)));
             TestTrue(TEXT("Complete tooltip stays on screen"),Pos.X>=0&&Pos.Y>=0&&Pos.X+Size.X<=Screen.X&&Pos.Y+Size.Y<=Screen.Y);
+        }
+    }
+    // Test the final Slate popup, not just the owner's force field. Slate can
+    // clamp a tooltip back under the cursor after applying that force field.
+    if(FApp::CanEverRender())
+    {
+        auto* GI=NewObject<UGameInstance>();GI->Init();ON_SCOPE_EXIT{GI->Shutdown();};
+        FString DatDirectory=TEXT("C:/Turbine/Asheron's Call");FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),DatDirectory);
+        if(!TestTrue(TEXT("Load retail hover and cursor art"),GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(DatDirectory)))return false;
+        auto* Resources=GI->GetSubsystem<UACEClientSubsystem>()->GetUIResourceResolver();
+        auto* Cursor=NewObject<UACEMouseCursorWidget>();Cursor->Initialize();
+        auto* Texture=Resources->ResolveTexture(Resources->ResolveCursorId(1));
+        if(!TestNotNull(TEXT("Retail pointer texture"),Texture))return false;
+        Cursor->SetCursorTexture(Texture,0,0);
+        auto* Viewport=NewObject<UGameViewportClient>(GEngine);Viewport->SetUseSoftwareCursorWidgets(true);
+        Viewport->SetSoftwareCursorWidget(EMouseCursor::Default,Cursor);
+        const auto OriginalViewport=GEngine->GameViewport;GEngine->GameViewport=Viewport;
+        auto& Slate=FSlateApplication::Get();const float OriginalAppScale=Slate.GetApplicationScale();
+        ON_SCOPE_EXIT{Viewport->RemoveAllViewportWidgets();GEngine->GameViewport=OriginalViewport;Slate.SetApplicationScale(OriginalAppScale);};
+        auto* Owner=NewObject<UBorder>();
+        UACEHoverTooltipWidget::SetWidgetTooltip(Owner,FText::FromString(TEXT("Ancient Falatacot Trinkets")),UACEHoverTooltipWidget::ObjectTemplate);
+        CastChecked<UACEHoverTooltipWidget>(Owner->GetToolTip())->SetResources(Resources);
+        const auto InventoryTooltip=Owner->TakeWidget()->GetToolTip();
+        const auto Style=FACEPluginStyle::Use(GI->GetSubsystem<UACEPluginSubsystem>());
+        const auto PluginTooltip=FACEPluginStyle::Tooltip(FText::FromString(TEXT("Ancient Falatacot Trinkets")));
+        auto Window=SNew(SWindow).Type(EWindowType::ToolTip).SizingRule(ESizingRule::Autosized)
+            .CreateTitleBar(false).UseOSWindowBorder(false).IsPopupWindow(true);
+        Slate.AddWindow(Window,false);ON_SCOPE_EXIT{Window->RequestDestroyWindow();};
+        FWidgetRenderer Renderer(false,true);FHittestGrid HitTestGrid;
+        auto* Target=FWidgetRenderer::CreateTargetFor(FVector2D(600,100),TF_Nearest,false);
+        ON_SCOPE_EXIT{Target->ReleaseResource();};
+        const FSlateRect WorkArea=Slate.GetWorkArea(FSlateRect(400,300,401,301));
+        for(const auto& Tip:{InventoryTooltip.ToSharedRef(),PluginTooltip})
+        {
+            Tip->OnOpening();Window->SetContent(Tip->AsWidget());
+            for(float UIScale:{1.f,1.5f,2.f})
+            {
+                Slate.SetApplicationScale(UIScale);Window->SlatePrepass(UIScale);
+                const FVector2D TipSize=Window->GetDesiredSizeDesktopPixels();
+                Window->Resize(TipSize); // Slate's 3D renderer skips windows with a zero native size.
+                for(float Scale:{.5f,1.f,2.f,3.f})
+                for(FVector2D Point:{FVector2D(WorkArea.Left+100,WorkArea.Top+100),
+                    FVector2D(WorkArea.Right-100,WorkArea.Top+100),
+                    FVector2D(WorkArea.Right-100,WorkArea.Bottom-60),
+                    FVector2D(WorkArea.Left+20,WorkArea.Bottom-30)})
+                {
+                    ACERuntimeOptions::Set(TEXT("CursorScale"),Scale);Cursor->SetCursorScale(Scale);
+                    // Leave the cursor layout stale here, as it is when the
+                    // setting changes before the cursor's next paint.
+                    Slate.SetCursorPos(Point);Point=Slate.GetCursorPos();
+                    const auto Initial=Slate.CalculateTooltipWindowPosition(FSlateRect(Point+FVector2D(12,8),Point+FVector2D(12,8)),TipSize,false,EPopupCursorOverlapMode::PreventOverlap);
+                    Window->SetCachedScreenPosition(Initial);
+                    ++GFrameCounter;Renderer.DrawWindow(Target,HitTestGrid,Window,UIScale,TipSize,.016f);FlushRenderingCommands();
+                    const FVector2D Position=Window->GetPositionInScreen();
+                    const FSlateRect Bounds(Position,Position+TipSize);
+                    // Independently compare with the actual DAT artwork size,
+                    // not GetCursorExclusionRect (the implementation under test).
+                    const FSlateRect CursorArt(Point,Point+FVector2D(Texture->GetSizeX(),Texture->GetSizeY())*Scale);
+                    TestFalse(FString::Printf(TEXT("Final popup clears cursor art at scale %.1f UI %.1f (%.0f,%.0f)"),Scale,UIScale,Point.X,Point.Y),FSlateRect::DoRectanglesIntersect(Bounds,CursorArt));
+                    TestTrue(TEXT("Final popup remains inside the monitor work area"),Bounds.Left>=WorkArea.Left&&Bounds.Top>=WorkArea.Top&&Bounds.Right<=WorkArea.Right&&Bounds.Bottom<=WorkArea.Bottom);
+                    TArray<FColor> Pixels;FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);
+                    TestTrue(TEXT("Tooltip pixels can be read"),Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags));
+                    int32 TextPixels=0,FramePixels=0;
+                    for(const auto& Pixel:Pixels)
+                    {
+                        if(Pixel.R>160 && Pixel.G>160 && Pixel.B>160)++TextPixels;
+                        if(Pixel.R>100 && Pixel.G>60 && Pixel.R>Pixel.B*1.5f)++FramePixels;
+                    }
+                    TestTrue(TEXT("Repositioning preserves visible tooltip text"),TextPixels>40);
+                    TestTrue(TEXT("Repositioning preserves the gold tooltip frame"),FramePixels>40);
+                }
+            }
+            Tip->OnClosed();
+        }
+        // SGameLayerManager uses an in-viewport STooltipPresenter, not a native
+        // tooltip window. Its fixed 12px placement bypasses Slate force fields.
+        // Render that path and compare actual tooltip pixels to cursor artwork.
+        Slate.SetApplicationScale(1.f);
+        const FVector2D ViewSize(800,600);
+        Target->ResizeTarget(800,600);
+        auto Presenter=SNew(STooltipPresenter);
+        auto DpiRoot=SNew(SDPIScaler)[Presenter];
+        auto GameWindow=SNew(SVirtualWindow).Size(ViewSize);
+        GameWindow->SetContent(SNew(SBorder).Padding(FMargin(40,25,60,35))
+            .BorderImage(FCoreStyle::Get().GetBrush("NoBrush"))[DpiRoot]);
+        Slate.RegisterVirtualWindow(GameWindow);
+        ON_SCOPE_EXIT{Slate.UnregisterVirtualWindow(GameWindow);};
+        auto DrawGame=[&]
+        {
+            ++GFrameCounter;Renderer.DrawWindow(Target,HitTestGrid,GameWindow,1.f,ViewSize,.016f);FlushRenderingCommands();
+        };
+        for(const auto& Tip:{InventoryTooltip.ToSharedRef(),PluginTooltip})
+        {
+            Tip->OnOpening();Presenter->SetContent(Tip->AsWidget());
+            for(float UIScale:{.75f,1.f,1.5f,2.f})
+            {
+                DpiRoot->SetDPIScale(UIScale);DrawGame();
+                const FSlateRect View=Presenter->GetCachedGeometry().GetLayoutBoundingRect();
+                for(float Scale:{.5f,1.f,1.25f,2.f,3.f})
+                for(FVector2D Point:{FVector2D(View.Left+8,View.Top+8),FVector2D(View.Right-8,View.Top+8),
+                    FVector2D(View.Left+8,View.Bottom-8),FVector2D(View.Right-8,View.Bottom-8),FVector2D(View.GetCenter())})
+                {
+                    ACERuntimeOptions::Set(TEXT("CursorScale"),Scale);Cursor->SetCursorScale(Scale);
+                    Slate.SetCursorPos(Point);Point=Slate.GetCursorPos();DrawGame();
+                    TArray<FColor> Pixels;FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);
+                    if(!TestTrue(TEXT("Read in-game tooltip pixels"),Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags)))return false;
+                    const FSlateRect Art(Point,Point+FVector2D(Texture->GetSizeX(),Texture->GetSizeY())*Scale);
+                    int32 Colored=0,Overlapping=0,Outside=0;
+                    for(int32 Y=0;Y<600;++Y)for(int32 X=0;X<800;++X)
+                    {
+                        const auto& Pixel=Pixels[Y*800+X];
+                        if(Pixel.R<80 && Pixel.G<80 && Pixel.B<80)continue;
+                        ++Colored;const FVector2D P(X+.5,Y+.5);
+                        Overlapping+=Art.ContainsPoint(P);Outside+=!View.ContainsPoint(P);
+                    }
+                    TestTrue(TEXT("In-game tooltip has rendered text and frame"),Colored>40);
+                    TestEqual(FString::Printf(TEXT("In-game tooltip clears cursor: UI %.2f cursor %.2f at %.0f,%.0f"),
+                        UIScale,Scale,Point.X,Point.Y),Overlapping,0);
+                    TestEqual(TEXT("In-game tooltip stays inside its viewport"),Outside,0);
+                }
+            }
+            Presenter->SetContent(nullptr);Tip->OnClosed();
         }
     }
     return true;

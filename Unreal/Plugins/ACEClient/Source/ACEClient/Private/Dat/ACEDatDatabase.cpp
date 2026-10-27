@@ -67,13 +67,22 @@ bool FACEDatDatabase::Open(const FString& InFilePath)
 		return false;
 	}
 
+	// Record the embedded DAT version, not the client build or filename. This
+	// lets reports distinguish old/custom data without rejecting server variants.
+	uint32 Iteration = 0;
+	if (const auto* Version = Files.Find(0xFFFF0001u); Version && Version->FileSize >= sizeof(uint32) && Version->FileSize <= (1u << 20))
+	{
+		TArray<uint8> Bytes;
+		if (ReadSectorChain(Handle.Get(), Version->FileOffset, Version->FileSize, Bytes))
+			FMemory::Memcpy(&Iteration, Bytes.GetData(), sizeof(Iteration));
+	}
 	if (bKeepOpen)
 	{
 		KeptHandle = MoveTemp(Handle);
 	}
 
 	bOpen = true;
-	UE_LOG(LogTemp, Log, TEXT("ACEDat: opened %s (%d files, blockSize=%u)"), *FilePath, Files.Num(), BlockSize);
+	UE_LOG(LogTemp, Log, TEXT("ACEDat: opened %s (%d files, blockSize=%u, iteration=%u)"), *FilePath, Files.Num(), BlockSize, Iteration);
 	return true;
 }
 
@@ -286,6 +295,15 @@ bool FACEDatDatabase::ReadDirectoryTree(IFileHandle* Handle, uint32 RootSectorOf
 	}
 
 	return true;
+}
+
+TArray<uint32> FACEDatDatabase::GetFileIds(uint8 Type,int32 MaxFileSize) const
+{
+    FScopeLock Lock(&IoMutex);
+    TArray<uint32> Result;
+    for(const auto& Pair:Files)
+        if((Pair.Key>>24)==Type&&(MaxFileSize<=0||Pair.Value.FileSize<=uint32(MaxFileSize)))Result.Add(Pair.Key);
+    Result.Sort();return Result;
 }
 
 bool FACEDatDatabase::ReadFile(uint32 ObjectId, TArray<uint8>& OutBuffer) const

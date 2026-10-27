@@ -552,6 +552,7 @@ void UACEUIGameplayBinder::Shutdown()
 	if (KeymapReportScroll) KeymapReportScroll->RemoveFromParent();
 	KeymapReportScroll=nullptr; KeymapReportText=nullptr; bKeymapReport=false;
 	SelectionFlashUntil=0;
+	ToolbarSelectionFlashUntil=0;
 	TickSelectionFlash();
 	bActionDeckCombatBarHidden=false;
 	ACEInputBindings::Cancel();
@@ -1630,8 +1631,6 @@ bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
 		if (Tab >= 1 && Tab <= 8 && Client)
 		{
 			SetCombatSpellBar(Tab - 1);
-			ApplyCombatMode(CombatMode);
-			SyncSpellcastTabChrome();
 			return true;
 		}
 		return true;
@@ -1888,7 +1887,7 @@ bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
 		if (Name == Slot.Name)
 		{
 			if (!Client) { return true; }
-			if (PendingUseWithSourceGuid)
+			if (PendingUseWithSourceGuid || (PlayerController && PlayerController->GetObjectCursorTargeting()))
 			{
 				TryCompletePendingUseWithTarget(ResolvePaperDollUseTarget(Name, Slot.Mask));
 				return true;
@@ -2067,6 +2066,10 @@ void UACEUIGameplayBinder::ShowPanelPage(const FString& PageElementName)
 	}
 	if (PageElementName == TEXT("OptionsPanel_Field"))
 	{
+		// Escape must always recover an offscreen settings panel, including
+		// when the user normally permits windows beyond the viewport edges.
+		Manager->ConstrainWindow(Manager->FindElementByName(TEXT("RootGameplay_FloatyPanel_Field")),
+			Manager->GetScreenLayoutSize(),true);
 		if (Client)
 		{
 			// Snapshot for the Reset button before any checkbox edits.
@@ -2204,8 +2207,8 @@ void UACEUIGameplayBinder::SyncInventoryButtonVisual()
 		Btn->bHighlighted = bInvOpen;
 		Btn->ImageFileId = bInvOpen ? DidBagOpen : DidBagClosed;
 	}
-	// 0x060011F9 is ItemSlot_GenericDragOver (green ring) — only for drag-over, not idle chrome.
-	Manager->SetElementVisibleByName(TEXT("BigBackpack_Icon_DragAccept"), false);
+	// Drag feedback is managed by the hover path and cleared on cancellation.
+	if (!bInvDragActive) Manager->SetElementVisibleByName(TEXT("BigBackpack_Icon_DragAccept"), false);
 }
 
 void UACEUIGameplayBinder::TogglePanelPage(const FString& PageElementName)
@@ -2241,6 +2244,11 @@ void UACEUIGameplayBinder::ToggleGameplayPanel(const FString& PageElementName, c
 
 void UACEUIGameplayBinder::HandleEscape()
 {
+	if (PendingUseWithSourceGuid || (PlayerController && PlayerController->GetObjectCursorTargeting()))
+	{
+		CancelPendingUseWith();
+		return;
+	}
 	if (!Manager) return;
 	if (bChatTargetPopupOpen) { CloseChatTargetPopup(); return; }
 	if (bVendorFilterDropdownOpen) { CloseVendorFilterDropdown(); return; }
@@ -2925,12 +2933,14 @@ void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 	else PendingAutoTargetLoss=0;
 	if (PlayerController && PlayerController->IsVRActive())
 	{
+		bCombatRetargetPending = false;
 		bCombatRepeatActive = bCombatAttackRequestPending = bCombatPowerCharging = false;
 		return;
 	}
 	if (CombatMode != static_cast<int32>(ACECombatMode::Melee)
 		&& CombatMode != static_cast<int32>(ACECombatMode::Missile))
 	{
+		bCombatRetargetPending = false;
 		return;
 	}
 
@@ -2966,7 +2976,7 @@ void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 			}
 			// ClientCombatSystem::HandleAttackDone only replaces a server repeat when
 			// the desired slider power changed. Sending every second restarted melee turns.
-			if (!AdvancedCombat && !bCombatMovementBlocked && IsCombatPoseReady() && bCombatPowerCharging && bCombatRepeatActive && !bCombatAttackRequestPending
+			if (!bCombatPluginAttack && !AdvancedCombat && !bCombatMovementBlocked && IsCombatPoseReady() && bCombatPowerCharging && bCombatRepeatActive && !bCombatAttackRequestPending
 				&& !FMath::IsNearlyEqual(LastCombatAttackPower, RequestedAttackPower, .01f))
 			{
 				CombatPowerOrAccuracy = RequestedAttackPower;
@@ -2984,6 +2994,21 @@ void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 				bCombatRepeatActive = false;
 				bCombatPowerCharging = bCombatAttackRequestPending;
 			}
+		}
+	}
+	// Selection cancels the old server repeat. Keep the replacement across
+	// Reload/Aim and the cancellation acknowledgement; never shoot mid-reload.
+	if (bCombatRetargetPending && Client && Client->GetSession())
+	{
+		const auto Session = Client->GetSession();
+		if (!bCombatAutoRepeat || !Session->IsCombatTarget(Client->GetSelectedObject().Guid))
+			bCombatRetargetPending = false;
+		else if (!bCombatMovementBlocked && IsCombatPoseReady() && !Session->IsServerAttackInProgress())
+		{
+			bCombatRetargetPending = false;
+			CombatPowerOrAccuracy = AdvancedCombat ? LastCombatAttackPower : RequestedAttackPower;
+			FireCombatAttack();
+			return;
 		}
 	}
 	if (bCombatMovementBlocked || !IsCombatPoseReady())
@@ -3020,6 +3045,8 @@ void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 
 void UACEUIGameplayBinder::ShowPluginAttack(int32 Target, uint32 Height, float Power)
 {
+	bCombatRetargetPending = false;
+	bCombatPluginAttack = true;
 	// Observe the already-sent action. Never send a second attack from the UI.
 	CombatAttackHeight = Height;
 	RequestedAttackPower = LastCombatAttackPower = CombatPowerOrAccuracy = FMath::Clamp(Power, 0.f, 1.f);
@@ -3051,6 +3078,8 @@ void UACEUIGameplayBinder::BeginCombatPowerCharge(uint32 AttackHeight, bool bHel
 		return;
 	}
 	CombatAttackHeight = AttackHeight;
+	bCombatRetargetPending = false;
+	bCombatPluginAttack = false; // a manual attack takes over from automation
 	if (PlayerController)
 	{
 		PlayerController->PrepareManualCombat(true);
@@ -3083,7 +3112,10 @@ void UACEUIGameplayBinder::ReleaseCombatPowerCharge()
 
 void UACEUIGameplayBinder::CancelCombatAttack()
 {
-	if (!bCombatAttackRequestPending && !bCombatRepeatActive && !bCombatAttackHeld && !bCombatRequestSent) return;
+	const bool bWasRetargeting = bCombatRetargetPending;
+	bCombatRetargetPending = false;
+	bCombatPluginAttack = false;
+	if (!bWasRetargeting && !bCombatAttackRequestPending && !bCombatRepeatActive && !bCombatAttackHeld && !bCombatRequestSent) return;
 	bCombatRequestSent = false;
 	bCombatAttackHeld = bCombatPointerHeld = bCombatKeyboardHeld = false;
 	bCombatAttackRequestPending = bCombatRepeatActive = bCombatPowerCharging = false;
@@ -3097,6 +3129,7 @@ void UACEUIGameplayBinder::SetCombatMovementBlocked(bool bBlocked)
 	bCombatMovementBlocked = bBlocked;
 	if (bBlocked)
 	{
+		bCombatRetargetPending = false;
 		// ClientCombatSystem::UseTime stops the build when not ready, but
 		// retains attackRequestInProgress while the attack control is held.
 		if (bCombatRequestSent || bCombatRepeatActive)
@@ -3165,6 +3198,11 @@ void UACEUIGameplayBinder::TryAutoTargetOnCombatEnter(int32 ExcludeGuid)
             && !Fellowship.Members.ContainsByPredicate([&](const auto& M) { return M.Guid==Guid; });
     };
     if (Eligible(Client->GetSelectedObject().Guid)) return;
+    // Retail AutoTarget only changes selection. End the previous attack before
+    // broadcasting the new selection, otherwise HandleSelectionChanged treats
+    // a kill as a deliberate target switch and queues another melee charge or
+    // missile shot (including at enemies behind walls).
+    CancelCombatAttack();
     const auto Session = Client->GetSession();
     const int32 Attacker = Session->GetLastAttackerGuid();
     // Retaliate on combat entry only. After a kill, choose the nearest eligible
@@ -3361,6 +3399,13 @@ bool UACEUIGameplayBinder::TryBeginSpellDrag(FVector2D CanvasLocalPos)
 	if (!Client || !Canvas || !Canvas->GetElementLayer())
 	{
 		return false;
+	}
+	// Retail ExecuteTargetModeForSpell examines on a target-mode click instead
+	// of selecting, dragging or casting that spell.
+	if (PlayerController && PlayerController->GetObjectCursorTargeting()==2 && InspectSpellAt(CanvasLocalPos))
+	{
+		PlayerController->SetObjectCursorTargeting(0);
+		return true;
 	}
 	const FVector2D Absolute = Canvas->GetCachedGeometry().LocalToAbsolute(CanvasLocalPos);
 
@@ -3687,6 +3732,7 @@ void UACEUIGameplayBinder::UseSelectedObject()
 {
 	if (!Client || !LastSelection.bValid || LastSelection.Guid == 0)
 	{
+		if (Client&&PlayerController) { CancelPendingUseWith();PlayerController->SetObjectCursorTargeting(1); }
 		return;
 	}
 	FACEWorldObject Owned;
@@ -3700,7 +3746,7 @@ void UACEUIGameplayBinder::UseSelectedObject()
 	else
 	{
 		FACEWorldObject Loot;
-		if (Client->GetWorldObject(LastSelection.Guid, Loot) && Loot.IsWorldLootable())
+		if (Client->GetWorldObject(LastSelection.Guid, Loot) && ACEInventoryRules::IsWorldPickupOnUse(Loot))
 		{
 			PickupInventoryAmount(LastSelection.Guid);
 		}
@@ -3715,6 +3761,7 @@ void UACEUIGameplayBinder::ExamineSelectedObject()
 {
 	if (!Client || !LastSelection.bValid || LastSelection.Guid == 0)
 	{
+		if (Client&&PlayerController) { CancelPendingUseWith();PlayerController->SetObjectCursorTargeting(2); }
 		return;
 	}
 	// Retail toggles an already displayed appraisal of this selection. A new
@@ -3743,7 +3790,7 @@ void UACEUIGameplayBinder::UseShortcutSlot(int32 SlotIndex1Based)
 
 bool UACEUIGameplayBinder::ShouldPreserveShortcutSelection(int32 Guid) const
 {
-	if (PendingUseWithSourceGuid) return true;
+	if (PendingUseWithSourceGuid || (PlayerController && PlayerController->GetObjectCursorTargeting())) return true;
 	if (!Client || CombatMode == int32(ACECombatMode::NonCombat)) return false;
 	const auto Session = Client->GetSession();
 	if (!Session) return false;
@@ -4158,12 +4205,21 @@ void UACEUIGameplayBinder::UnequipConflictsAndWield(int32 Guid, const FACEWorldO
 	if (Client) Client->SendGetAndWieldItem(Guid, Loc);
 }
 
+void UACEUIGameplayBinder::TargetActionDeckSelf()
+{
+    if (!Client) return;
+    // Like the retail backpack shortcut, complete a pending targeted item on
+    // self without replacing the combat target. Otherwise explicitly select self.
+    if (!TryCompletePendingUseWithTarget(Client->GetPlayerGuid())) Client->SelectObject(Client->GetPlayerGuid());
+}
+
 void UACEUIGameplayBinder::UseInventoryItem(int32 Guid)
 {
 	if (!Client || Guid == 0)
 	{
 		return;
 	}
+	if (PlayerController&&PlayerController->GetObjectCursorTargeting()&&TryCompletePendingUseWithTarget(Guid)) return;
 	FACEWorldObject Obj;
 	if (!Client->GetWorldObject(Guid, Obj))
 	{
@@ -4291,6 +4347,14 @@ void UACEUIGameplayBinder::UseInventoryItem(int32 Guid)
 
 bool UACEUIGameplayBinder::TryCompletePendingUseWithTarget(int32 TargetGuid)
 {
+	if (Client&&TargetGuid&&PlayerController&&PlayerController->GetObjectCursorTargeting())
+	{
+		const int32 Mode=PlayerController->GetObjectCursorTargeting();
+		PlayerController->SetObjectCursorTargeting(0);
+		if (Mode==2) Client->SendIdentifyObject(TargetGuid);
+		else UseInventoryItem(TargetGuid);
+		return true;
+	}
 	if (PendingUseWithSourceGuid == 0 || TargetGuid == 0 || !Client)
 	{
 		return false;
@@ -4423,6 +4487,7 @@ void UACEUIGameplayBinder::SyncPendingUseCursor()
 
 void UACEUIGameplayBinder::CancelPendingUseWith()
 {
+	if (PlayerController) PlayerController->SetObjectCursorTargeting(0);
 	FinishManaStoneConfirmation(false);
 	if (PendingUseWithSourceGuid == 0)
 	{
@@ -4894,7 +4959,7 @@ bool UACEUIGameplayBinder::TryBeginInventoryDrag(FVector2D CanvasLocalPos)
 	if (HitTestDollSlot(Absolute, DollName, DollMask) && Client)
 	{
 		// Target-mode clicks take precedence over starting a worn-item drag.
-		if (PendingUseWithSourceGuid)
+		if (PendingUseWithSourceGuid || (PlayerController && PlayerController->GetObjectCursorTargeting()))
 		{
 			TryCompletePendingUseWithTarget(ResolvePaperDollUseTarget(DollName, DollMask));
 			return true;
@@ -5152,7 +5217,7 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 		}
 		// Dual-use (mana stone / key): MouseDown starts a pending drag so OverlayClick never
 		// runs — complete UseWithTarget on the click release instead.
-		if (PendingUseWithSourceGuid != 0 && Guid != 0 && Client)
+		if ((PendingUseWithSourceGuid != 0 || (PlayerController && PlayerController->GetObjectCursorTargeting())) && Guid != 0 && Client)
 		{
 			if (PendingUseWithSourceGuid != Guid)
 			{
@@ -5200,19 +5265,22 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 		return true;
 	}
 
+	// gmToolbarUI::HandleDrop: the large toolbar pack accepts items even when
+	// the inventory window is closed. Shortcuts are handled above, not relocated.
+	if (Manager && Canvas->IsElementExposedAt(Manager->FindElementByName(TEXT("InventoryButton")), CanvasLocalPos))
+	{
+		if (Guid != Client->GetPlayerGuid()) MoveInventoryAmount(Guid, Client->GetPlayerGuid(), 0, Amount);
+		return true;
+	}
+
 	// Drop onto open vendor UI → stage the item or a pack's contents in the Sell cart.
 	if (OpenVendorGuid != 0 && Manager)
 	{
 		auto HitVendorUi = [&](const TCHAR* Name) -> bool
 		{
 			TSharedPtr<FACEUIElement> El = Manager->FindElementByName(Name);
-			if (!El.IsValid() || !El->bVisible || !Canvas->IsElementExposedAt(El, CanvasLocalPos))
-			{
-				return false;
-			}
-			const FIntPoint O = El->GetScreenOrigin();
-			return CanvasLocalPos.X >= O.X && CanvasLocalPos.Y >= O.Y
-				&& CanvasLocalPos.X < O.X + El->Width && CanvasLocalPos.Y < O.Y + El->Height;
+			// Exposure checks already convert viewport coordinates to DAT layout units.
+			return Canvas->IsElementExposedAt(El, CanvasLocalPos);
 		};
 		if (HitVendorUi(TEXT("Vendor")) || HitVendorUi(TEXT("VendorPanel"))
 			|| HitVendorUi(TEXT("RootGameplay_FloatyEnvPanel_Field")))
@@ -5328,13 +5396,7 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 		auto HitTradeUi = [&](const TCHAR* Name) -> bool
 		{
 			TSharedPtr<FACEUIElement> El = Manager->FindElementByName(Name);
-			if (!El.IsValid() || !El->bVisible || !Canvas->IsElementExposedAt(El, CanvasLocalPos))
-			{
-				return false;
-			}
-			const FIntPoint O = El->GetScreenOrigin();
-			return CanvasLocalPos.X >= O.X && CanvasLocalPos.Y >= O.Y
-				&& CanvasLocalPos.X < O.X + El->Width && CanvasLocalPos.Y < O.Y + El->Height;
+			return Canvas->IsElementExposedAt(El, CanvasLocalPos);
 		};
 		if (HitTradeUi(TEXT("SecureTrade")) || HitTradeUi(TEXT("TradePanel"))
 			|| HitTradeUi(TEXT("TradeSelfItemsList")) || HitTradeUi(TEXT("TradeOtherItemsList"))
@@ -5661,7 +5723,7 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 	}
 
 	// Dual-use targeting: click equipped doll slot (without starting an inv drag).
-	if (!bRightClick && PendingUseWithSourceGuid != 0 && Client)
+	if (!bRightClick && (PendingUseWithSourceGuid != 0 || (PlayerController && PlayerController->GetObjectCursorTargeting())) && Client)
 	{
 		FString DollName;
 		int64 DollMask = 0;
@@ -5672,10 +5734,6 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 		}
 	}
 
-	if (!bRightClick && TryHandleVendorFilterDropdownClick(Absolute))
-	{
-		return true;
-	}
 	if (!bRightClick && TryHandleChatTargetPopupClick(Absolute))
 	{
 		return true;
@@ -6050,7 +6108,7 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 			const int32 Guid = InventorySlotGuids[i];
 			if (Guid != 0)
 			{
-				if (!bRightClick && PendingUseWithSourceGuid != 0 && PendingUseWithSourceGuid != Guid)
+				if (!bRightClick && ((PendingUseWithSourceGuid != 0 && PendingUseWithSourceGuid != Guid) || (PlayerController && PlayerController->GetObjectCursorTargeting())))
 				{
 					TryCompletePendingUseWithTarget(Guid);
 					return true;
@@ -6494,6 +6552,20 @@ void UACEUIGameplayBinder::HandleAppraisal(const FACEAppraisalInfo& Appraisal)
 
 void UACEUIGameplayBinder::HandleSelectionChanged(const FACESelectedObject& Selection)
 {
+	// Retail RecvNotice_SelectionChanged cancels the old attack first. ACE
+	// ignores a new missile target while the previous repeat remains active.
+	// Health/appraisal refreshes and reselecting the same object are not retargets.
+	if (Selection.Guid != LastSelection.Guid && Client && Client->GetSession()
+		&& !(PlayerController && PlayerController->IsVRActive())
+		&& (CombatMode == int32(ACECombatMode::Melee) || CombatMode == int32(ACECombatMode::Missile))
+		&& bCombatAutoRepeat && (bCombatRepeatActive || bCombatRetargetPending))
+	{
+		// UCM must choose its next action through its own range, sight and loot
+		// checks. Showing its power bar does not grant the UI a repeat request.
+		const bool bAllowRetarget = !bCombatPluginAttack;
+		CancelCombatAttack();
+		bCombatRetargetPending = bAllowRetarget && Selection.bValid && Client->GetSession()->IsCombatTarget(Selection.Guid);
+	}
 	if (!Selection.bValid && LastSelection.bValid && Client)
 	{
 		FACEWorldObject Previous;
@@ -6508,6 +6580,7 @@ void UACEUIGameplayBinder::HandleSelectionChanged(const FACESelectedObject& Sele
 		|| Selection.SelectionSerial != LastSelection.SelectionSerial;
 	if (bNewClick)
 	{
+	ToolbarSelectionFlashUntil = Selection.bValid ? FPlatformTime::Seconds() + .25 : 0;
 	SelectionFlashUntil = 0;
 	TickSelectionFlash(); // restore the previous selection before changing it
 	SelectionFlashUntil = FPlatformTime::Seconds() + .4;
@@ -8272,8 +8345,8 @@ void UACEUIGameplayBinder::RefreshShortcutOverlays()
 		}
 		else
 		{
-			if (SlotIndex0 < 10) SetIconDid(Bg, SlotIndex0 < 9 ? 0x060010FA + SlotIndex0 : 0x060074CF);
-			else SetItemSlotBackground(Bg, nullptr);
+			// DAT ItemSlot_Shortcut_10..18 all use the same blue empty art.
+			SetIconDid(Bg, SlotIndex0 < 9 ? 0x060010FA + SlotIndex0 : 0x060074CF);
 		}
 		PlaceShortcut(Bg, El, 0);
 		Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
@@ -9042,7 +9115,8 @@ void UACEUIGameplayBinder::RefreshSkillOverlays()
 			Val->SetText(FText::AsNumber(Sk.Current));
 			Val->SetVisibility(ESlateVisibility::HitTestInvisible);
 			Val->SetJustification(ETextJustify::Right);
-			Val->SetColorAndOpacity(FSlateColor(Sk.Current > Sk.Base ? FLinearColor::Green : Sk.Current < Sk.Base ? FLinearColor::Red : TextWhite));
+			const int32 Modifier = Sk.GetDisplayModifier();
+			Val->SetColorAndOpacity(FSlateColor(Modifier > 0 ? FLinearColor::Green : Modifier < 0 ? FLinearColor::Red : TextWhite));
 			FString Tooltip;
 			if (Dat) Dat->TryGetSkillTooltip(static_cast<uint32>(Sk.SkillId), Tooltip);
 			UACEHoverTooltipWidget::SetWidgetTooltip(Val, FText::FromString(Tooltip));
@@ -9084,11 +9158,11 @@ void UACEUIGameplayBinder::RefreshSkillOverlays()
 	}
 	PlaceTextUnder(AttrFooterTitle, TEXT("SkillPage"), TEXT("StatManagement_Footer_Title"),
 		bNeedsTrain ? Sel->Name : Sel ? FString::Printf(TEXT("%s: %d%s"), *Sel->Name, Sel->Current,
-			Sel->Current == Sel->Base ? TEXT("") : *FString::Printf(TEXT(" (%+d)"), Sel->Current-Sel->Base))
+			Sel->GetDisplayModifier() == 0 ? TEXT("") : *FString::Printf(TEXT(" (%+d)"), Sel->GetDisplayModifier()))
 			: TEXT("Select a Skill"), 9, TextWhite, StatOverlayZ);
 	if (auto* Retail = Cast<UACERetailTextBlock>(AttrFooterTitle))
 		Retail->SetModifierSuffix(Sel && !bNeedsTrain ? FString::Printf(TEXT("%s: %d"), *Sel->Name, Sel->Current).Len() : -1,
-			Sel && Sel->Current > Sel->Base ? FLinearColor::Green : FLinearColor::Red);
+			Sel && Sel->GetDisplayModifier() > 0 ? FLinearColor::Green : FLinearColor::Red);
 	if (bNeedsTrain)
 	{
 		PlaceTextUnder(AttrFooterLine1Label, TEXT("SkillPage"), TEXT("StatManagement_Footer_LineOneLabel"),
@@ -11060,8 +11134,15 @@ void UACEUIGameplayBinder::RefreshSelectionOverlay()
 	{
 		if (const auto Field = Manager->FindElementByName(TEXT("SelectedObjectField")))
 		{
+			// gmToolbarUI::HandleSelectionChanged starts the DAT's ObjectSelected /
+			// StackedItemSelected state. Layout 0x21000016 then pauses for 0.25s
+			// and enters Normal (1) / StackedItem (0x1000000D), clearing the green
+			// SelectionBlinkField even when no health or mana reply follows.
+			const bool bFlash = FPlatformTime::Seconds() < ToolbarSelectionFlashUntil;
 			Field->bUseExplicitState = true;
-			Field->DefaultState = !LastSelection.bValid ? 0u : bShowStack ? 0x1000000Cu : 0x1000000Bu;
+			Field->DefaultState = !LastSelection.bValid ? 0u
+				: bShowStack ? (bFlash ? 0x1000000Cu : 0x1000000Du)
+				: bFlash ? 0x1000000Bu : 1u;
 			Field->ResolvePaintState(false, false, false);
 		}
 		auto SetMeter = [this](const FString& MeterName, bool bVisible, float Frac)
@@ -11588,6 +11669,7 @@ void UACEUIGameplayBinder::RefreshExaminationOverlay()
 			PlaceTextUnder(ExamInscriptionSignature, TEXT("RootGameplay_FloatyExamination_Field"),
 				TEXT("ItemInscriptionSignatureText"), bPrompt || Scribe.IsEmpty() ? FString() : TEXT("--")+Scribe,
 				8, FLinearColor::Black, ExamOverlayZ+4);
+			ExamInscriptionSignature->SetJustification(ETextJustify::Right);
 			if (EditingInscriptionGuid == LastAppraisal.ObjectGuid && ExamInscriptionEditor)
 			{
 				ExamInscriptionLabel->SetVisibility(ESlateVisibility::Collapsed);
@@ -13347,14 +13429,15 @@ bool UACEUIGameplayBinder::IsScrollbarDragActive() const
 	return ScrollDragTarget != EACEUIScrollTarget::None;
 }
 
-bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
+bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D ViewportPos)
 {
+	const FVector2D CanvasLocalPos = Canvas ? Canvas->ViewportToLayout(ViewportPos) : ViewportPos;
 	// Selected-item stack amount slider (toolbar SelectedObjectField).
 	if (Manager && SelectedStackMax > 1)
 	{
 		if (TSharedPtr<FACEUIElement> Slider = Manager->FindElementByName(TEXT("StackSizeSlider")))
 		{
-			if (Slider->bVisible && Canvas && Canvas->IsElementExposedAt(Slider, CanvasLocalPos))
+			if (Slider->bVisible && Canvas && Canvas->IsElementExposedAt(Slider, ViewportPos))
 			{
 				const FIntPoint O = Slider->GetScreenOrigin();
 				if (CanvasLocalPos.X >= O.X && CanvasLocalPos.Y >= O.Y
@@ -13378,7 +13461,7 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
 						: FMath::Clamp((LocalX - ThumbWidth * .5f) / FMath::Max(1, ScrollDragTravel - 1), 0.f, 1.f);
 					ScrollDragGrabOffset = LocalX - ScrollDragFraction * ScrollDragTravel;
 					if (bOnThumb) ScrollDragLastOffset = SelectedStackAmount;
-					else UpdateScrollbarDrag(CanvasLocalPos);
+					else UpdateScrollbarDrag(ViewportPos);
 					return true;
 				}
 			}
@@ -13389,7 +13472,7 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
 		int32 MaxOff, bool bHorizontal) -> bool
 	{
 		if (!Bar.IsValid() || !Bar->bVisible || MaxOff <= 0
-			|| !Canvas || !Canvas->IsElementExposedAt(Bar, CanvasLocalPos))
+			|| !Canvas || !Canvas->IsElementExposedAt(Bar, ViewportPos))
 		{
 			return false;
 		}
@@ -13415,7 +13498,7 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
 		{
 			return false;
 		}
-		// Exclude up/down (or left/right) button chrome — those use click-to-step.
+		// Arrow buttons use the element manager's DAT hot-button repeat behavior.
 		if (bHorizontal)
 		{
 			if (CanvasLocalPos.X < BarO.X + Btn || CanvasLocalPos.X >= BarO.X + Bar->Width - Btn)
@@ -13450,7 +13533,7 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
 		const float ThumbSize = Thumb ? (bHorizontal ? Thumb->Width : Thumb->Height) : 8.f;
 		ScrollDragGrabOffset = Cursor >= ThumbStart && Cursor <= ThumbStart + ThumbSize ? Cursor - ThumbStart : ThumbSize * .5f;
 		ScrollDragVisibleFraction = ThumbSize / FMath::Max(1.f, float((bHorizontal ? Bar->Width : Bar->Height) - Btn*2));
-		UpdateScrollbarDrag(CanvasLocalPos);
+		UpdateScrollbarDrag(ViewportPos);
 		return true;
 	};
 
@@ -13691,8 +13774,9 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
 	return false;
 }
 
-void UACEUIGameplayBinder::UpdateScrollbarDrag(FVector2D CanvasLocalPos)
+void UACEUIGameplayBinder::UpdateScrollbarDrag(FVector2D ViewportPos)
 {
+	const FVector2D CanvasLocalPos = Canvas ? Canvas->ViewportToLayout(ViewportPos) : ViewportPos;
 	if (ScrollDragTarget == EACEUIScrollTarget::None || ScrollDragTravel <= 0)
 	{
 		return;

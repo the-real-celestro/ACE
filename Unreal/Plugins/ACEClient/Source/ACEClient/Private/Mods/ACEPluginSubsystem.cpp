@@ -277,6 +277,8 @@ void UACEPluginSubsystem::Deinitialize()
     if(RouteMesh){RouteMesh->DestroyComponent();RouteMesh=nullptr;}
     if(RouteActor){RouteActor->Destroy();RouteActor=nullptr;}
     if(PluginMarkerActor){PluginMarkerActor->Destroy();PluginMarkerActor=nullptr;PluginMarkerMesh=nullptr;}
+    if(WorldPlateActor){WorldPlateActor->Destroy();WorldPlateActor=nullptr;WorldPlateComponents.Reset();}
+    ClearPluginTerrain();
     GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnAppraisalObserved.RemoveDynamic(this,&UACEPluginSubsystem::ObserveAppraisal);
     GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnChatMessage.RemoveDynamic(this,&UACEPluginSubsystem::ObservePluginChat);
     GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnVitalsUpdated.RemoveDynamic(this,&UACEPluginSubsystem::ObserveLedgerVitals);
@@ -352,9 +354,32 @@ void UACEPluginSubsystem::ValidateItemBuffTimers()
         if(Number(E,TEXT("expires"))<=Now)return true;
         const TArray<TSharedPtr<FJsonValue>>* Equipment=nullptr;
         if(Target==DataPlayer&&E->TryGetArrayField(TEXT("equipment"),Equipment))
+        {
+            // A shield can be removed to wield the casting wand. Do not erase
+            // every worn-armor timer when combat equips it again: that produces
+            // an endless wand -> shield -> wand cycle. Retain uncovered items
+            // until their individual cast completes, even while in inventory.
+            const TArray<TSharedPtr<FJsonValue>>* Previous=nullptr;
+            TArray<TSharedPtr<FJsonValue>> Missing;
+            if(E->TryGetArrayField(TEXT("missing_equipment"),Previous))Missing=*Previous;
             for(const auto& Pair:Session->GetWorldObjects())
                 if(Pair.Value.WielderId==DataPlayer&&(Pair.Value.ItemType&(ACEItemType::Armor|ACEItemType::Clothing))
-                    &&!Equipment->ContainsByPredicate([&](const auto& Id){return Id->AsNumber()==double(uint32(Pair.Key));}))return true;
+                    &&!Equipment->ContainsByPredicate([&](const auto& Id){return Id->AsNumber()==double(uint32(Pair.Key));})
+                    &&!Missing.ContainsByPredicate([&](const auto& Id){return Id->AsNumber()==double(uint32(Pair.Key));}))
+                    Missing.Add(MakeShared<FJsonValueNumber>(uint32(Pair.Key)));
+            Missing.RemoveAll([&](const auto& Id)
+            {
+                FACEWorldObject Item;
+                const int32 Guid=int32(uint32(Id->AsNumber()));
+                const auto* Appraisal=Appraisals.Find(Guid);
+                // Retail's Unenchantable property (ResistMagic) and ACE's
+                // IsEnchantable use the same threshold, including Covenant.
+                // Prune saved queues too when the appraisal arrives later.
+                return !C->GetWorldObject(Guid,Item)||!IsOwnedPluginItem(Item)
+                    ||(Appraisal&&Appraisal->bSuccess&&Appraisal->IntProperties.FindRef(36)>=9999);
+            });
+            E->SetArrayField(TEXT("missing_equipment"),Missing);
+        }
         return false;
     });
 }
@@ -393,11 +418,11 @@ void UACEPluginSubsystem::Discover()
             if (Permissions) for (const auto& V : *Permissions)
             {
                 const FString Permission = V->AsString();
-                if (Permission != TEXT("profiles") && Permission != TEXT("data") && Permission != TEXT("chat") && Permission != TEXT("chat_filter") && Permission != TEXT("state") && Permission != TEXT("ui") && Permission != TEXT("markers") && Permission != TEXT("waypoint") && Permission != TEXT("messaging") && Permission != TEXT("commands") && Permission != TEXT("local_tools") && Permission != TEXT("local_cosmetics") && Permission != TEXT("cast") && Permission != TEXT("combat") && Permission != TEXT("navigation") && Permission != TEXT("inventory") && Permission != TEXT("loot") && Permission != TEXT("say") && Permission != TEXT("fellowship") && Permission != TEXT("confirm")) Valid = false;
+                if (Permission != TEXT("admin_content") && Permission != TEXT("terrain") && Permission != TEXT("profiles") && Permission != TEXT("data") && Permission != TEXT("chat") && Permission != TEXT("chat_filter") && Permission != TEXT("state") && Permission != TEXT("ui") && Permission != TEXT("markers") && Permission != TEXT("waypoint") && Permission != TEXT("messaging") && Permission != TEXT("commands") && Permission != TEXT("local_tools") && Permission != TEXT("local_cosmetics") && Permission != TEXT("cast") && Permission != TEXT("combat") && Permission != TEXT("navigation") && Permission != TEXT("inventory") && Permission != TEXT("loot") && Permission != TEXT("say") && Permission != TEXT("fellowship") && Permission != TEXT("confirm")) Valid = false;
                 else P->Permissions.AddUnique(Permission);
             }
             if(P->Companion)for(const auto& Permission:P->Permissions)
-                if(!TArray<FString>{TEXT("chat"),TEXT("chat_filter"),TEXT("state"),TEXT("ui"),TEXT("markers"),TEXT("waypoint"),TEXT("messaging"),TEXT("commands"),TEXT("profiles"),TEXT("data"),TEXT("say")}.Contains(Permission))Valid=false;
+                if(!TArray<FString>{TEXT("admin_content"),TEXT("terrain"),TEXT("chat"),TEXT("chat_filter"),TEXT("state"),TEXT("ui"),TEXT("markers"),TEXT("waypoint"),TEXT("messaging"),TEXT("commands"),TEXT("profiles"),TEXT("data"),TEXT("say")}.Contains(Permission))Valid=false;
             if(P->LocalService)
             {
                 if(Number(M,TEXT("service_api"))!=1 || !P->Permissions.Contains(TEXT("local_cosmetics"))) Valid=false;
@@ -405,7 +430,26 @@ void UACEPluginSubsystem::Discover()
                 if(String(M,TEXT("service"))==TEXT("local_cosmetics")&&!P->Permissions.Contains(TEXT("local_tools"))) Valid=false;
             }
             else if(P->Permissions.Contains(TEXT("local_cosmetics"))||P->Permissions.Contains(TEXT("local_tools"))) Valid=false;
-            if (!Valid) { Notice += TEXT("Unsupported permissions or local service API: ") + Id + TEXT("\n"); continue; }
+            if(M->HasField(TEXT("update_interval")))
+            {
+                Valid &= P->Companion && M->HasTypedField<EJson::Number>(TEXT("update_interval"))
+                    && M->TryGetNumberField(TEXT("update_interval"),P->UpdateInterval)
+                    && FMath::IsFinite(P->UpdateInterval) && P->UpdateInterval>=.5 && P->UpdateInterval<=60;
+            }
+            if(M->HasField(TEXT("snapshot_fields")))
+            {
+                const TArray<TSharedPtr<FJsonValue>>* Fields=nullptr;
+                P->SelectiveSnapshot=true;
+                if(!P->Companion || P->Api<2 || !M->TryGetArrayField(TEXT("snapshot_fields"),Fields) || Fields->Num()>128)Valid=false;
+                else for(const auto& Field:*Fields)
+                {
+                    FString Key;
+                    if(!Field || Field->Type!=EJson::String || !Field->TryGetString(Key) || Key.IsEmpty() || Key.Len()>64) {Valid=false;break;}
+                    for(TCHAR Ch:Key)if(!FChar::IsAlnum(Ch)&&Ch!='_')Valid=false;
+                    P->SnapshotFields.Add(Key);
+                }
+            }
+            if (!Valid) { Notice += TEXT("Unsupported permissions, snapshot fields, update interval or local service API: ") + Id + TEXT("\n"); continue; }
             // Bind consent to the actual capability set, including after plugin upgrades.
             P->Permissions.Sort();
             const FString Grant = FString::Join(P->Permissions, TEXT(","));
@@ -571,7 +615,7 @@ void UACEPluginSubsystem::Stop(const FString& Id, const FString& Reason, bool Pr
         if(OwnsPolicy){RestoreWorldRendering();bTrackRouteMovement=false;RouteMovementSamples.Reset();bRouteMovementOverflow=false;
             FollowMovementSamples.Reset();FollowMovementTarget=0;bFollowMovementOverflow=false;}
         if(P->Companion){StopCompanion(*P,Reason);return;}
-        if(P->HasPresentation()){FlushPluginState(*P);P->Markers.Reset();P->PanelRows.Reset();P->PluginEvents.Reset();++P->PanelRevision;}
+        if(P->HasPresentation()){FlushPluginState(*P);P->Terrain={};P->Markers.Reset();P->WorldPlates.Reset();++P->WorldPlateRevision;P->PanelRows.Reset();P->PluginEvents.Reset();++P->PanelRevision;}
         P->TargetingStatus.Empty();
         P->MetaStatus.Empty();if(!PreserveMeta)P->MetaState.Empty();
         if(P->LocalService)
@@ -711,7 +755,8 @@ bool UACEPluginSubsystem::NewUCMSection(const FString& Section, const FString& N
     auto Defaults=Read(P->Directory/TEXT("default.json"));
     if(!Defaults||!ValidUCMProfile(Defaults)){Notice=TEXT("Cannot read bundled UCM defaults");return false;}
     if(!ACEUCMProfiles::SaveSectionAs(UserDirectory(),Section,Name,Defaults,Notice))return false;
-    if(SelectUCMSection(Section,Name))return true;
+    if(SelectUCMSection(Section,Name))
+    {Notice=TEXT("Created and selected ")+Section+TEXT(": ")+Name+TEXT(".json. Changes save automatically.");return true;}
     IFileManager::Get().Delete(*(UserDirectory()/TEXT("Profiles")/Section/(Name+TEXT(".json"))));return false;
 }
 bool UACEPluginSubsystem::DeleteUCMSection(const FString& Section, const FString& Name)
@@ -1387,9 +1432,11 @@ bool UACEPluginSubsystem::Tick(float)
     auto* C = GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     UpdateItemToolsCharacter();
     TickAutoCraft();
-    TickCompanions();
     UpdateBuffDispatch();
     CheckPendingSpellTimeout();
+    FCompanionReadBatch Batch;
+    TGuardValue<FCompanionReadBatch*> ReadGuard(CompanionReadBatch,&Batch);
+    TickCompanions();
     // VT ManaChargesWhenOff is deliberately independent of Start/Stop. Use a
     // separate VM restricted to equipment recharge; no meta/combat/nav can run.
     TSharedPtr<FACEClientPlugin> IdlePolicy;
@@ -1546,6 +1593,7 @@ void UACEPluginSubsystem::ReportActivityFailure(FACEClientPlugin& P, const TShar
 }
 void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObject>& I)
 {
+    if(CompanionReadBatch)CompanionReadBatch->Reset();
     if(InventoryInteractionPending())return;
     // Only another validated buff may overlap the previous buff's recoil.
     // Hold other policy intents without stepping Lua again until its untagged
@@ -1808,8 +1856,12 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         {P.Status=TEXT("Spell target is unavailable");return;}
         FACEWorldObject CastTargetObject;
         if(DefeatedTargets.Contains(Target)){P.NextAction=0;P.NextDecision=0;ScheduleDecisionWake(Now);return;}
-        if(C->GetWorldObject(Target,CastTargetObject)&&CastTargetObject.IsAttackable()&&!CastTargetObject.bIsPlayer&&!CastTargetObject.PetOwnerId
-            && !HasClearCombatSight(CastTargetObject)){C->GetSession()->SendCancelAttack();P.Status=TEXT("Target behind an obstruction; continuing route");return;}
+        // ACE also marks inventory items Attackable. Their stale world positions
+        // must not block equipment buffs with the hostile-creature sight check.
+        const bool HostileCreature=C->GetWorldObject(Target,CastTargetObject)&&(CastTargetObject.ItemType&ACEItemType::Creature)
+            &&CastTargetObject.IsAttackable()&&!CastTargetObject.bIsPlayer&&!CastTargetObject.PetOwnerId;
+        if(HostileCreature&&!HasClearCombatSight(CastTargetObject))
+        {C->GetSession()->SendCancelAttack();P.Status=TEXT("Target behind an obstruction; continuing route");return;}
         if(Target && Target!=C->GetPlayerGuid() && Target!=C->GetSelectedObject().Guid)C->SelectObject(Target);
         if(!PrepareCombatAction(P,I,8))return;
         // SendCastSpell's public UI path selects only in VR. Automation uses the same
@@ -1828,8 +1880,7 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         {
             PrepareSpellConfirmation(SpellName);
         }
-        if(C->GetWorldObject(Target,CastTargetObject)&&CastTargetObject.IsAttackable()&&!CastTargetObject.bIsPlayer&&!CastTargetObject.PetOwnerId
-            &&Dat->IsPluginSingleTargetOffensiveSpell(Spell)&&Dat->TryGetSpellInfo(Spell,SpellName,Icon))
+        if(HostileCreature&&Dat->IsPluginSingleTargetOffensiveSpell(Spell)&&Dat->TryGetSpellInfo(Spell,SpellName,Icon))
         {
             if(P.IsPolicy())this->CombatTarget=Target;
             FOffensiveCast Record;Record.Spell=Spell;Record.Target=Target;Record.Owner=P.Id;

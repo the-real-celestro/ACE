@@ -29,6 +29,7 @@ class ACECLIENT_API UACECharacterAppearanceComponent : public UActorComponent
 	friend class FACEAvatarMotionTest;
 	friend class FACERunSpeedParityTest;
 	friend class FACEEmoteTransitionTest;
+	friend class FACENetworkAnimationParityTest;
 	friend class FACEArcheryMotionTest;
 	friend class FACEAttackHeightMotionTest;
 	friend class FACEPortalMotionTest;
@@ -37,10 +38,13 @@ class ACECLIENT_API UACECharacterAppearanceComponent : public UActorComponent
 	friend class FACERetailScreenTest;
     friend class FACERetailWorldEntryTest;
 	friend class FACERetailPortalSpaceTest;
+	friend class FACERetailLogoutTest;
 
 public:
 	// Controllers and remote actors consume authored displacement before collision.
 	void SetWalkingTransitionsEnabled(bool bEnabled);
+	void SetTurnInput(float Turn);
+	bool IsMovementLockedByAction() const;
 	FTransform AdvanceWalkingMotion(float Dt, float& CycleSeconds);
 	void SetRemoteWalkingFrame(const ACEWalkingMotion::FLink& Link, float CycleSeconds, bool bHadTransition, float CycleTime = -1.f);
 	bool HasWalkingTransition() const { return WalkingMotion.HasPending(); }
@@ -216,7 +220,7 @@ public:
 	/** Server Ready completes missile substates without interrupting a locally predicted jump/cast. */
 	void FinishMissileMotion();
 
-	/** Seed held action pose without replaying (ObjectCreate corpse already Dead). */
+	/** Seed the substate's cycle without replaying its entry (including a corpse's static Dead pose). */
 	UFUNCTION(BlueprintCallable, Category = "ACE|Appearance")
 	void SetHeldActionMotion(int32 ActionCommand, int32 Style = 0);
 
@@ -292,6 +296,7 @@ protected:
 	bool bNeedsInitialPropPose = false;
 	float LocomotionForward = 0.f;
 	ACEWalkingMotion::FSequence WalkingMotion;
+	float LocomotionTurn = 0.f;
 	bool bWalkingTransitionsEnabled = true;
 	bool bWalkingExternallyAdvanced = false;
 	bool bRemoteWalkingFramePending = false;

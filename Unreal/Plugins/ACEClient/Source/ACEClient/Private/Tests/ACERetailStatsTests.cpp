@@ -4,6 +4,8 @@
 #include "Misc/Parse.h"
 #include "ACEDatSubsystem.h"
 #include "ACESession.h"
+#include "Dat/ACEDatDatabase.h"
+#include "Misc/Paths.h"
 #include "Engine/GameInstance.h"
 
 
@@ -24,6 +26,66 @@ bool FACERetailStatsTest::RunTest(const FString& Parameters)
     auto* GI = NewObject<UGameInstance>();
     auto* Dat = NewObject<UACEDatSubsystem>(GI);
     if (!Dat->LoadDatDirectory(ACERetailStatsTestsDatDirectory())) return false;
+    // Verify the actual fixture files, not their filenames or the server's
+    // extended Skill enum (ACE deliberately adds retired server-side skills).
+    struct FDatVersion { const TCHAR* File; uint32 Iteration; };
+    for (const auto& Expected : {FDatVersion{TEXT("client_portal.dat"),2072},
+        FDatVersion{TEXT("client_cell_1.dat"),982}, FDatVersion{TEXT("client_local_English.dat"),994},
+        FDatVersion{TEXT("client_highres.dat"),497}})
+    {
+        FACEDatDatabase Database; TArray<uint8> Bytes;
+        if (!TestTrue(Expected.File,Database.Open(FPaths::Combine(ACERetailStatsTestsDatDirectory(),Expected.File)))) return false;
+        if (!TestTrue(TEXT("DAT has an iteration record"),Database.ReadFile(0xFFFF0001u,Bytes))) return false;
+        FACEDatCursor Cursor(Bytes); bool Ok=true; const uint32 Iteration=Cursor.ReadU32(Ok);
+        TestTrue(TEXT("Iteration record is readable"),Ok);
+        TestEqual(*FString::Printf(TEXT("%s is end of retail"),Expected.File),Iteration,Expected.Iteration);
+        AddInfo(FString::Printf(TEXT("%s iteration %u"),Expected.File,Iteration));
+    }
+    {
+        // The reported legacy entries had no icons and ranks of 5,231. Recreate
+        // both login and subsequent live updates alongside modern skill IDs.
+        const TArray<uint32> Modern={6,7,14,15,16,18,19,20,21,22,23,24,27,28,29,30,
+            31,32,33,34,35,36,37,38,39,40,41,43,44,45,46,47,48,49,50,51,52,54};
+        const TArray<uint32> Retired={1,2,3,4,5,8,9,10,11,12,13,17,25,26,42,53,999};
+        FString Name; uint32 Icon=0;
+        for (uint32 Id:Modern) TestTrue(TEXT("Modern skill has a DAT name and icon"),Dat->TryGetSkillInfo(Id,Name,Icon) && !Name.IsEmpty() && Icon!=0);
+        for (uint32 Id:Retired) TestFalse(TEXT("Retired/internal skill is absent from the retail table"),Dat->TryGetSkillInfo(Id,Name,Icon));
+        TestEqual(TEXT("End-of-retail skill table has 38 definitions"),Dat->SkillInfoCache.Num(),38);
+        FACESession Legacy;
+        Legacy.StatResolver=[Dat](auto& V,const auto& E){Dat->RecomputePlayerStats(V,E);};
+        auto WriteSkill=[](FACEBinaryWriter& W,uint32 Id)
+        {
+            W.WriteUInt32(Id);W.WriteUInt16(5231);W.WriteUInt16(0);W.WriteUInt32(3);
+            W.WriteUInt32(1000);W.WriteUInt32(10);W.WriteUInt32(0);W.WriteDouble(0);
+        };
+        FACEBinaryWriter Login;
+        Login.WriteUInt32(0);Login.WriteUInt32(1);Login.WriteUInt32(2);Login.WriteUInt32(0);
+        Login.WriteUInt16(Modern.Num()+Retired.Num());Login.WriteUInt16(64);
+        for(uint32 Id:Modern)WriteSkill(Login,Id);
+        for(uint32 Id:Retired)WriteSkill(Login,Id);
+        FACEBinaryReader LoginReader(Login.GetData());Legacy.HandlePlayerDescription(LoginReader);
+        TestEqual(TEXT("Login exposes only DAT-defined player skills to all consumers"),Legacy.GetPlayerVitals().Skills.Num(),Modern.Num());
+        for(uint32 Id:Retired)
+        {
+            FACEBinaryWriter Update;Update.WriteUInt8(1);WriteSkill(Update,Id);
+            FACEBinaryReader Reader(Update.GetData());Legacy.HandlePrivateUpdateSkill(Reader);
+            TestFalse(TEXT("Live retired skill update cannot resurrect a phantom row"),Legacy.GetPlayerVitals().Skills.ContainsByPredicate([Id](const auto& S){return S.SkillId==Id;}));
+        }
+        for(uint32 Id:Modern)
+            TestTrue(TEXT("Modern skill ranks and specialization remain intact"),Legacy.GetPlayerVitals().Skills.ContainsByPredicate([Id](const auto& S){return S.SkillId==Id && S.Ranks==5231 && S.AdvancementClass==3;}));
+        // Simulate definitions/formulas cached from a previous DAT installation.
+        // Reloading must replace them, including a previously added old skill.
+        auto Old=Dat->SkillInfoCache.FindChecked(45);Old.Name=TEXT("Old Light Weapons");
+        Dat->SkillInfoCache.Add(45,Old);Dat->SkillInfoCache.Add(1,Old);
+        FACEPlayerVitals Custom;FACESkillInfo CustomSkill;CustomSkill.SkillId=1;CustomSkill.AdvancementClass=3;Custom.Skills.Add(CustomSkill);
+        Dat->RecomputePlayerStats(Custom,{});
+        TestEqual(TEXT("A custom DAT-defined skill is retained regardless of its historical ID"),Custom.Skills.Num(),1);
+        Dat->VitalFormulas[0][3]=1;Dat->bVitalFormulasLoaded=true;
+        if (!Dat->LoadDatDirectory(ACERetailStatsTestsDatDirectory())) return false;
+        TestFalse(TEXT("DAT replacement invalidates cached vital formulas"),Dat->bVitalFormulasLoaded);
+        TestFalse(TEXT("DAT replacement drops obsolete cached skill definitions"),Dat->TryGetSkillInfo(1,Name,Icon));
+        TestTrue(TEXT("DAT replacement reloads the current skill name"),Dat->TryGetSkillInfo(45,Name,Icon) && Name==TEXT("Light Weapons"));
+    }
     FString Tooltip;
     TestTrue(TEXT("Cooking tooltip resolves from the skill table"), Dat->TryGetSkillTooltip(39, Tooltip));
     const FString CookingFormula = TEXT("( (Coordination + Focus) / 3 )\n");
@@ -54,11 +116,17 @@ bool FACERetailStatsTest::RunTest(const FString& Parameters)
         Unbuffed.StatQualityInts.Add(326,1); // Retail adds Jack of All Trades to current, not raw.
         Dat->RecomputePlayerStats(Unbuffed,{});
         for(const auto& S:Unbuffed.Skills)
-            TestEqual(TEXT("Jack of All Trades legitimately shows +5 with an empty spell list"),S.Current-S.Base,5);
+        {
+            TestEqual(TEXT("Jack of All Trades adds five after retail enchantment math"),S.Current-S.Base,5);
+            TestEqual(TEXT("Jack of All Trades belongs to the unbuffed display baseline"),S.GetDisplayBase(),S.Current);
+            TestEqual(TEXT("Jack of All Trades alone has no display modifier"),S.GetDisplayModifier(),0);
+        }
         Unbuffed.Skills[0].AdvancementClass=3;Unbuffed.StatQualityInts.Add(344,3);
         Dat->RecomputePlayerStats(Unbuffed,{});
         TestEqual(TEXT("Specialized luminance bonus also affects current without an enchantment"),Unbuffed.Skills[0].Current-Unbuffed.Skills[0].Base,11);
         TestEqual(TEXT("Specialization bonus does not affect trained skills"),Unbuffed.Skills[1].Current-Unbuffed.Skills[1].Base,5);
+        for(const auto& S:Unbuffed.Skills)
+            TestEqual(TEXT("Combined permanent gains have no display modifier"),S.GetDisplayModifier(),0);
     }
 
     FACEBinaryWriter Skill;
@@ -252,21 +320,28 @@ bool FACERetailAugmentationStatsTest::RunTest(const FString& Parameters)
         Session.NotifyVitalsChanged();
         const auto Before = V.Skills;
         // Apply each skill family separately: no leakage to other skills.
-        for (int32 Property : {300, 301, 302, 365})
+        for (int32 Property : {300, 301, 302, 365, 326, 344, 390})
         {
-            Quality(Property, Property == 365 ? 3 : 1);
+            Quality(Property, Property == 365 || Property == 344 ? 3 : 1);
             for (int32 Index = 0; Index < V.Skills.Num(); ++Index)
             {
                 const auto& Skill = V.Skills[Index];
-                const int32 Gain = Property == 365 ? 3 :
+                const int32 Gain = Property == 365 ? 3 : Property == 326 ? 5 :
+                    Property == 344 ? (Class == 3 ? 6 : 0) : Property == 390 ? (Class >= 2 ? 1 : 0) :
                     ((Property == 300 && Melee.Contains(Skill.SkillId)) ||
                      (Property == 301 && Skill.SkillId == 47) ||
                      (Property == 302 && Magic.Contains(Skill.SkillId))) ? 10 : 0;
+                const bool PostEnchantment = Property == 326 || Property == 344;
                 const FString Context = FString::Printf(TEXT("Class %d skill %d augmentation %d"), Class, Skill.SkillId, Property);
-                TestEqual(*Context, Skill.Base, Before[Index].Base + Gain);
-                TestEqual(*(Context + TEXT(" is neutral without spells")), Skill.Current, Skill.Base);
+                TestEqual(*(Context + TEXT(" raw requirement")), Skill.Base, Before[Index].Base + (PostEnchantment ? 0 : Gain));
+                TestEqual(*(Context + TEXT(" total")), Skill.Current, Before[Index].Base + Gain);
+                TestEqual(*(Context + TEXT(" display baseline")), Skill.GetDisplayBase(), Before[Index].Base + Gain);
+                TestEqual(*(Context + TEXT(" is neutral without spells")), Skill.GetDisplayModifier(), 0);
             }
             Quality(Property, 0);
+            for (int32 Index = 0; Index < V.Skills.Num(); ++Index)
+                TestEqual(TEXT("Removing an augmentation also resets its display baseline"),
+                    V.Skills[Index].GetDisplayBase(), Before[Index].Base);
         }
     }
 
@@ -290,11 +365,30 @@ bool FACERetailAugmentationStatsTest::RunTest(const FString& Parameters)
     Quality(326, 1);
     Quality(344, 3);
     TestEqual(TEXT("Retail Jack/spec luminance do not overwrite raw skill"), V.Skills[0].Base, 166);
-    TestEqual(TEXT("Retail shows +11 for Jack and three spec luminance ranks without spells"), V.Skills[0].Current, 177);
+    TestEqual(TEXT("Jack and three spec luminance ranks increase the total by eleven"), V.Skills[0].Current, 177);
+    TestEqual(TEXT("Permanent gains are part of the displayed base"), V.Skills[0].GetDisplayBase(), 177);
+    TestEqual(TEXT("No spell bonus for permanent gains"), V.Skills[0].GetDisplayModifier(), 0);
+    FACEActiveEnchantment Cook;
+    Cook.SpellId = 2; Cook.SpellCategory = 102; Cook.StatModType = 0x8010;
+    Cook.StatModKey = 39; Cook.StatModValue = 40;
+    Session.ActiveEnchantments = {Focus, Cook}; Session.NotifyVitalsChanged();
+    TestEqual(TEXT("Real buffs retain the total including permanent gains"), V.Skills[0].Current, 237);
+    TestEqual(TEXT("Only direct and attribute spell gains appear in the display modifier"), V.Skills[0].GetDisplayModifier(), 60);
+    Cook.StatModValue = -3;
+    Session.ActiveEnchantments = {Cook}; Session.NotifyVitalsChanged();
+    TestEqual(TEXT("A small debuff is not hidden by positive permanent gains"), V.Skills[0].GetDisplayModifier(), -3);
+    Cook.StatModType = 0x4010; Cook.StatModValue = .5f;
+    Session.ActiveEnchantments = {Cook}; Session.NotifyVitalsChanged();
+    TestEqual(TEXT("Multiplicative spells do not scale Jack or specialized luminance"), V.Skills[0].Current, 94);
+    TestEqual(TEXT("Multiplicative penalty uses the complete permanent baseline"), V.Skills[0].GetDisplayModifier(), -83);
     FACEActiveEnchantment Vitae; Vitae.bVitae = true; Vitae.StatModValue = .9f;
     Session.ActiveEnchantments = {Vitae}; Session.NotifyVitalsChanged();
     TestEqual(TEXT("Retail applies vitae to innate gains, but not Jack/spec luminance"), V.Skills[0].Current, 160);
+    TestEqual(TEXT("Vitae remains visible as a penalty without a phantom positive augmentation"), V.Skills[0].GetDisplayModifier(), -17);
     Session.ActiveEnchantments.Reset(); Session.NotifyVitalsChanged();
+    TestEqual(TEXT("Spell and vitae expiry restore the permanent baseline"), V.Skills[0].GetDisplayModifier(), 0);
+    Session.NotifyVitalsChanged();
+    TestEqual(TEXT("Repeated stat refresh does not accumulate permanent gains"), V.Skills[0].GetDisplayBase(), 177);
     Quality(326, 0); Quality(344, 0);
     TestEqual(TEXT("Removing modified-only augmentations restores neutral comparison immediately"), V.Skills[0].Current, V.Skills[0].Base);
     TestTrue(TEXT("Augmentation updates do not invent active enchantments"), Session.ActiveEnchantments.IsEmpty());

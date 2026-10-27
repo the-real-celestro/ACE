@@ -115,6 +115,16 @@ bool FACEPvPCombatParityTest::RunTest(const FString&)
 
  auto* Binder=NewObject<UACEUIGameplayBinder>(GI);Binder->Client=Client;Binder->PlayerController=PC;
  Binder->LastSelection=Client->GetSelectedObject();Binder->RequestedAttackPower=.5f;Binder->bCombatAutoRepeat=false;
+ // A tab click must not resend magic stance (ACE cancels the running spell).
+ Binder->CombatMode=int32(ACECombatMode::Magic);Session->SetCurrentStance(ACEMotion::StanceMagic);
+ PC->bServerControlledMotion=true;Session->CachedC2SPackets.Reset();
+ for(int32 Tab=1;Tab<=8;++Tab)
+ {
+  TestTrue(TEXT("Spell tab click is handled"),Binder->HandleNamedClick(FString::Printf(TEXT("Spellcast_Tab%d"),Tab)));
+  TestEqual(TEXT("Selected spell bank changes during casting"),Client->GetActiveSpellBar(),Tab-1);
+ }
+ TestTrue(TEXT("Changing banks sends no combat, movement or cancel packet"),Packets().IsEmpty());
+ TestTrue(TEXT("Switching banks preserves server-owned casting"),PC->bServerControlledMotion);
  for(uint32 Status:{ACEObjectDescFlag::PlayerKiller,ACEObjectDescFlag::PkLiteStatus})
  for(int32 Mode:{int32(ACECombatMode::Melee),int32(ACECombatMode::Missile)})
  {
@@ -211,6 +221,118 @@ bool FACEPvPCombatParityTest::RunTest(const FString&)
   Binder->ReleaseCombatPowerCharge();Binder->TickCombatAutoAttack(0);
   TestEqual(TEXT("Each launcher sends one shot after Ready and real charge"),Packets().Num(),1);
  }
+
+ // The keyboard target-cycle path must cancel ACE's old repeat and retain
+ // the new target through Reload and AttackDone, without a second key press.
+ FACEWorldObject Other=Enemy;Other.Guid=Enemy.Guid+1;Other.Position.Location.X+=5;
+ Other.ObjectDescriptionFlags=Session->WorldObjects[Enemy.Guid].ObjectDescriptionFlags;
+ Session->WorldObjects.Add(Other.Guid,Other);
+ Client->OnSelectionChanged.AddDynamic(Binder,&UACEUIGameplayBinder::HandleSelectionChanged);
+ ON_SCOPE_EXIT {Client->OnSelectionChanged.RemoveDynamic(Binder,&UACEUIGameplayBinder::HandleSelectionChanged);};
+ auto AttackDone=[&]
+ {
+  FACEBinaryWriter W;W.WriteUInt32(Self.Guid);W.WriteUInt32(1);W.WriteUInt32(ACEGameEvent::AttackDone);W.WriteUInt32(0);
+  FACEBinaryReader R(W.GetData());Session->HandleGameEvent(R);
+ };
+ for(uint32 Style:{ACEMotion::StanceBowCombat,ACEMotion::StanceCrossbow,ACEMotion::StanceAtlatl})
+ {
+  Binder->CancelCombatAttack();Binder->bCombatAutoRepeat=true;Client->SelectObject(Enemy.Guid);
+  Binder->LastSelection=Client->GetSelectedObject();Binder->LastCombatAttackTarget=Enemy.Guid;
+  Binder->bCombatRepeatActive=Binder->bCombatRequestSent=true;
+  Session->bServerAttackInProgress=true;MissilePose(Style,0x1e);
+  Session->CachedC2SPackets.Reset();Binder->CycleKeyboardSelection(TEXT("Player"),1);
+  TestEqual(TEXT("Keyboard cycle selected the other opponent"),Client->GetSelectedObject().Guid,Other.Guid);
+  auto CancelPackets=Packets();
+  CancelPackets.RemoveAll([](const auto& Packet){return Packet.Key==ACEGameAction::QueryHealth;});
+  TestEqual(TEXT("Target change sends one cancel before replacing the shot"),CancelPackets.Num(),1);
+  if(CancelPackets.Num()==1)TestEqual(TEXT("Old repeat cancelled on the wire"),CancelPackets[0].Key,ACEGameAction::CancelAttack);
+  Session->CachedC2SPackets.Reset();Binder->TickCombatAutoAttack(0);AttackDone();Binder->TickCombatAutoAttack(0);
+  TestTrue(TEXT("Retarget survives acknowledgement while reloading"),Binder->bCombatRetargetPending && Packets().IsEmpty());
+  MissilePose(Style,3);Binder->TickCombatAutoAttack(0);
+  auto Replacement=Packets();TestEqual(TEXT("Ready sends a single replacement attack"),Replacement.Num(),1);
+  if(Replacement.Num()==1)
+  {
+   TestEqual(TEXT("Replacement uses missile opcode"),Replacement[0].Key,ACEGameAction::TargetedMissileAttack);
+   FACEBinaryReader R(Replacement[0].Value);TestEqual(TEXT("Replacement targets the newly selected creature"),R.ReadUInt32(),uint32(Other.Guid));
+  }
+  Session->CachedC2SPackets.Reset();
+  auto Health=Client->GetSelectedObject();Health.HealthFraction=.5f;Binder->HandleSelectionChanged(Health);
+  Binder->TickCombatAutoAttack(0);Binder->TickCombatAutoAttack(0);
+  TestTrue(TEXT("Health refreshes and subsequent ticks do not resend attacks"),Packets().IsEmpty());
+  Client->SelectObject(Self.Guid);TestFalse(TEXT("Selecting self cancels rather than queues an attack"),Binder->bCombatRetargetPending);
+  Binder->CancelCombatAttack();AttackDone();
+ }
+ Binder->bCombatAutoRepeat=false;Client->SelectObject(Enemy.Guid);
+ Session->CachedC2SPackets.Reset();Binder->CycleKeyboardSelection(TEXT("Player"),1);
+ auto SelectionOnly=Packets();SelectionOnly.RemoveAll([](const auto& Packet){return Packet.Key==ACEGameAction::QueryHealth;});
+ TestTrue(TEXT("Keyboard selection with auto-repeat off does not attack"),SelectionOnly.IsEmpty() && !Binder->bCombatRetargetPending);
+ Binder->bCombatRetargetPending=true;Binder->BeginCombatPowerCharge(ACEAttackHeight::High,true);
+ TestFalse(TEXT("An explicit attack supersedes a queued retarget"),Binder->bCombatRetargetPending);
+ Binder->CancelCombatAttack();Binder->bCombatRetargetPending=true;Binder->ShowPluginAttack(Other.Guid,ACEAttackHeight::Medium,.5f);
+ TestFalse(TEXT("Plugin-issued attack cannot leave a duplicate retarget queued"),Binder->bCombatRetargetPending);
+ Binder->CancelCombatAttack();Client->SelectObject(Enemy.Guid);
+
+ // UCM selects targets before finishing stance/equipment transitions. The
+ // native power-bar observer must not attack on that selection, bypassing the
+ // plugin's own line-of-sight, pursuit-distance and looting decisions.
+ Client->SendSetSingleCharacterOption(0x00,true);
+ for(int32 Mode:{int32(ACECombatMode::Melee),int32(ACECombatMode::Missile)})
+ {
+  Binder->CombatMode=Mode;Binder->bCombatAutoRepeat=true;
+  Client->SelectObject(Enemy.Guid);Binder->ShowPluginAttack(Enemy.Guid,ACEAttackHeight::Medium,.5f);
+  Session->bServerAttackInProgress=true;Session->CachedC2SPackets.Reset();
+  Client->SelectObject(Other.Guid);AttackDone();Binder->TickCombatAutoAttack(0);
+  auto Requests=Packets();Requests.RemoveAll([](const auto& Packet){return Packet.Key==ACEGameAction::QueryHealth;});
+  TestFalse(TEXT("Plugin target selection does not queue a native repeat"),Binder->bCombatRetargetPending);
+  TestEqual(TEXT("Plugin switching targets only cancels the old attack"),Requests.Num(),1);
+  if(Requests.Num()==1)TestEqual(TEXT("Only plugin policy may send the replacement attack"),Requests[0].Key,ACEGameAction::CancelAttack);
+ }
+
+ // Death-driven auto-selection must not inherit a held/repeating attack.
+ // Retail can select across rooms/radar range; selection alone cannot charge
+ // toward that creature or fire at the wall separating it from the player.
+ Client->SendSetSingleCharacterOption(0x0D,true);
+ for(int32 Mode:{int32(ACECombatMode::Melee),int32(ACECombatMode::Missile)})
+ for(int32 DeathNotice:{0,1,2})
+ {
+  Binder->CancelCombatAttack();AttackDone();
+  Session->WorldObjects.Add(Enemy.Guid,Enemy);
+  Session->WorldObjects[Enemy.Guid].ObjectDescriptionFlags=ACEObjectDescFlag::PlayerKiller;
+  Binder->CombatMode=Mode;Binder->bCombatAutoRepeat=true;
+  Client->SelectObject(Enemy.Guid);Binder->PendingAutoTargetLoss=0;
+  Binder->LastSelection=Client->GetSelectedObject();Binder->LastCombatAttackTarget=Enemy.Guid;
+  Binder->bCombatRepeatActive=Binder->bCombatRequestSent=true;
+  Binder->bCombatAttackHeld=Binder->bCombatAttackRequestPending=Binder->bCombatPowerCharging=true;
+  Session->bServerAttackInProgress=true;
+  MissilePose(ACEMotion::StanceBowCombat,3);
+  Session->CachedC2SPackets.Reset();
+  if(DeathNotice==0)
+  {
+   // Health can reach zero before the death animation or deletion arrives.
+   auto Dead=Client->GetSelectedObject();Dead.bShowHealth=true;Dead.HealthFraction=0;
+   Binder->HandleSelectionChanged(Dead);
+   // Session's ordinary health notification also updates its selection cache.
+   Session->SelectedObject=Dead;
+  }
+  else if(DeathNotice==1)
+  {
+   Session->WorldObjects[Enemy.Guid].bDying=true;Client->SelectObject(0);
+  }
+  else
+  {
+   FACEBinaryWriter W;W.WriteUInt32(Enemy.Guid);FACEBinaryReader R(W.GetData());Session->HandleObjectDelete(R);
+  }
+  Binder->TickCombatAutoAttack(0);AttackDone();
+  for(int32 Frame=0;Frame<4;++Frame)Binder->TickCombatAutoAttack(.016f);
+  TestEqual(TEXT("Death auto-target selects the next eligible opponent"),Client->GetSelectedObject().Guid,Other.Guid);
+  TestFalse(TEXT("Automatic selection clears held, pending and repeated attacks"),
+   Binder->bCombatRetargetPending || Binder->bCombatRepeatActive || Binder->bCombatAttackRequestPending || Binder->bCombatAttackHeld);
+  auto Automatic=Packets();Automatic.RemoveAll([](const auto& Packet){return Packet.Key==ACEGameAction::QueryHealth;});
+  TestEqual(TEXT("Post-kill auto-target sends only cancellation, never a new attack"),Automatic.Num(),1);
+  if(Automatic.Num()==1)TestEqual(TEXT("Post-kill packet cancels old attack"),Automatic[0].Key,ACEGameAction::CancelAttack);
+ }
+ Session->WorldObjects.Add(Enemy.Guid,Enemy);Client->SendSetSingleCharacterOption(0x0D,false);
+ Binder->CancelCombatAttack();AttackDone();Client->SelectObject(Enemy.Guid);
 
  // Independently expected 1.5 rad/s from the retail TurnRight motion. Rate
  // multiplication, shortest direction and completion must not depend on FPS.

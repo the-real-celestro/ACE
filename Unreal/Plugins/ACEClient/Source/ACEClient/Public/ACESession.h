@@ -70,6 +70,9 @@ DECLARE_MULTICAST_DELEGATE_FourParams(FACEOnCombatFeedback, const FString&, int3
  */
 class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 {
+    friend class FACEPluginWorldPlateTest;
+    friend class FACEFoundryTest;
+	friend class FACERetailLogoutTest;
 	friend class FACECollisionSizingTest;
 	friend class FACEPvPCombatParityTest;
 	friend class FACEEmoteTransitionTest;
@@ -81,6 +84,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACEPluginEquipmentTest;
 	friend class FACEPluginRequestsTest;
 	friend class FACEAppraisalCommandContextTest;
+	friend class FACEVendorTransactionsTest;
 	friend class FACEUCMLootLatencyTest;
 	friend class FACEPluginLootIconsTest;
     friend class FACEPluginCompanionTest;
@@ -104,6 +108,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACEItemPresentationTest;
 	friend class FACESelectionToolbarTest;
     friend class FACEActionDeckTest;
+    friend class FACERetailCursorTest;
 	friend class FACEWorldLootPlacementTest;
 	friend class FACEChatParityTest;
 	friend class FACECombatChatTest;
@@ -113,6 +118,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACEPanelResizeSocialTest;
 	friend class FACEMovementReviewTest;
 	friend class FACERemoteMovementReplayTest;
+	friend class FACERemoteTurnTargetsTest;
 	friend class FACEAvatarMotionTest;
 	friend class FACEEmoteTest;
 	friend class FACEVRInteriorTest;
@@ -129,6 +135,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACERetailInteriorStreamingTest;
 	friend class FACERetailCombatProtocolTest;
 	friend class FACERetailNetworkTest;
+	friend class FACENetworkAnimationParityTest;
 	friend class FACEAttackHeightMotionTest;
 	friend class FACEGroundItemPlacementTest;
 	friend class FACECustomObjectReplicationTest;
@@ -253,6 +260,8 @@ public:
 	void RequestLogOff();
 	/** True while waiting for CharacterList after CharacterLogOff. */
 	bool IsLogOffPending() const { return bLogOffPending; }
+	/** Retail logoff presentation starts 3 seconds after requesting (23 for PK/PKLite). */
+	double GetLogOffPortalStartTime() const { return LogOffPortalStartTime; }
 	void Tick(float DeltaSeconds);
 	/** Retail CObjectMaint grace period outside cell/PVS interest, independent of the camera. */
 	void MaintainWorldObjectVisibility(double Now, TFunctionRef<bool(int32)> IsCellInPVS);
@@ -269,6 +278,8 @@ public:
 	double GetPortalYearTicks() const;
 	bool HasServerTime() const { return bHasServerTime; }
 	const TArray<FACECharacterInfo>& GetCharacters() const { return Characters; }
+	int32 GetPreferredCharacterId() const { return PreferredCharacterId; }
+	void SetPreferredCharacterId(int32 Id) { PreferredCharacterId = Id; }
 	int32 GetPlayerGuid() const { return PlayerGuid; }
 	const FACEPosition& GetPlayerPosition() const { return PlayerPosition; }
 	uint16 GetTeleportSeq() const { return TeleportSeq; }
@@ -408,6 +419,8 @@ public:
 
 	/** GameAction PutItemInContainer (0x0019) — drag & drop into a pack (Placement = slot index). */
 	void SendPutItemInContainer(int32 ItemGuid, int32 ContainerGuid, int32 Placement);
+	/** Retail auto-merge: first destination stack that can hold the entire selected amount. */
+	int32 FindContainerMergeTarget(int32 ItemGuid, int32 ContainerGuid, int32 Amount) const;
 
 	/** GameAction StackableMerge (0x0054) — combine stackables by guid (amount of From into To). */
 	void SendStackableMerge(int32 MergeFromGuid, int32 MergeToGuid, int32 Amount);
@@ -531,6 +544,9 @@ public:
 
 	/** True while a Use / UseWithTarget is outstanding (cleared by UseDone 0x01C7). */
 	bool IsUseBusy() const { return bUseBusy || PendingEquipmentGuid != 0; }
+	/** Presentation only: retail UI waits must never block input or automation. */
+	bool IsCursorBusy() const;
+	void CancelCursorAppraisal() { CursorAppraisalGuid=0; CursorAppraisalUntil=0.; }
 	int32 GetPendingEquipmentGuid() const { return PendingEquipmentGuid; }
 	bool IsEquipmentSwapPending() const { return PendingEquipmentGuid != 0; }
 	bool IsInventoryTransferPending() const { return !PendingInventoryTransfers.IsEmpty(); }
@@ -690,6 +706,7 @@ public:
 	void SetReportedContact(bool bContact) { bAutoPosContact = bContact; }
 
 private:
+    friend class FACEUCMProfileStorageTest;
 	void AdoptPlayerPhysicsTimestamps(const FACEWorldObject& Object);
 	struct FReceivedFragment
 	{
@@ -863,6 +880,8 @@ private:
 	void AdvanceEquipmentSwap();
 	void CancelEquipmentSwap();
     int32 FindEquipmentStowContainer(const TMap<int32, int32>& Reserved) const;
+	bool CanStowEquipmentInContainer(int32 Container, int32 Reserved = 0) const;
+	bool HasPlayerInventoryState(const FACEWorldObject& Object) const;
 	int32 PendingEquipmentGuid = 0;
 	TMap<int32,double> PendingInventoryTransfers;
 	uint32 PendingEquipmentCombatMode = 0;
@@ -1084,12 +1103,14 @@ private:
 	bool bAutoPosContact = true;
 	/** True after RequestLogOff until CharacterList returns us to character select. */
 	bool bLogOffPending = false;
+	double LogOffPortalStartTime = 0.;
 	/** Force Disconnect if the server never answers CharacterLogOff. */
 	float LogOffTimeout = 0.f;
 	/** Retransmit CharacterLogOff while waiting (UDP loss). */
 	float LogOffRetransmitTimer = 0.f;
 
 	TArray<FACECharacterInfo> Characters;
+	int32 PreferredCharacterId = 0;
 	FString ServerName;
 	int32 PlayerGuid = 0;
 	FACEPosition PlayerPosition;
@@ -1133,6 +1154,12 @@ private:
 	TArray<int32> TradeSelfItems;
 	TArray<int32> TradePartnerItems;
 	bool bUseBusy = false;
+	// Independent waits preserve the hourglass when one overlapping operation finishes.
+	TArray<TPair<uint32,double>> CursorUseWaits;
+	double CursorAttackUntil = 0., CursorAppraisalUntil = 0., CursorAllegianceUntil = 0.;
+	int32 CursorAppraisalGuid = 0;
+	void ResetCursorWaits();
+	void ReleaseCursorUse(bool ItemOnly=false);
 	double UseStartedAt = 0.0;
 	int32 UseSourceGuid = 0, UseTargetGuid = 0;
 	void BeginPendingUse(int32 Source, int32 Target);

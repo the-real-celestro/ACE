@@ -1,35 +1,29 @@
-# AC:Unreal / AC:VR release 130
+# AC:Unreal / AC:VR release 141
 
 Windows desktop, PC VR, native Linux x86_64, and standalone Quest share version
-**2026.10.22.130**. Android version code: 130. Quest installer revision: 9.
+**2026.10.27.141**. Android version code: 141. Quest installer revision: 9.
 
-## Movement and corpse placement
+These notes cover all changes since **v140 / 2026.10.27.140**.
 
-- Correct remote NPC and player turning, walking start/stop transitions, and
-  interrupted strides using the retail DAT motion tables.
-- Use each creature's authored movement instead of human fallback speeds when
-  animation position frames supply velocity. Includes rabbits, chickens,
-  roosters and chicks through the shared movement path.
-- Match retail animation-frame boundaries when entering cycles or death poses,
-  including queued walk transitions and the jump-to-run landing displacement.
-- Preserve authoritative corpse positions without mesh-bottom placement offsets.
-  Keep physics and visible death animation on the same clock.
-- Use authored collision spheres for slope support, preventing repeated sideways
-  corrections. Preserve real jumps and actors with gravity disabled.
+## Vendor purchases
 
-## Interface
+- Match retail's complete Buy request by including the vendor's currency field,
+  including zero for ordinary pyreals. The missing field could prevent servers
+  that read the complete request from processing purchases, leaving the cursor
+  waiting on an hourglass. This addresses a protocol mismatch found while
+  investigating the grocer purchase reports on Frostcull.
+- Apply the correction to individual purchases and carts through native vendor
+  UI, VR, UCM restocking, and Item Tools, which share the same purchase sender.
+- Use the current vendor's advertised currency, including after switching
+  between alternate-currency and ordinary vendors. Selling retains its separate
+  retail packet format.
 
-- Keep inventory hover text clear of the mouse cursor, including near screen
-  edges, while retaining the retail tooltip style.
+## Validation and distribution
 
-## Validation scope
-
-- Movement regression coverage includes 168 creature trajectories, 64 independent
-  ACE physics death endpoints, and 96 corpse handoffs across flat ground, slopes,
-  airborne placement, delayed appearance loading, and multiple frame rates.
-- Retains v129's UCM performance, video settings, Action Deck, retail interface,
-  inventory icon, mouse-release and shutdown fixes.
-- Packaged checks do not certify every live-server interaction, native Linux GPU,
-  or physical headset. Full live retail parity is not claimed.
-- Game DATs, server files, saved accounts/settings and optional transmog assets
-  are excluded from client downloads.
+- Add packet regressions for ordinary and alternate currencies, vendor changes,
+  single-item and cart purchases, unsigned stock IDs, selling, and cursor
+  completion. The previous Buy request fails the retail packet contract.
+- Ship matching Windows, Linux, and Quest packages without personal settings,
+  account data, server databases, or retail DAT files.
+- Automated checks do not replace live Frostcull confirmation, native Linux GPU
+  testing, or physical Quest/PC VR acceptance.

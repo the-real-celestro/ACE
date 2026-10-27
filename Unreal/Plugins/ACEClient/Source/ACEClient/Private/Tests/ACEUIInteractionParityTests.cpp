@@ -1,6 +1,7 @@
 #include "VR/ACEVRMenu.h"
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "ACETestDatDirectory.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/Paths.h"
 #include "Misc/FileHelper.h"
@@ -44,6 +45,9 @@
 #include "UI/ACEUIGameplayBinder.h"
 #include "UnrealClient.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Sockets.h"
+#include "SocketSubsystem.h"
+#include "IPAddress.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUIInteractionParityTest, "ACE.RetailParity.UIInteractions",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
@@ -57,7 +61,7 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
     auto* GI=NewObject<UGameInstance>();
     GI->Init();
     auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
-    if (!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if (!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     const FString ArtDirectory=FPaths::ProjectSavedDir()/TEXT("Automation/UIInteractions");
     IFileManager::Get().MakeDirectory(*ArtDirectory,true);
     auto* Resources=NewObject<UACEUIResourceResolver>(); Resources->Initialize(Dat);
@@ -92,6 +96,17 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
             TestEqual(TEXT("Fullscreen and borderless each toggle back to windowed repeatedly"),Mode,I%2==0?EWindowMode::Windowed:Preferred);
         }
     }
+    for(FIntPoint Desktop:{FIntPoint(1920,1080),FIntPoint(3440,1440),FIntPoint(3840,2160)})
+    {
+        TestEqual(TEXT("Mode-only fullscreen uses the monitor instead of the saved small window"),
+            FACEDesktopDisplay::ResolveResolution(EWindowMode::Windowed,EWindowMode::Fullscreen,FIntPoint(1024,768),Desktop,false),Desktop);
+        TestEqual(TEXT("Explicit lower fullscreen resolution remains available for performance"),
+            FACEDesktopDisplay::ResolveResolution(EWindowMode::Windowed,EWindowMode::Fullscreen,FIntPoint(1280,720),Desktop,true),FIntPoint(1280,720));
+        TestEqual(TEXT("Borderless always follows native monitor resolution"),
+            FACEDesktopDisplay::ResolveResolution(EWindowMode::Fullscreen,EWindowMode::WindowedFullscreen,FIntPoint(800,600),Desktop,true),Desktop);
+        TestEqual(TEXT("Invalid saved resolution recovers to the monitor"),
+            FACEDesktopDisplay::ResolveResolution(EWindowMode::Windowed,EWindowMode::Fullscreen,FIntPoint(0,0),Desktop,true),Desktop);
+    }
 
     ON_SCOPE_EXIT { Binder->Shutdown(); Canvas->SetGameplayBinder(nullptr); Manager->Shutdown(); Dat->Deinitialize(); TGuardValue<FString> Restore(GGameUserSettingsIni,OriginalSettings); ACEInputBindings::Reload(); };
     FWidgetRenderer Renderer(true,true);
@@ -108,6 +123,69 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
         FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/TEXT("Automation/UIInteractions")/(FString(Name)+TEXT(".png"))));
     };
     Manager->ApplyEdgeAnchoredLayout(1600,900);
+
+    // The native drop and scroll paths receive viewport-local points. Compare
+    // both against scaled DAT geometry, including horizontal trade scrollbars.
+    {
+        auto* Sockets=ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
+        FSocket* Receiver=Sockets->CreateSocket(NAME_DGram,TEXT("UI drop fixture receiver"),false);
+        const auto Address=Sockets->CreateInternetAddr(); bool Valid=false;
+        Address->SetIp(TEXT("127.0.0.1"),Valid); Address->SetPort(0);
+        ON_SCOPE_EXIT {
+            if(Receiver){Receiver->Close();Sockets->DestroySocket(Receiver);}
+            if(Session.SocketC2S){Session.SocketC2S->Close();Sockets->DestroySocket(Session.SocketC2S);Session.SocketC2S=nullptr;}
+            Session.ServerC2SAddr.Reset();Session.IssacClient.Reset();Session.CachedC2SPackets.Reset();
+        };
+        if (!TestTrue(TEXT("Bind isolated UI drop loopback"),Receiver && Receiver->Bind(*Address))) return false;
+        Receiver->GetAddress(*Address);
+        Session.SocketC2S=Sockets->CreateSocket(NAME_DGram,TEXT("UI drop fixture sender"),false);
+        Session.ServerC2SAddr=Address;Session.IssacClient=MakeUnique<FACEIsaac>(123u);
+        FACEWorldObject Partner; Partner.Guid=8790; Partner.Name=TEXT("Scale test partner");
+        FACEWorldObject Item; Item.Guid=8791; Item.Name=TEXT("Scale test item"); Item.ContainerId=Self.Guid;
+        Item.ItemType=ACEItemType::Misc; Item.Value=10; Item.IconId=0x060010F9;
+        Session.WorldObjects.Add(Partner.Guid,Partner); Session.WorldObjects.Add(Item.Guid,Item);
+        Session.TradePartnerGuid=Partner.Guid; Binder->ShowTradePanel(Partner.Guid);
+        for (float Scale:{1.f,1.25f,2.f})
+        {
+            TGuardValue<float> SX(Canvas->LastScaleX,Scale), SY(Canvas->LastScaleY,Scale);
+            Session.TradeSelfItems.Reset(); Binder->RefreshTradeOverlays();
+            const auto List=Manager->FindElementByName(TEXT("TradeSelfItemsList"));
+            const FVector2D Drop=(FVector2D(List->GetScreenOrigin())+FVector2D(20,16))*Scale;
+            Binder->InvDragGuid=Item.Guid; Binder->InvDragAmount=1; Binder->bInvDragPending=true; Binder->bInvDragActive=true;
+            Session.CachedC2SPackets.Reset();
+            TestTrue(TEXT("Scaled trade drop is consumed"),Binder->TryFinishInventoryDrag(Drop));
+            bool SentOffer=false;
+            for(const auto& Packet:Session.CachedC2SPackets)
+            {
+                FACEBinaryReader Wire(Packet.Value.Payload);Wire.Skip(16);
+                if(Wire.ReadUInt32()!=ACEOpcode::GameAction)continue;
+                Wire.ReadUInt32();
+                if(Wire.ReadUInt32()==ACEGameAction::AddToTrade && Wire.ReadUInt32()==uint32(Item.Guid))SentOffer=true;
+            }
+            TestTrue(TEXT("Scaled trade drop sends an offer for the intended item"),SentOffer);
+            Session.TradeSelfItems.Init(Item.Guid,24); Binder->RefreshTradeOverlays();
+            const auto Bar=Manager->FindElementByName(TEXT("TradeSelf_ItemListScroll"));
+            const FVector2D Track=(FVector2D(Bar->GetScreenOrigin())+FVector2D(Bar->Width-24,8))*Scale;
+            TestTrue(TEXT("Scaled horizontal scrollbar starts a drag"),Binder->TryBeginScrollbarDrag(Track));
+            Binder->UpdateScrollbarDrag(Track); Binder->TryFinishScrollbarDrag();
+            TestTrue(TEXT("Scaled horizontal scrollbar advances the item viewport"),Binder->TradeSelfOffset>0);
+        }
+        Binder->HideTradePanel(false); Session.TradePartnerGuid=0; Session.TradeSelfItems.Reset();
+        Session.OpenVendorGuid=Partner.Guid; Session.VendorItemTypes=MAX_uint32; Session.VendorMinValue=Session.VendorMaxValue=-1;
+        Binder->ShowVendorPanel(Partner.Guid);
+        for (float Scale:{1.f,1.25f,2.f})
+        {
+            TGuardValue<float> SX(Canvas->LastScaleX,Scale), SY(Canvas->LastScaleY,Scale);
+            Binder->VendorSellCart.Reset(); Binder->ActiveVendorPage=2; Binder->SyncVendorPageVisibility(); Binder->RefreshVendorOverlays();
+            const auto List=Manager->FindElementByName(TEXT("VendorSellList"));
+            const FVector2D Drop=(FVector2D(List->GetScreenOrigin())+FVector2D(20,16))*Scale;
+            Binder->InvDragGuid=Item.Guid; Binder->InvDragAmount=1; Binder->bInvDragPending=true; Binder->bInvDragActive=true;
+            TestTrue(TEXT("Scaled vendor drop is consumed"),Binder->TryFinishInventoryDrag(Drop));
+            TestTrue(TEXT("Scaled vendor drop stages the intended item"),Binder->VendorSellCart.ContainsByPredicate([&](auto Row){return Row.Value==Item.Guid;}));
+        }
+        Binder->HideVendorPanel(); Session.OpenVendorGuid=0; Binder->VendorSellCart.Reset();
+        Session.WorldObjects.Remove(Item.Guid); Session.WorldObjects.Remove(Partner.Guid);
+    }
 
     // Click the visible routing row, then deliver each wire LogTextType. Cover
     // composite Combat/Magic groups, all five windows and scaled HUD coordinates.
@@ -145,7 +223,20 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
                 TestEqual(TEXT("Second click restores the group"),Window?Binder->FloatyChatFilters[Window-1]:Binder->MainChatTypeFilter,MAX_uint64);
             }
         }
+        const uint64 Appraisal=1ull<<ACEChatMessageType::Appraisal;
+        TestEqual(TEXT("Assessment notices are independent of the Gameplay category"),ACERetailChat::FilterGroups[0].Mask&Appraisal,0ull);
+        Binder->MainChatTypeFilter=MAX_uint64&~Appraisal;Binder->FloatyChatFilters[1]=MAX_uint64&~Appraisal;
         Binder->SaveFloatyChatSettings();
+        Binder->MainChatTypeFilter=MAX_uint64;Binder->FloatyChatFilters[1]=MAX_uint64;
+        Binder->LoadFloatyChatSettings();
+        TestEqual(TEXT("Main assessment notice filter persists"),Binder->MainChatTypeFilter&Appraisal,0ull);
+        TestEqual(TEXT("Separate window assessment notice filter persists"),Binder->FloatyChatFilters[1]&Appraisal,0ull);
+        for(int32 W=0;W<5;++W)Binder->ChatDisplayLines[W].Reset();
+        Binder->HandleChatMessage(TEXT("Fellow tried and failed to assess you!"),TEXT(""),ACEChatMessageType::Appraisal);
+        TestEqual(TEXT("Incoming assessment notice is hidden in the filtered main window"),Binder->ChatDisplayLines[0].Num(),0);
+        TestEqual(TEXT("Unfiltered window still receives assessment notices"),Binder->ChatDisplayLines[1].Num(),1);
+        Binder->HandleChatMessage(TEXT("Equipment appraisal error"),TEXT(""),ACEChatMessageType::ChatError);
+        TestEqual(TEXT("Assessment filter retains important error messages"),Binder->ChatDisplayLines[0].Num(),1);
     }
 
     // Combat routing must use packet provenance, not the green Default color or
@@ -623,9 +714,12 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
     if(TestNotNull(TEXT("Graphics options exposes object glow"),Glow))
     {
         TestTrue(TEXT("Glow defaults checked"),Glow->IsChecked());
-        Glow->SetIsChecked(false);Video->ApplyInterfaceOptions();Video->ResetVideo();
+        Glow->SetIsChecked(false);Glow->OnCheckStateChanged.Broadcast(false);
+        TestEqual(TEXT("Disabling glow takes effect without Apply"),ACERuntimeOptions::Get(TEXT("ObjectGlow")),0.f);
+        Video->ResetVideo();
         TestFalse(TEXT("Glow preference survives UI reload"),Glow->IsChecked());
-        Glow->SetIsChecked(true);Video->ApplyInterfaceOptions();
+        Glow->SetIsChecked(true);Glow->OnCheckStateChanged.Broadcast(true);
+        TestEqual(TEXT("Re-enabling glow takes effect without Apply"),ACERuntimeOptions::Get(TEXT("ObjectGlow")),1.f);
     }
     auto* ScreenshotFolder=Video?Cast<UEditableTextBox>(Video->WidgetTree->FindWidget(TEXT("ScreenshotDirectory"))):nullptr;
     if(TestNotNull(TEXT("Config exposes screenshot save folder"),ScreenshotFolder))

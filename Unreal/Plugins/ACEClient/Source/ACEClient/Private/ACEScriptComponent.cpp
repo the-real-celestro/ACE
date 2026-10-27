@@ -1259,8 +1259,10 @@ void UACEScriptComponent::TickComponent(
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 	if (!ImpactFrames.IsEmpty())
 	{
-		const auto* PC = Cast<AACEPlayerController>(GetWorld()->GetFirstPlayerController());
-		if (PC && PC->IsWorldTransitionActive())
+		// A pending logout still shows the world (including incoming hits) until
+		// its retail delay and world fade finish. Retire only in the portal view.
+		const auto* Dat = GetDat();
+		if (Dat && Dat->IsInPortalSpace())
 		{
 			GetOwner()->Destroy();
 			return;
@@ -1317,6 +1319,7 @@ void UACEScriptComponent::UpdateEffectTickInterval()
 
 void UACEScriptComponent::TickScripts(float DeltaTime)
 {
+	ACE_PROFILE_SCOPE(EffectScripts);
 	TGuardValue<bool> Flushing(bFlushingScripts, true);
 	const double TargetTime = ScriptClock + FMath::Max(0.f, DeltaTime);
 	for (int32 Dispatch = 0; Dispatch < 1024; ++Dispatch)
@@ -2721,6 +2724,7 @@ void UACEScriptComponent::SpawnParticle(FActiveEmitter& Emitter)
 
 void UACEScriptComponent::TickParticleSimulation(float DeltaTime)
 {
+	ACE_PROFILE_SCOPE(EffectSimulation);
 	if (ActiveEmitters.IsEmpty())
 	{
 		ParticleTimeSinceUpdate = 0.0;
@@ -3111,7 +3115,7 @@ void UACEScriptComponent::TickParticleLights(bool bPresentationOnly)
 		Request.EmitterId = Emitter.InstanceId;
 		Request.Position = Position;
 		Request.Color = Emitter.LightColor;
-		if (bWielded)
+		if (bWielded || bPortal)
 		{
 			// The texture estimate supplies the hue. Dark/transparent padding in
 			// small spark textures must not attenuate carried illumination again:
@@ -3121,7 +3125,8 @@ void UACEScriptComponent::TickParticleLights(bool bPresentationOnly)
 			Request.Color /= Peak;
 			Request.Color.A = 1.f;
 		}
-		Request.Radius = bWielded ? 320.f : 480.f;
+		// Portals illuminate a room-sized area; weapon sparks remain local.
+		Request.Radius = bPortal ? 900.f : bWielded ? 320.f : 480.f;
 		Request.bPortal = bPortal;
 		const float Strength = Emitter.LightLum * Weight;
 		// Keep isolated effects readable, but allow fading effects to reach zero.

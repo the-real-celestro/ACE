@@ -30,26 +30,29 @@ return function(s)
     -- The host reports available content space in logical UI units. Keep every
     -- list row a single line (full name in its tooltip) so pages fit on resize.
     local height = s.panel and s.panel.height or 620
-    local next_rules = math.max(1, math.min(16, math.floor((height-300)/54)))
+    local next_rules = math.max(1, math.min(16, math.floor((height-330)/54)))
     local next_detected = math.max(1, math.min(16, math.floor((height-230)/54)))
     rule_page = math.floor((rule_page-1)*rule_size/next_rules)+1
     detected_page = math.floor((detected_page-1)*detected_size/next_detected)+1
     rule_size, detected_size = next_rules, next_detected
+    local migrated = false
     if not config then
         local saved = s.state or {}
         config = {rules={}, next_id=1, watching=saved.watching ~= false,
             chat_alerts=saved.chat_alerts ~= false, world_markers=saved.world_markers == true,
             map_markers=saved.map_markers ~= false, range=math.max(5, math.min(240, tonumber(saved.range) or 240))}
+        migrated = saved.opacity ~= nil or saved.background_opacity ~= nil or saved.vr_opacity ~= nil or saved.vr_background_opacity ~= nil
         for _, r in ipairs(type(saved.rules)=="table" and saved.rules or {}) do
             if #config.rules == MAX_RULES then break end
             if type(r)=="table" and type(r.name)=="string" and #r.name>0 and #r.name<=256 then
                 config.rules[#config.rules+1] = {id=config.next_id, name=r.name,
                     exact=r.exact==true, enabled=r.enabled~=false}
+                migrated = migrated or r.plate ~= nil
                 config.next_id = config.next_id + 1
             end
         end
     end
-    local changed, rules_changed = false, false
+    local changed, rules_changed = migrated, false
     local selected
     for _, o in ipairs(s.objects or {}) do if o.id == s.selected then selected=o end end
     local function add(name)
@@ -103,7 +106,8 @@ return function(s)
     for _, r in ipairs(config.rules) do
         if r.enabled then
             local name=string.lower(r.name)
-            if r.exact then exact_names[name]=true else partial_names[#partial_names+1]=name end
+            if r.exact then exact_names[name]=true
+            else partial_names[#partial_names+1]=name end
         end
     end
     local matches, markers, new_names, next_cache, next_seen = {}, {}, {}, {}, {}
@@ -120,11 +124,10 @@ return function(s)
                 local name=string.lower(o.name)
                 local match=cache[name]
                 if match==nil and workavailable() then
-                    match=exact_names[name]==true
-                    if not match then
-                        for _, needle in ipairs(partial_names) do
-                            if string.contains(name,needle) then match=true; break end
-                        end
+                    match=exact_names[name] or false
+                    for _, rule in ipairs(partial_names) do
+                        if match then break end
+                        if string.contains(name,rule) then match=true end
                     end
                 end
                 if match==nil then scanning=true else next_cache[name]=match end
@@ -181,7 +184,7 @@ return function(s)
     end
     local setup={
         {id="draft",type="input",text="Name to watch",value=draft,live=true},
-        {id="exact",type="checkbox",text="Exact name (otherwise contains)",value=exact},
+        {id="exact",type="checkbox",text="Exact name",value=exact,tooltip="Otherwise match any name containing this text"},
         {id="add_row",type="row",children={button("add","Add name"),button("add_selected","Add selected",selected~=nil)}},
         {id="feedback",text=feedback,wrap=false,tooltip=feedback},
         page_controls("rules",rule_page,#config.rules,rule_size)
@@ -192,7 +195,7 @@ return function(s)
         {id="world_markers",type="checkbox",text="Mark matches in the world",value=config.world_markers},
         {id="map_markers",type="checkbox",text="Mark matches on Waypoint map",value=config.map_markers},
         {id="match_help",text="Names ignore letter case. Matches are literal. Saved automatically for this character and server.",size=12},
-        {id="limits",text="Uses nearby objects known to the client. Up to 32 markers; all detected matches remain in the list.",size=12}
+        {id="limits",text="Uses nearby objects known to the client. Up to 32 world/map markers. Target plates are provided by separate addons.",size=12}
     }
     for i=(rule_page-1)*rule_size+1,math.min(#config.rules,rule_page*rule_size) do
         local r=config.rules[i]
@@ -206,5 +209,7 @@ return function(s)
             {id="setup_tab",type="column",text="Setup",children=setup},
             {id="options_tab",type="column",text="Options",children=options}}}}
     if s.error and s.error~="" then ui[#ui+1]={id="error",text=s.error,color="red"} end
-    return {status=#matches.." matches",ui=ui,markers=markers,requests=requests,state=changed and config or nil}
+    -- Clear any retained plates from older Third Eye versions; other addons own
+    -- their plate lists and opacity preferences independently.
+    return {status=#matches.." matches",ui=ui,markers=markers,world_plates={},requests=requests,state=changed and config or nil}
 end

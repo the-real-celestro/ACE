@@ -1,6 +1,7 @@
 #include "Dat/ACEDatTextureResolver.h"
 #include "Dat/ACEDatCursor.h"
 #include "Dat/ACEDxtUtil.h"
+#include "Dat/ACEWorldTextureMipProvider.h"
 #include "ACEDatSubsystem.h"
 #include "Engine/Texture2D.h"
 #include "Engine/Texture.h"
@@ -10,6 +11,7 @@
 #include "Modules/ModuleManager.h"
 #include "HAL/PlatformTime.h"
 #include "HAL/IConsoleManager.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 namespace
 {
@@ -150,6 +152,7 @@ UTexture2D* FACEDatTextureResolver::CreateTransientRgbaWithMips(
 	TextureAddress AddressX, TextureAddress AddressY, bool bPremultiplyAlpha,
 	bool bDilateRgbIntoTransparent, int32 MaxMipLevels, TextureFilter Filter, bool bApplyWorldSizeLimit)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(ACE_CreateWorldTexture);
 	if (Width <= 0 || Height <= 0 || Pixels.Num() < Width * Height)
 	{
 		return nullptr;
@@ -186,6 +189,12 @@ UTexture2D* FACEDatTextureResolver::CreateTransientRgbaWithMips(
 	PlatformData->SizeY = Height;
 	PlatformData->PixelFormat = PF_B8G8R8A8;
 	PlatformData->Mips.Empty(MipCount);
+	UACEWorldTextureMipProvider* Provider=nullptr;
+	if(bApplyWorldSizeLimit)
+	{
+		Provider=NewObject<UACEWorldTextureMipProvider>(Tex);
+		Tex->AddAssetUserData(Provider);
+	}
 
 	TArray<FColor> Current = Pixels;
 	// Ensure exact size (callers may pass larger scratch buffers).
@@ -215,10 +224,14 @@ UTexture2D* FACEDatTextureResolver::CreateTransientRgbaWithMips(
 		FTexture2DMipMap* Mip = new FTexture2DMipMap();
 		Mip->SizeX = CurW;
 		Mip->SizeY = CurH;
-		Mip->BulkData.Lock(LOCK_READ_WRITE);
-		void* Data = Mip->BulkData.Realloc(CurW * CurH * sizeof(FColor));
-		FMemory::Memcpy(Data, Current.GetData(), CurW * CurH * sizeof(FColor));
-		Mip->BulkData.Unlock();
+		if(Provider)Provider->AddMip(Current);
+		else
+		{
+			Mip->BulkData.Lock(LOCK_READ_WRITE);
+			void* Data = Mip->BulkData.Realloc(CurW * CurH * sizeof(FColor));
+			FMemory::Memcpy(Data, Current.GetData(), CurW * CurH * sizeof(FColor));
+			Mip->BulkData.Unlock();
+		}
 		PlatformData->Mips.Add(Mip);
 
 		if (Level + 1 >= MipCount)
@@ -884,7 +897,7 @@ bool FACEDatTextureResolver::ResolveSurfaceRenderFlags(uint32 SurfaceId, FACEDat
 		if (!ResolveSurface(SurfaceId, Decoded)) return false;
 		Surface = &Decoded;
 	}
-	if (!Surface->bHasPixels && !Surface->bIsSolid) return false;
+	if (!Surface->bHasPixels && !Surface->bIsSolid && Surface->Width<=0) return false;
 	Out.bFullyTransparent = Surface->bFullyTransparent;
 	Out.bUsesAlpha = Surface->bUsesAlpha;
 	Out.bClipMap = Surface->bClipMap;
@@ -893,10 +906,35 @@ bool FACEDatTextureResolver::ResolveSurfaceRenderFlags(uint32 SurfaceId, FACEDat
 	Out.bSurfaceTranslucent = Surface->bSurfaceTranslucent;
 	Out.Translucency = Surface->Translucency;
 	Out.SolidAlpha = Surface->SolidColor.A;
+	Out.SolidColor=Surface->SolidColor;Out.Luminosity=Surface->Luminosity;Out.Diffuse=Surface->Diffuse;
 	return true;
 }
 
-bool FACEDatTextureResolver::ResolveSurfaceWithAppearance(uint32 SurfaceId, int32 PartIndex, const FACEObjDesc* Appearance, FACEDatDecodedSurface& Out)
+uint32 FACEDatTextureResolver::GetOriginalPaletteId(uint32 SurfaceId) const
+{
+	if (const auto* Cached = OriginalPaletteCache.Find(SurfaceId)) return *Cached;
+	const uint32 Palette = [&]() -> uint32
+	{
+	TArray<uint8> Blob;
+	if (!ReadBlob(SurfaceId, Blob)) return 0;
+	FACEDatCursor Cursor(Blob); FACEDatSurface Surface;
+	if (!ACEDatUnpack::UnpackSurface(Cursor, Surface)) return 0;
+	if (Surface.OrigPaletteId) return Surface.OrigPaletteId;
+	if (!Surface.OrigTextureId || !ReadBlob(Surface.OrigTextureId, Blob)) return 0;
+	FACEDatCursor TextureCursor(Blob); FACEDatSurfaceTexture Texture;
+	if (!ACEDatUnpack::UnpackSurfaceTexture(TextureCursor, Texture)) return 0;
+	for (uint32 Id : Texture.Textures)
+	{
+		FACEDatTexture Image;
+		if (LoadTexture(Id, Image) && Image.DefaultPaletteId) return Image.DefaultPaletteId;
+	}
+	return 0;
+	}();
+	OriginalPaletteCache.Add(SurfaceId, Palette);
+	return Palette;
+}
+
+bool FACEDatTextureResolver::ResolveSurfaceWithAppearance(uint32 SurfaceId, int32 PartIndex, const FACEObjDesc* Appearance, FACEDatDecodedSurface& Out, uint32 PartPaletteId)
 {
 	++SurfaceResolveCount;
 	// Part/model replacements select geometry, not pixels. They must not force
@@ -1049,6 +1087,10 @@ bool FACEDatTextureResolver::ResolveSurfaceWithAppearance(uint32 SurfaceId, int3
             }
         }
         if (!OriginalPalette) OriginalPalette = Tex.DefaultPaletteId;
+        // CPhysicsPart::DetermineBasePal chooses the first nonzero palette for
+        // the whole part. SetPalette then applies it to ALL indexed surfaces
+        // on that part, including headgear with a different default palette.
+        if (PartPaletteId) OriginalPalette = PartPaletteId;
         if (OriginalPalette == static_cast<uint32>(Appearance->PaletteBaseId)
             && BuildWorkingPalette(*Appearance, OriginalPalette, WorkingPalette, true))
             PalettePtr = &WorkingPalette;

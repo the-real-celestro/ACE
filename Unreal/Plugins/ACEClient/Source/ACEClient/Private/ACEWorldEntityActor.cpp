@@ -7,7 +7,9 @@
 #include "ACEScriptComponent.h"
 #include "ACEDatSubsystem.h"
 #include "ACEClientSubsystem.h"
+#include "ACEPlayerController.h"
 #include "ACEWorldPresenterComponent.h"
+#include "ACETerrainPresenterComponent.h"
 #include "ACESession.h"
 #include "ACEOpcodes.h"
 #include "ACELandblockActor.h"
@@ -303,7 +305,7 @@ void AACEWorldEntityActor::InitializeFromObject(const FACEWorldObject& Object, f
 			SpawnPosition.bHasVelocity = true;
 			SpawnPosition.Velocity = Object.Velocity;
 		}
-		ApplyACEPosition(SpawnPosition);
+		ApplyACEPosition(SpawnPosition, false);
 	}
 	else if (ParentGuid != 0)
 	{
@@ -451,6 +453,7 @@ void AACEWorldEntityActor::ConfigureWorldCollision(bool bEnable)
 	TArray<FACEDatCollisionShape> MovementShapes;
 	MovementSpheresAc.Reset();
 	const bool bHaveSetupMetadata=Dat && Dat->GetSetupMovementSpheres(SetupId,MovementShapes);
+	bSetupHasNoMovementSpheres = bHaveSetupMetadata && MovementShapes.IsEmpty();
 	if(bHaveSetupMetadata && !MovementShapes.IsEmpty())
 	{
 		float R=0,Bottom=MAX_flt,Top=-MAX_flt;
@@ -995,6 +998,10 @@ void AACEWorldEntityActor::UpdateHeldAttachmentPose()
 FVector AACEWorldEntityActor::ResolvePredictedMovement(const FVector& From, const FVector& Destination, TOptional<bool> Grounded) const
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(ACE_RemoteCollision);
+	// CPhysicsObj::UpdateObjectInternal (005156B0) retains XYZ when
+	// CPartArray::GetNumSphere is zero, regardless of the object's item type.
+	// A fallback pick capsule is not a retail movement body.
+	if (bSetupHasNoMovementSpheres) return From;
 	if (!GetWorld() || IsCorpse() || (PhysicsState & ACEPhysicsState::Missile)
 		|| (!bIsPlayer && !(ItemType & ACEItemType::Creature))) return Destination;
 	const float Scale = GetActorScale3D().GetAbsMax();
@@ -1106,15 +1113,24 @@ FVector AACEWorldEntityActor::ResolvePredictedMovement(const FVector& From, cons
 	return Position - Offset;
 }
 
-bool AACEWorldEntityActor::ResolveFacingTarget(int32 TargetGuid, FVector& Location) const
+bool AACEWorldEntityActor::ResolveFacingTarget(int32 TargetGuid, FVector& Location, bool bAllowCachedPosition) const
 {
 	const auto* GI = GetGameInstance();
 	const auto* Client = GI ? GI->GetSubsystem<UACEClientSubsystem>() : nullptr;
 	if (!Client || TargetGuid == 0 || TargetGuid == ACEGuid) return false;
-	if (TargetGuid == Client->GetPlayerGuid() && Client->GetPlayerPosition().IsValid())
+	if (TargetGuid == Client->GetPlayerGuid())
 	{
-		Location = Client->GetPlayerPosition().ToUnrealLocation(WorldScale);
-		return true;
+		// A server echo can replace the session pose before the controller's
+		// packet delegate restores prediction. TargetManager reads physics, not
+		// that transient network snapshot. The helper rejects pending teleports.
+		FACEPosition Position = Client->GetPlayerPosition();
+		if (const auto* PC = Cast<AACEPlayerController>(GetWorld()->GetFirstPlayerController()))
+			PC->TryGetLocallyPredictedPosition(Position);
+		if (Position.IsValid())
+		{
+			Location = Position.ToUnrealLocation(WorldScale);
+			return true;
+		}
 	}
 	// TargetManager::SendVoyeurUpdate reads the target's current physics frame,
 	// not its last sparse F748. Using the cached packet makes melee chase/spacing
@@ -1126,6 +1142,9 @@ bool AACEWorldEntityActor::ResolveFacingTarget(int32 TargetGuid, FVector& Locati
 				Location = Target->GetActorLocation();
 				return true;
 			}
+	// TurnToObject falls back to the packet's absolute heading when GetObjectA
+	// has no physics body. Merely receiving an ObjectCreate is not sufficient.
+	if (!bAllowCachedPosition) return false;
 	FACEWorldObject Target;
 	if (!Client->GetWorldObject(TargetGuid, Target) || !Target.bHasPosition || !Target.Position.IsValid()) return false;
 	Location = Target.Position.ToUnrealLocation(WorldScale);
@@ -1191,6 +1210,15 @@ void AACEWorldEntityActor::SetRemoteLocomotion(float Forward, float Strafe, bool
 	if (Appearance) Appearance->SetLocomotionInput(Forward, Strafe, bRunning, Rate, true);
 }
 
+void AACEWorldEntityActor::AdvanceRemoteTurn(const FQuat& Desired, float Speed, float Seconds)
+{
+	const float Delta = FMath::FindDeltaAngleDegrees(RemotePredictRotation.Rotator().Yaw, Desired.Rotator().Yaw);
+	RemotePredictRotation = ACERetailTurn::Advance(RemotePredictRotation, Desired, Speed, Seconds,
+		FMath::DegreesToRadians(RemoteTurnRateDegrees));
+	RemoteTurnAnimationRate = RemotePredictRotation.Equals(Desired, .000001f) ? 0.f
+		: FMath::Sign(-Delta * RemoteTurnRateDegrees) * Speed;
+}
+
 FVector AACEWorldEntityActor::AdvanceRemoteMoveTo(float Seconds)
 {
 	RemoteMoveToStepLimit = 0.f;
@@ -1247,8 +1275,7 @@ FVector AACEWorldEntityActor::AdvanceRemoteMoveTo(float Seconds)
 		StopTranslation();
 		if (RemoteWalkingMotion.HasPending()) return FVector::ZeroVector;
 		const bool WasTurning = !RemotePredictRotation.Equals(RemoteMoveToHeading, .000001f);
-		RemotePredictRotation = ACERetailTurn::Advance(RemotePredictRotation, RemoteMoveToHeading,
-			RemoteMotion.MoveToSpeed, Seconds, FMath::DegreesToRadians(RemoteTurnRateDegrees));
+		AdvanceRemoteTurn(RemoteMoveToHeading, RemoteMotion.MoveToSpeed, Seconds);
 		if (!RemotePredictRotation.Equals(RemoteMoveToHeading, .000001f)) return FVector::ZeroVector;
 		RemoteMoveToPhase = ERemoteMoveToPhase::Move;
 		// BeginMoveForward selects the gait once. Re-selecting it each frame
@@ -1277,9 +1304,7 @@ FVector AACEWorldEntityActor::AdvanceRemoteMoveTo(float Seconds)
 			// HandleMoveToPosition uses a turn modifier beyond 20 degrees,
 			// while translation continues along the body's current facing.
 			if (!RemoteWalkingMotion.HasPending() && RemotePredictRotation.AngularDistance(Desired) > FMath::DegreesToRadians(20.f))
-				RemotePredictRotation = ACERetailTurn::Advance(RemotePredictRotation, Desired,
-					RemoteMotion.MoveToSpeed * (RemoteMotion.bRunning ? 1.5f : 1.f), Seconds,
-					FMath::DegreesToRadians(RemoteTurnRateDegrees));
+				AdvanceRemoteTurn(Desired, RemoteMotion.MoveToSpeed * (RemoteMotion.bRunning ? 1.5f : 1.f), Seconds);
 			RemoteMoveToStepLimit = Remaining * WorldScale;
 			const float Speed = (Forward < 0 ? RemoteBackSpeedAc : RemoteMotion.bRunning ? RemoteRunSpeedAc : RemoteWalkSpeedAc) * RemoteMotion.AnimPlayRate;
 			RemoteMotion.Forward = Forward;
@@ -1295,8 +1320,7 @@ FVector AACEWorldEntityActor::AdvanceRemoteMoveTo(float Seconds)
 	{
 		// BeginTurnToHeading waits for the preceding walk exit to finish.
 		if (RemoteWalkingMotion.HasPending()) return FVector::ZeroVector;
-		RemotePredictRotation = ACERetailTurn::Advance(RemotePredictRotation, RemoteMoveToFinalHeading,
-			RemoteMotion.MoveToSpeed, Seconds, FMath::DegreesToRadians(RemoteTurnRateDegrees));
+		AdvanceRemoteTurn(RemoteMoveToFinalHeading, RemoteMotion.MoveToSpeed, Seconds);
 		if (!RemotePredictRotation.Equals(RemoteMoveToFinalHeading, .000001f)) return FVector::ZeroVector;
 	}
 	Complete();
@@ -1315,6 +1339,9 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 	// second root writer here used to undo grounding/interpolation each frame.
 	if (!HasVRRoot) EndRemoteVRRoot();
 	else RemoteWalkingMotion.Reset();
+	RemoteTurnAnimationRate = !HasVRRoot && !bHavePhysicsVelocity && !RemoteMotion.IsDeathMotion()
+		&& RemoteMotion.MovementType == 0 ? RemoteMotion.Turn : 0.f;
+	if (Appearance && (HasVRRoot || bHavePhysicsVelocity)) Appearance->SetTurnInput(0.f);
 	if (!HasVRRoot && !bHavePhysicsVelocity && PendingRemoteLanding.IsSet())
 	{
 		const FACEPosition Landing = PendingRemoteLanding.GetValue();
@@ -1378,7 +1405,12 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 			// ACE PhysicsGlobals.Gravity = 9.8 in AC units/sec² (same magnitude as Earth m/s²).
 			const bool bMissile = (PhysicsState & ACEPhysicsState::Missile) != 0;
 			const bool bProp = !bMissile && !bIsPlayer && !(ItemType & ACEItemType::Creature) && !IsCorpse();
-			const bool bNeedsFloor = bProp && (PhysicsState & ACEPhysicsState::Gravity);
+			const bool bNeedsFloor = bProp && !bSetupHasNoMovementSpheres && (PhysicsState & ACEPhysicsState::Gravity);
+			// Retail enters physics only after SetPosition resolves the resident
+			// cell. A terrain-height fallback is insufficient while an outdoor
+			// pedestal/table or indoor furniture is still being installed.
+			if (bNeedsFloor && PlacementTerrain.IsValid()
+				&& !PlacementTerrain->IsObjectCellCollisionReady(LastAceCellId)) return;
 			float PropGroundZ = 0.f;
 			const bool bPropSupport = bNeedsFloor && TraceGroundZ(RemotePredictLocation, PropGroundZ, true);
 			// Wait for an unloaded room, not for a floor hit. A loaded room may
@@ -1387,7 +1419,9 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 			const bool bWaitForRoom = bNeedsFloor && !bPropSupport
 				&& ResolveIndoorOccupancy(RemotePredictLocation, PropCell)
 				&& !AACEEnvCellActor::HasActiveCollision(GetWorld(), static_cast<int32>(PropCell));
-			const float PhysicsStep = bWaitForRoom ? 0.f : Step;
+			// Sphere-less objects may still rotate, animate and emit particles.
+			// They cannot translate, even if a create/vector packet carries gravity velocity.
+			const float PhysicsStep = bWaitForRoom || bSetupHasNoMovementSpheres ? 0.f : Step;
 			const FVector Acceleration = (PhysicsState & ACEPhysicsState::Gravity) != 0
 				? FVector(0.f, 0.f, -9.8f) : FVector::ZeroVector;
 			// Velocity in ObjectCreate / VectorUpdate is world-space ACE units/sec.
@@ -1423,7 +1457,7 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 
 			// Creatures/pets are not Unreal pawns — ballistic integrate has no capsule contact.
 			// Seat on traced ground so summons don't fall through floors after a jump F748.
-			if (!bMissile && (PhysicsState & ACEPhysicsState::Gravity) && AcePhysicsVelocity.Z <= 0.f)
+			if (!bSetupHasNoMovementSpheres && !bMissile && (PhysicsState & ACEPhysicsState::Gravity) && AcePhysicsVelocity.Z <= 0.f)
 			{
 				float GroundZ = 0.f;
 				if (bProp ? (GroundZ = PropGroundZ, bPropSupport) : TraceGroundZ(RemotePredictLocation, GroundZ, true))
@@ -1486,69 +1520,14 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 
 			if (bTurnTo)
 			{
-				// TurnToObject: face frozen target direction. Never fall back to DesiredHeading=0
-				// (that faces due north). TurnToHeading uses ACE degree heading.
+				// MovementManager resolves the target once when the command arrives.
+				// Never resample a moving/late-spawned target on a later render frame.
 				FVector FaceDir = RemoteTurnFaceDir;
-				if (!bHaveRemoteTurnFace || !FaceDir.Normalize())
-				{
-					bHaveRemoteTurnFace = false;
-					if (RemoteMotion.MovementType == 8 && RemoteMotion.MoveToTargetGuid != 0)
-					{
-						if (UWorld* World = GetWorld())
-						{
-							if (UGameInstance* GI = World->GetGameInstance())
-							{
-								if (UACEClientSubsystem* Client = GI->GetSubsystem<UACEClientSubsystem>())
-								{
-									FVector TargetLoc = FVector::ZeroVector;
-									bool bHaveTarget = false;
-									FACEWorldObject TargetObj;
-									if (Client->GetWorldObject(RemoteMotion.MoveToTargetGuid, TargetObj)
-										&& TargetObj.bHasPosition && TargetObj.Position.IsValid())
-									{
-										TargetLoc = TargetObj.Position.ToUnrealLocation(WorldScale);
-										bHaveTarget = true;
-									}
-									if (RemoteMotion.MoveToTargetGuid == Client->GetPlayerGuid())
-									{
-										const FACEPosition PlayerPos = Client->GetPlayerPosition();
-										if (PlayerPos.IsValid())
-										{
-											TargetLoc = PlayerPos.ToUnrealLocation(WorldScale);
-											bHaveTarget = true;
-										}
-									}
-									if (bHaveTarget)
-									{
-										FaceDir = TargetLoc - RemotePredictLocation;
-										FaceDir.Z = 0.f;
-										FACEPosition Facing;
-										Facing.SetAceFacingFromUnrealDir2D(FaceDir);
-										FaceDir = FACEPosition::UnrealDirFromAceHeadingDegrees(
-											Facing.GetAceHeadingDegrees() + RemoteMotion.MoveToDesiredHeading);
-									}
-									else FaceDir = FACEPosition::UnrealDirFromAceHeadingDegrees(RemoteMotion.TurnToFallbackHeading);
-								}
-							}
-						}
-					}
-					else if (RemoteMotion.MovementType == 9)
-					{
-						FaceDir = FACEPosition::UnrealDirFromAceHeadingDegrees(
-							RemoteMotion.MoveToDesiredHeading);
-					}
-					if (FaceDir.Normalize())
-					{
-						RemoteTurnFaceDir = FaceDir;
-						bHaveRemoteTurnFace = true;
-					}
-				}
 				if (bHaveRemoteTurnFace && FaceDir.Normalize())
 				{
 					const FQuat Want = FACEPosition::QuatFromUnrealTravelDir2D(FaceDir);
 					if (!bRemoteCorrectionPending)
-						RemotePredictRotation = ACERetailTurn::Advance(
-							RemotePredictRotation, Want, RemoteMotion.TurnToSpeed, DeltaTime, FMath::DegreesToRadians(RemoteTurnRateDegrees));
+						AdvanceRemoteTurn(Want, RemoteMotion.TurnToSpeed, DeltaTime);
 					SetRemoteLocomotion(0.f, 0.f, false, 1.f);
 					if (!bRemoteCorrectionPending && RemotePredictRotation.Equals(Want, .000001f))
 					{
@@ -1617,6 +1596,9 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 				else RemoteMotion.StickyTargetGuid = 0;
 			}
 
+			// Update once per physics step: clearing/reapplying a directed turn
+			// each frame would continually restart its animation at frame zero.
+			if (Appearance) Appearance->SetTurnInput(RemoteTurnAnimationRate);
 			// CPartArray advances non-cyclic position frames before the cyclic
 			// velocity and before interpolation. Starting at full walk speed or
 			// discarding the exit gets ahead/behind the next server position.
@@ -1661,9 +1643,7 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 				// fixed while the body catches it, including after a stop/death.
 				// CMotionInterp::get_adjusted_max_speed is 4 * run rate; it is
 				// independent of the model's walk-cycle velocity and object scale.
-				const float RunRate = uint16(RemoteMotion.ForwardCommand)==7
-					? RemoteMotion.AnimPlayRate : RemoteMotion.MoveToRunRate;
-				const float Speed = 8.f * FMath::Max(0.f,RunRate);
+				const float Speed = 8.f * FMath::Max(0.f,RemoteRunRate);
 				const float Limit = (Speed>.0002f?Speed:7.5f)*WorldScale*Step;
 				RemotePredictLocation = PredictionStart+(RemoteAnchorLocation-PredictionStart).GetClampedToMaxSize(Limit);
 				// Retail replaces the complete animation offset, including rotation.
@@ -1675,17 +1655,18 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 			// A swing's live target spacing owns the final displacement.
 			if (StickyDestination.IsSet()) RemotePredictLocation=StickyDestination.GetValue();
 
-			// Clamp runaway drift if UpdateMotion stalls without a correcting F748.
-			const float MaxDriftCm = RemoteMaxExtrapolate * FMath::Max(
-				FMath::Abs(RemoteMotion.ForwardUnitsPerSecond),
-				FMath::Abs(RemoteMotion.StrafeUnitsPerSecond) > KINDA_SMALL_NUMBER
-					? FMath::Abs(RemoteMotion.StrafeUnitsPerSecond)
-					: 4.f) * WorldScale * GetActorScale3D().GetAbsMax();
-			const FVector Drift = RemotePredictLocation - RemoteAnchorLocation;
-			if (!Correcting && !bMoveTo && RemoteMotion.bMoving && !RemoteMotion.IsDeathMotion() && Drift.SizeSquared() > FMath::Square(FMath::Max(MaxDriftCm, 50.f)))
+			// PositionManager applies ConstraintManager after interpolation and
+			// sticky offsets, before collision. It counts requested travel since
+			// the last accepted position, then progressively scales translation.
+			// A radius of "two seconds at this speed" is not retail's constraint:
+			// it freezes slow movers too early and mishandles changes in direction.
+			if (Creature && bRemoteConstrained)
 			{
-				RemotePredictLocation = RemoteAnchorLocation
-					+ Drift.GetSafeNormal() * FMath::Max(MaxDriftCm, 50.f);
+				const float Factor = FMath::Clamp((RemoteConstraintMaxAc-RemoteConstraintTravelAc)
+					/ (RemoteConstraintMaxAc-RemoteConstraintStartAc),0.f,1.f);
+				const FVector Offset = (RemotePredictLocation-PredictionStart)*Factor;
+				RemotePredictLocation = PredictionStart+Offset;
+				RemoteConstraintTravelAc += Offset.Size()/WorldScale;
 			}
 
 			// Grounded packet corrections and locomotion share one collision body.
@@ -2194,7 +2175,7 @@ bool AACEWorldEntityActor::ClampLocationToGround(FVector& InOutLocation, const F
 	// Honor the effective network state for every item type, including Creature
 	// props. ACE's explicit GravityStatus=false overrides an integer default that
 	// still contains Gravity; do not reintroduce it through visual ground seating.
-	if (!bClampToGround || (PhysicsState & ACEPhysicsState::Gravity) == 0)
+	if (bSetupHasNoMovementSpheres || !bClampToGround || (PhysicsState & ACEPhysicsState::Gravity) == 0)
 	{
 		return true;
 	}
@@ -2335,7 +2316,7 @@ void AACEWorldEntityActor::ApplyPositionPlacement(int32 PlacementId)
 	}
 }
 
-void AACEWorldEntityActor::ApplyACEPosition(const FACEPosition& Position)
+void AACEWorldEntityActor::ApplyACEPosition(const FACEPosition& Position, bool bPositionEvent)
 {
 	if (bAttachedToParent || ParentGuid != 0)
 	{
@@ -2362,8 +2343,19 @@ void AACEWorldEntityActor::ApplyACEPosition(const FACEPosition& Position)
 		RemoteTeleportSequence=Position.TeleportSequence;
 	}
 	const bool Creature=bIsPlayer || (ItemType & ACEItemType::Creature) || IsCorpse();
-	const bool bSnap = !bHaveRemotePredict || NewTeleport
-		|| FVector::DistSquared(GetActorLocation(),NewLocation)>FMath::Square(RemoteSnapDistance*WorldScale);
+	FVector PlayerLocation;
+	const auto* Client = GetGameInstance() ? GetGameInstance()->GetSubsystem<UACEClientSubsystem>() : nullptr;
+	// MoveOrTeleport chooses SetPositionSimple at player_distance >= 96 AC.
+	// Nearby corrections use interpolation even for a large error; only a new
+	// teleport epoch bypasses it. Error magnitude is not a teleport signal.
+	const bool FarPosition = Creature && bPositionEvent && Position.bHasContactState && Position.bIsGrounded
+		&& Client && ResolveFacingTarget(Client->GetPlayerGuid(), PlayerLocation)
+		&& FVector::DistSquared(GetActorLocation(), PlayerLocation) >= FMath::Square(96.f * WorldScale);
+	const bool bSnap = !bHaveRemotePredict || NewTeleport || FarPosition
+		// A full descriptor supplies placement, not extrapolated movement. A
+		// sphere-less model cannot walk from its old placement to that frame.
+		|| (bSetupHasNoMovementSpheres && !bPositionEvent)
+		|| (!Creature && FVector::DistSquared(GetActorLocation(),NewLocation)>FMath::Square(RemoteSnapDistance*WorldScale));
 	if (bSnap) PendingRemoteLanding.Reset();
 	// Cell notifications still update the collision context during a jump across
 	// a building entrance; delaying the transform must not retain an old floor.
@@ -2384,6 +2376,18 @@ void AACEWorldEntityActor::ApplyACEPosition(const FACEPosition& Position)
 		}
 		PendingRemoteLanding.Reset();
 	}
+	// SmartBox::HandleReceivedPosition constrains remote bodies from their
+	// current frame after an accepted MoveOrTeleport, with zero accumulated
+	// travel. CreateObject/appearance descriptors are not new position events.
+	if (Creature && bPositionEvent && Position.bHasContactState)
+	{
+		bRemoteConstrained = true;
+		RemoteConstraintTravelAc = 0.f;
+		const bool Indoor = (uint32(Position.CellId)&0xffffu) >= 0x100u;
+		RemoteConstraintStartAc = Indoor ? 5.f : 10.f;
+		RemoteConstraintMaxAc = Indoor ? 20.f : 50.f;
+	}
+	else if (bSnap) bRemoteConstrained = false;
 	LastRemotePositionAt = FPlatformTime::Seconds();
 	if (bHaveRemotePredict && (NewRotation | RemotePredictRotation) < 0.f)
 	{
@@ -2514,6 +2518,14 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
     else if (!bDeath && RemoteMotion.CurrentStyle != Motion.CurrentStyle)
         RemoteWalkingMotion.Reset();
 	RemoteMotion = Motion;
+	if (Appearance)
+		Appearance->SetTurnInput(!bDeath && !bHavePhysicsVelocity && Motion.MovementType == 0 ? Motion.Turn : 0.f);
+	// CMotionInterp::apply_interpreted_movement remembers my_run_rate. Ready,
+	// walking, turning and death do not reset the speed used by interpolation.
+	if (Motion.MovementType == 0 && uint16(Motion.ForwardCommand) == 7)
+		RemoteRunRate = Motion.AnimPlayRate;
+	else if (Motion.MovementType == 6 || Motion.MovementType == 7)
+		RemoteRunRate = Motion.MoveToRunRate;
 	RemoteMoveToPhase = ERemoteMoveToPhase::Begin;
 	// Movement commands queue turning before walking. Do not briefly start a
 	// walk pose (and its entry link) merely because a MoveTo packet arrived.
@@ -2573,10 +2585,7 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
 				|| Cmd == static_cast<int32>(ACEMotion::Dead);
 			if (Action != 0)
 			{
-				const uint32 ActionHi = Action & 0xFF000000u;
-				const bool bHoldEmote = ActionHi == 0x13000000u
-					|| ActionHi == 0x42000000u || ActionHi == 0x43000000u
-					|| ACEMotion::IsHeldRestCommand(Action);
+				const bool bHoldEmote = ACEMotion::IsHeldRestCommand(Action);
 				if (bDying)
 				{
 					// Dead is a held state only for a newly created corpse. A living
@@ -2597,8 +2606,7 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
 					for (int32 I=0;I<Motion.ActionFollowups.Num();++I)
 					{
 						const uint32 Next = ACEMotion::NormalizeCommand(static_cast<uint32>(Motion.ActionFollowups[I]));
-						const uint32 Family = Next & 0xFF000000u;
-						const bool Hold = Family == 0x13000000u || Family == 0x42000000u || Family == 0x43000000u || ACEMotion::IsHeldRestCommand(Next);
+						const bool Hold = ACEMotion::IsHeldRestCommand(Next);
 						Appearance->QueueActionMotion(Motion.ActionFollowups[I], Motion.FollowupSpeed(I), Motion.CurrentStyle, Hold);
 					}
 				}
@@ -2660,7 +2668,7 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
 			{
 				Dat->BuildTransitionRootTrack(MotionTableId,ACEMotion::Ready,ACEMotion::Dead,Motion.CurrentStyle,RemoteDeathRootTrack);
 				RemoteDeathRootTrack.bApplyEntry = RemoteWalkingMotion.HasPending();
-				RemoteDeathPlayRate = FMath::Max(.05f,Motion.ActionSpeed);
+				RemoteDeathPlayRate = FMath::Max(0.f,Motion.ActionSpeed);
 			}
 			else if (!bDeath) RemoteDeathRootTrack.Reset();
 			FVector Velocity;
@@ -2700,61 +2708,16 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
 			RemoteAnchorLocation = RemotePredictLocation;
 			bHaveRemotePredict = true;
 		}
-		if (Motion.MovementType == 8 && Motion.MoveToTargetGuid != 0)
+		float Heading = Motion.MovementType == 8 ? Motion.TurnToFallbackHeading : Motion.MoveToDesiredHeading;
+		FVector TargetLocation;
+		if (Motion.MovementType == 8 && ResolveFacingTarget(Motion.MoveToTargetGuid, TargetLocation, false))
 		{
-			if (UWorld* World = GetWorld())
-			{
-				if (UGameInstance* GI = World->GetGameInstance())
-				{
-					if (UACEClientSubsystem* Client = GI->GetSubsystem<UACEClientSubsystem>())
-					{
-						FVector TargetLoc = FVector::ZeroVector;
-						bool bHaveTarget = false;
-						FACEWorldObject TargetObj;
-						if (Client->GetWorldObject(Motion.MoveToTargetGuid, TargetObj)
-							&& TargetObj.bHasPosition && TargetObj.Position.IsValid())
-						{
-							TargetLoc = TargetObj.Position.ToUnrealLocation(WorldScale);
-							bHaveTarget = true;
-						}
-						if (Motion.MoveToTargetGuid == Client->GetPlayerGuid())
-						{
-							const FACEPosition PlayerPos = Client->GetPlayerPosition();
-							if (PlayerPos.IsValid())
-							{
-								TargetLoc = PlayerPos.ToUnrealLocation(WorldScale);
-								bHaveTarget = true;
-							}
-						}
-						if (bHaveTarget)
-						{
-							const FVector SelfLoc = bHaveRemotePredict
-								? RemotePredictLocation
-								: GetActorLocation();
-							FVector To = TargetLoc - SelfLoc;
-							To.Z = 0.f;
-							if (To.Normalize())
-							{
-								FACEPosition Facing;
-								Facing.SetAceFacingFromUnrealDir2D(To);
-								RemoteTurnFaceDir = FACEPosition::UnrealDirFromAceHeadingDegrees(
-									Facing.GetAceHeadingDegrees() + Motion.MoveToDesiredHeading);
-								bHaveRemoteTurnFace = true;
-							}
-						}
-					}
-				}
-			}
+			FACEPosition Facing;
+			Facing.SetAceFacingFromUnrealDir2D(TargetLocation - RemotePredictLocation);
+			Heading = Facing.GetAceHeadingDegrees() + Motion.MoveToDesiredHeading;
 		}
-		else if (Motion.MovementType == 9)
-		{
-			FVector Dir = FACEPosition::UnrealDirFromAceHeadingDegrees(Motion.MoveToDesiredHeading);
-			if (Dir.Normalize())
-			{
-				RemoteTurnFaceDir = Dir;
-				bHaveRemoteTurnFace = true;
-			}
-		}
+		RemoteTurnFaceDir = FACEPosition::UnrealDirFromAceHeadingDegrees(Heading);
+		bHaveRemoteTurnFace = RemoteTurnFaceDir.Normalize();
 	}
 	RefreshActorTickEnabled();
 }
@@ -2762,20 +2725,24 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
 void AACEWorldEntityActor::ApplyPhysicsVelocity(const FVector& AceVelocity, const FVector& AceOmega)
 {
 	// CPhysicsObj::UpdateObjectInternal translates through the setup's movement
-	// spheres. Stuck containers still settle; sphere-less signs stay attached.
+	// spheres. Creature is also used for stationary quest objects and does not
+	// exempt them from the zero-sphere rule. Stuck containers with spheres settle.
 	const bool bAnchoredProp = (MovementSpheresAc.IsEmpty()
 		|| (PhysicsState & (ACEPhysicsState::Static | ACEPhysicsState::Ethereal)))
 		&& !bIsPlayer && !bIsSelf && (ItemType & ACEItemType::Creature) == 0
 		&& (PhysicsState & ACEPhysicsState::Missile) == 0;
-	AcePhysicsVelocity = bAnchoredProp ? FVector::ZeroVector : AceVelocity;
+	AcePhysicsVelocity = bAnchoredProp || bSetupHasNoMovementSpheres ? FVector::ZeroVector : AceVelocity;
 	AcePhysicsOmega = AceOmega;
-	bHavePhysicsVelocity = !AcePhysicsVelocity.IsNearlyZero();
+	// Keep angular motion without waking an idle sphere-less object for a
+	// translational velocity it cannot apply (e.g. the Apostate quest crystals).
+	bHavePhysicsVelocity = !AcePhysicsVelocity.IsNearlyZero()
+		|| (bSetupHasNoMovementSpheres && !AcePhysicsOmega.IsNearlyZero());
 	if (AcePhysicsVelocity.Z > .01f) PendingRemoteLanding.Reset();
 	// VectorUpdate describes velocity, not loss of contact. Retail retains its
 	// contact plane while running down a slope; treating every horizontal vector
 	// as a jump leaves the body on a shelf until gravity/the next F748 catches up.
 	// Upward impulses and bodies genuinely above their support remain ballistic.
-	if (bHavePhysicsVelocity && bClampToGround && !(PhysicsState & ACEPhysicsState::Missile)
+	if (!bSetupHasNoMovementSpheres && bHavePhysicsVelocity && bClampToGround && !(PhysicsState & ACEPhysicsState::Missile)
 		&& (bIsPlayer || (ItemType & ACEItemType::Creature)) && AceVelocity.Z <= .01f)
 	{
 		float GroundZ;

@@ -1,4 +1,6 @@
 #include "ACEPlayerController.h"
+#include "ACEOrbitCameraBoom.h"
+#include "ACEInventoryRules.h"
 #include "ACEProfiling.h"
 #include "ACERetailTurn.h"
 #include "UI/ACERadarVisuals.h"
@@ -31,6 +33,7 @@
 #include "ACEMouseCursorWidget.h"
 #include "UI/ACEGameHUDWidget.h"
 #include "UI/ACEFrameRateWidget.h"
+#include "Blueprint/WidgetLayoutLibrary.h"
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACEUIGameplayBinder.h"
 #include "UI/ACEUICharSelectBinder.h"
@@ -873,7 +876,8 @@ bool AACEPlayerController::InputKey(const FInputKeyEventArgs& Params)
 
 void AACEPlayerController::UpdateFrameRateOverlay()
 {
-	const bool Enabled=ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f && !IsDesktopInterfaceHidden();
+	const bool Enabled=Client && Client->GetSessionState()==EACESessionState::InWorld
+		&& ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f && !IsDesktopInterfaceHidden();
 	if(!Enabled)
 	{
 		if(FrameRateWidget && FrameRateWidget->GetVisibility()!=ESlateVisibility::Collapsed)
@@ -885,15 +889,17 @@ void AACEPlayerController::UpdateFrameRateOverlay()
 	}
 	if(!FrameRateWidget)FrameRateWidget=CreateWidget<UACEFrameRateWidget>(this);
 	if(!FrameRateWidget)return;
-	FrameRateWidget->SetVisibility(ESlateVisibility::HitTestInvisible);
 	FrameRateWidget->Sample(FPlatformTime::Seconds());
-	if(IsVRActive()) { if(FrameRateWidget->IsInViewport())FrameRateWidget->RemoveFromParent(); }
+	const bool Desktop=!IsVRActive();
+	bool Added=false;
+	if(!Desktop) { if(FrameRateWidget->IsInViewport())FrameRateWidget->RemoveFromParent(); }
 	else if(!FrameRateWidget->IsInViewport())
 	{
-		FrameRateWidget->AddToViewport(10000);FrameRateWidget->SetAlignmentInViewport(FVector2D(0,0));
-		FrameRateWidget->SetPositionInViewport(FVector2D(16,64),false);
-		FrameRateWidget->SetDesiredSizeInViewport(FVector2D(320,48));
+		FrameRateWidget->AddToViewport(10000);Added=true;
 	}
+	const float Dpi=FMath::Max(.01f,UWidgetLayoutLibrary::GetViewportScale(this));
+	FrameRateWidget->UpdatePresentation(Client?Client->GetUIElementManager():nullptr,Desktop,
+		UWidgetLayoutLibrary::GetViewportSize(this)/Dpi,Added);
 }
 
 void AACEPlayerController::PlayerTick(float DeltaTime)
@@ -960,9 +966,10 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			BeginEnterWorldLoadScreen();
 		}
 	}
-	if ((bEnterWorldLoading || bWorldRevealActive) && Client
+	const bool bLoggingOff = TickLogOffTransition();
+	if (bLoggingOff || ((bEnterWorldLoading || bWorldRevealActive) && Client
 		&& (Client->GetSessionState() == EACESessionState::EnteringWorld
-			|| Client->GetSessionState() == EACESessionState::InWorld))
+			|| Client->GetSessionState() == EACESessionState::InWorld)))
 	{
 		if (APawn* P = GetPawn())
 			if (auto* App = P->FindComponentByClass<UACECharacterAppearanceComponent>()) App->ResetWalkingMotion();
@@ -980,7 +987,9 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				if (ACEInputBindings::Pressed(this, EKeys::Escape)) DatGameplayBinder->HandleEscape();
 			}
 		}
-		TickWorldTransition();
+		// Logout waits for the server's roster. It must never stream a new
+		// destination, reveal the old world, or send an arrival LoginComplete.
+		if (!bLoggingOff) TickWorldTransition();
 		return;
 	}
 	if (!Client || Client->GetSessionState() != EACESessionState::InWorld)
@@ -1114,11 +1123,11 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			|| (!bChatFocused && (!FMath::IsNearlyZero(F) || !FMath::IsNearlyZero(R))));
 	}
 
-	// Retail: F uses / picks up the selected object (same as the hand toolbar button).
+	// Retail pickup is distinct from Use: a portable pack can be opened or collected.
 	if (!bChatFocused && ACEInputBindings::Pressed(this, ACEInputBindings::Action(TEXT("Pickup"))) && Client
 		&& Client->GetSessionState() == EACESessionState::InWorld)
 	{
-		InteractWithSelectedObject();
+		PickupSelectedObject();
 	}
 
 	if (!bChatFocused && DatGameplayBinder
@@ -1490,18 +1499,18 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				}
 			}
 			if (UseApproachPhase == EACEUseApproachPhase::Holding
-				&& !bInUseRange
-				&& ApproachStallSeconds < 0.2f)
+				&& !bInUseRange)
 			{
-				// Still not against the mesh and cylinder gap is outside UseRadius — keep closing.
+				// A delayed server MoveTo can tighten the radius after we started
+				// holding (ACE does this for magic stance). Resume toward the new
+				// distance even after a long wait; holding time is not failed walking.
 				// Give / MoveOnly approaches must stay MoveOnly: sending Use runs
 				// StopExistingMoveToChains on the server and cancels the pending give.
-				UseApproachPhase = EACEUseApproachPhase::Walking;
+				UseApproachPhase = bFacing ? EACEUseApproachPhase::Walking : EACEUseApproachPhase::Turning;
+				ApproachStallSeconds = 0.f;
+				ApproachStallLastLoc = SelfLoc;
+				ApproachTurnSeconds = 0.f;
 				bResendUseWhenInRange = !bApproachMoveOnly && ApproachUseSendCount == 0;
-			}
-			if (UseApproachPhase == EACEUseApproachPhase::Holding && !bInUseRange && !bFacing)
-			{
-				UseApproachPhase = EACEUseApproachPhase::Turning;
 			}
 
 			F = 0.f;
@@ -1560,7 +1569,11 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
         }
     }
 
-    // Retail: no air control of the arc — lock JumpWorldAceVelocity. A/D may still yaw the
+	if (!bVR && GetPawn())
+		if (auto* App=GetPawn()->FindComponentByClass<UACECharacterAppearanceComponent>(); App && App->IsMovementLockedByAction())
+		{ F=0.f; R=0.f; }
+
+	// Retail: no air control of the arc — lock JumpWorldAceVelocity. A/D may still yaw the
 	// mesh while airborne (visual only); charge keeps turn for aim.
 	const float RawF = F;
 	const float RawR = R;
@@ -1633,8 +1646,10 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		if (UACECharacterAppearanceComponent* App = PossessedPawn->FindComponentByClass<UACECharacterAppearanceComponent>())
 		{
 			App->SetWalkingTransitionsEnabled(!bVR && !bJumpAirborne && !bJumpCharging
-				&& !bServerMoveToActive && !bPluginDrivingMovement && !bPluginFastBuffMovement
-				&& !bChatFocused && !ACEInputBindings::Down(this, ACEInputBindings::Action(TEXT("Stop"))));
+				&& !bServerMoveToActive && !bPluginDrivingMovement && !bPluginFastBuffMovement);
+			// Retail StopObjectCompletely and ordinary key-up both return through
+			// the motion table. Stop/chat suppress input, not the unfinished step.
+			App->SetTurnInput(bVR || bJumpAirborne ? 0.f : ReportedTurn*((bMouseFacing||bRunning)?1.5f:1.f));
 			if (!bJumpAirborne && !FMath::IsNearlyZero(F) && FMath::Sign(F) != FMath::Sign(ForwardSent))
 				App->InterruptCastWithMovement();
 			App->UpdateCellLighting((bHavePredictedPose ? PredictedPose : Client->GetPlayerPosition()).CellId);
@@ -2514,6 +2529,13 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 						MoveDir.Normalize();
 					}
 
+					// CTransition::step_up uses StepUpHeight for step_down, but
+					// CPolygon::adjust_sphere_to_plane accepts walk_interp down to
+					// -0.5: the landing can rise 1.5 times that height. The previous
+					// fixed +12 cm cap rejected retail's ordinary tabletop step.
+					// Keep this allowance inside the collision-validated step path,
+					// not the general floor snap (which could pull bodies onto roofs).
+					const float MaxStepRise = StepUpCm * 1.5f;
 					// Short reaches first — pool rims / curb lips are narrower than the capsule.
 					// Long hops land the center in the water void and SampleFeetZ returns grade (Rise≈0).
 					const float ReachCandidates[] = {
@@ -2529,17 +2551,34 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 						StepUpCm * 0.50f,
 						StepUpCm * 0.70f,
 						StepUpCm,
-						FMath::Min(StepUpCm, CapsuleRadius * 1.1f)
+						FMath::Min(StepUpCm, CapsuleRadius * 1.1f),
+						MaxStepRise
 					};
                     struct FLiftProbe { FVector Position; bool bBlocked=false; };
-                    TArray<FLiftProbe,TInlineAllocator<6>> LiftProbes;
+                    TArray<FLiftProbe,TInlineAllocator<7>> LiftProbes;
                     for (const float LiftCm : LiftCandidates)
                     {
                         auto& Probe=LiftProbes.AddDefaulted_GetRef();
                         Probe.Position=From+FVector(0,0,LiftCm);
                         if (LiftCm<3.f) { Probe.bBlocked=true; continue; }
                         FHitResult UpHit;
-                        if (SweepCapsule(UpHit,From,Probe.Position) && IsWallHit(UpHit) && !UpHit.bStartPenetrating)
+                        bool bLiftHit=SweepCapsule(UpHit,From,Probe.Position);
+                        // Retail BSP step-up adjusts the lower sphere onto a
+                        // walkable plane; it does not sweep that sphere through
+                        // the riser. A table's apron must not become a ceiling
+                        // for the foot. Preserve the upper sphere's clearance,
+                        // then validate the full body across and onto the tread.
+                        if(bLiftHit && Shape.Count>1 && !ACEBodySweep::IsUpperBodyContact(UpHit)
+                            && !ACEBodySweep::IsCreatureBody(UpHit)
+                            && UpHit.ImpactPoint.Z<=From.Z-CapsuleHalfHeight+MaxStepRise)
+                        {
+                            FACECollisionBody Upper=Shape;
+                            Upper.Centers[0]=Shape.Centers[1];Upper.Radii[0]=Shape.Radii[1];Upper.Count=1;
+                            bLiftHit=ACEBodySweep::Sweep(*World,UpHit,From,Probe.Position,Upper,SweepParams);
+                            if(bLiftHit)UpHit.MyBoneName=FName(TEXT("ACEUpperBodySphere"));
+                            if(bLiftHit && UpHit.bStartPenetrating){Probe.bBlocked=true;continue;}
+                        }
+                        if (bLiftHit && IsWallHit(UpHit) && !UpHit.bStartPenetrating)
                         {
                             if (UpHit.ImpactNormal.Z<-.15f)
                             {
@@ -2602,7 +2641,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 
 							float LandFeetZ = 0.f;
 							bool bHaveLand = false;
-							const float LandMaxUp = bIndoorNow ? (StepUpCm + 12.f) : (StepUpCm + 28.f);
+							const float LandMaxUp = MaxStepRise;
 							const float LandMaxDown = CapsuleHalfHeight + StepUpCm + 16.f;
 							auto TryLandAt = [&](double X, double Y) -> bool
 							{
@@ -2612,7 +2651,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 									// SampleFeetZ prefers land (nearest to feet) at the XY in
 									// front of a riser. For outdoor Setup stairs, take the
 									// highest building-shell tread in StepUp — same as indoor.
-									const float TreadMaxUp = StepUpCm + 12.f;
+									const float TreadMaxUp = MaxStepRise;
 									const float TraceTop = FeetAtFrom + LandMaxUp + .5f;
 									TArray<FHitResult> StairHits;
 									if (World->LineTraceMultiByChannel(
@@ -2735,6 +2774,16 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 									}
 								}
 							}
+							// CPolygon::check_walkable admits an edge within the lower
+							// sphere's footprint. A center ray can still see the floor
+							// beside a thin tabletop and miss that valid raised tread.
+							float FootSupportZ=FeetAtFrom;
+							if(ACEBodySweep::FindBodyFootSupport(*World,FVector(AfterHoriz.X,AfterHoriz.Y,FeetAtFrom),
+								Shape,LandMaxDown,SweepParams,FootSupportZ,MaxStepRise,false,true)
+								&& (!bHaveLand || FootSupportZ>LandFeetZ))
+							{
+								LandFeetZ=FootSupportZ;bHaveLand=true;
+							}
 							if (!bHaveLand)
 							{
 								continue;
@@ -2742,7 +2791,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 							// Must actually climb — landing back on grade through a hollow (pool)
 							// is not a step-up.
 							const float RiseFeet = LandFeetZ - FeetAtFrom;
-							if (RiseFeet < 0.5f || RiseFeet > (bIndoorNow ? StepUpCm + 12.f : StepUpCm + 28.f))
+							if (RiseFeet < 0.5f || RiseFeet > MaxStepRise)
 							{
 								continue;
 							}
@@ -2757,7 +2806,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 							{
 								continue;
 							}
-							if (Landed.Z-From.Z>StepUpCm+12.f) continue;
+							if (Landed.Z-From.Z>MaxStepRise) continue;
 							// Block second-floor / low-ceiling clips: only reject true overhead
 							// ceilings near the head. Do not reject stair climbs when a distant
 							// ceiling is in the sweep (previous check killed all indoor steps).
@@ -4165,6 +4214,7 @@ void AACEPlayerController::UpdateOrbitCamera(float DeltaTime)
 	}
 
 	Boom->CameraLagSpeed = ACECameraRetail::TranslationLagSpeed * ACERuntimeOptions::Get(TEXT("CameraStiffness"));
+	Boom->CameraRotationLagSpeed = Boom->CameraLagSpeed;
 	ApplyRetailCameraFov();
 	if (UCapsuleComponent* Cap = P ? P->FindComponentByClass<UCapsuleComponent>() : nullptr)
 	{
@@ -4226,6 +4276,46 @@ void AACEPlayerController::UpdateOrbitCamera(float DeltaTime)
 	bCameraMapWasDown = bMapDown;
 
 	UpdateCombatTargetCameraAssist(DeltaTime, Boom);
+	UpdateCameraSlope(Boom, DeltaTime);
+}
+
+void AACEPlayerController::UpdateCameraSlope(USpringArmComponent* Boom, float DeltaTime)
+{
+	auto* Orbit = Cast<UACEOrbitCameraBoom>(Boom);
+	APawn* CameraPawn = GetPawn();
+	if (!Orbit || !CameraPawn) return;
+	Orbit->SlopePitch = 0.f;
+	const FVector Position = CameraPawn->GetActorLocation();
+	const FVector Delta = Position - CameraSlopeLastPosition;
+	const bool Valid = bHaveCameraSlopePosition && DeltaTime > SMALL_NUMBER && Delta.SizeSquared() < FMath::Square(2000.);
+	CameraSlopeLastPosition = Position; bHaveCameraSlopePosition = true;
+	if (!Valid) CameraSlopeVelocities.Reset();
+	CameraSlopeVelocities.Add(Valid ? Delta / DeltaTime : FVector::ZeroVector);
+	if (CameraSlopeVelocities.Num()>5) CameraSlopeVelocities.RemoveAt(0,1,EAllowShrinking::No);
+	FVector Velocity = FVector::ZeroVector; for (const auto& V : CameraSlopeVelocities) Velocity += V;
+	Velocity /= CameraSlopeVelocities.Num();
+	// CameraSet's ordinary rear/in-head views align to the contact plane;
+	// overhead, front and side views retain their explicitly chosen orientation.
+	if (IsVRActive() || bCameraLookDown || bCameraMapMode || ACERuntimeOptions::Get(TEXT("CameraAlignToSlope"))<.5f
+		|| (!bCameraInHead && FMath::Abs(FMath::UnwindDegrees(Boom->GetRelativeRotation().Yaw-ACECameraRetail::BoomYawToFaceAcForward))>22.f)
+		|| Velocity.SizeSquared2D()<.01f || !GetWorld()->GetPhysicsScene()) return;
+	FVector Normal = FVector::UpVector;
+	if (bJumpAirborne)
+	{
+		Velocity.Z *= .1f;
+		Normal = FRotationMatrix::MakeFromX(Velocity).GetUnitAxis(EAxis::Z);
+	}
+	else if (const auto* Capsule=CameraPawn->FindComponentByClass<UCapsuleComponent>())
+	{
+		const FVector Feet = Position-FVector(0,0,Capsule->GetScaledCapsuleHalfHeight());
+		FCollisionQueryParams Query(SCENE_QUERY_STAT(ACECameraSlope),false,CameraPawn);
+		TArray<FHitResult> Hits;
+		if (ACEBodySweep::TraceGround(*GetWorld(),Hits,Feet+FVector(0,0,40),Feet-FVector(0,0,80),Query))
+			for (const auto& Hit : Hits) if (Hit.bBlockingHit && Hit.ImpactNormal.Z>.664f && !ACEBodySweep::IsCreatureBody(Hit))
+			{ Normal=Hit.ImpactNormal; break; }
+	}
+	// AC's forward axis is local +Y, rather than Unreal's +X.
+	Orbit->SlopePitch=FVector::VectorPlaneProject(CameraPawn->GetActorRightVector(),Normal).Rotation().Pitch;
 }
 
 void AACEPlayerController::SyncUserCameraArmLength(USpringArmComponent* Boom, float DeltaSeconds)
@@ -4726,7 +4816,11 @@ void AACEPlayerController::EnsureRetailMouseCursor()
 
 	RetailCursorDefaultTex = Resolver->GetOrCreateUiTexture(UACEMouseCursorWidget::DefaultCursorDid);
 	if (auto* Resources = Client ? Client->GetUIResourceResolver() : nullptr)
+	{
 		RetailCursorBusyTex = Resources->ResolveTexture(Resources->ResolveCursorId(14));
+		for (int32 Cursor : {3,4,5,6,10,11,12,13,15})
+			RetailActionCursorTextures.Add(Cursor,Resources->ResolveTexture(Resources->ResolveCursorId(Cursor)));
+	}
 	RetailCursorInteractableTex = Resolver->GetOrCreateUiTexture(UACEMouseCursorWidget::InteractableCursorDid);
 	RetailCursorTargetTex = Resolver->GetOrCreateUiTexture(UACEMouseCursorWidget::TargetCursorDid);
 	RetailCursorTargetValidTex = Resolver->GetOrCreateUiTexture(UACEMouseCursorWidget::TargetValidCursorDid);
@@ -4781,35 +4875,46 @@ void AACEPlayerController::ApplyRetailMouseCursor(bool bInteractable, bool bComp
 	{
 		return;
 	}
-	UTexture2D* Tex = bInteractable && RetailCursorInteractableTex
-		? RetailCursorInteractableTex.Get()
-		: RetailCursorDefaultTex.Get();
-	const bool bPortal = IsWorldTransitionActive();
-	if (bPortal && RetailCursorBusyTex) Tex = RetailCursorBusyTex;
-	else if (bPendingUseTargeting)
-		Tex = !bInteractable ? RetailCursorTargetTex.Get()
-			: bCompatible ? RetailCursorTargetValidTex.Get() : RetailCursorTargetInvalidTex.Get();
+	const auto Session=Client?Client->GetSession():nullptr;
+	const bool Busy=IsWorldTransitionActive() || (Session&&Session->IsCursorBusy());
+	const int32 Mode=Client&&Client->GetSessionState()==EACESessionState::InWorld ? Client->GetPlayerVitalsView().CombatMode : 1;
+	const int32 TargetMode=Client&&Client->GetSessionState()==EACESessionState::InWorld ? (bPendingUseTargeting ? 3 : ObjectCursorTargetMode) : 0;
+	const int32 Cursor=UACEMouseCursorWidget::RetailCursorEnum(Busy,TargetMode,Mode,bInteractable,bCompatible);
+	UTexture2D* Tex=nullptr;
+	switch (Cursor)
+	{
+	case 1: Tex=RetailCursorDefaultTex;break;
+	case 2: Tex=RetailCursorInteractableTex;break;
+	case 14: Tex=RetailCursorBusyTex;break;
+	case 39: Tex=RetailCursorTargetTex;break;
+	case 40: Tex=RetailCursorTargetValidTex;break;
+	case 41: Tex=RetailCursorTargetInvalidTex;break;
+	default: Tex=RetailActionCursorTextures.FindRef(Cursor);break;
+	}
 	if (!Tex)
 	{
 		return;
 	}
-	const int32 HotX = bPendingUseTargeting ? UACEMouseCursorWidget::TargetHotspot : bInteractable
-		? UACEMouseCursorWidget::InteractableHotspotX
-		: UACEMouseCursorWidget::DefaultHotspotX;
-	const int32 HotY = bPendingUseTargeting ? UACEMouseCursorWidget::TargetHotspot : bInteractable
-		? UACEMouseCursorWidget::InteractableHotspotY
-		: UACEMouseCursorWidget::DefaultHotspotY;
-	MouseCursorWidget->SetCursorTexture(Tex, bPortal ? 0 : HotX, bPortal ? 0 : HotY);
+	const int32 Hotspot=!Busy&&(TargetMode==1||TargetMode==3)?UACEMouseCursorWidget::TargetHotspot:0;
+	MouseCursorWidget->SetCursorTexture(Tex,Hotspot,Hotspot);
 	bRetailCursorInteractable = bInteractable;
 }
 
 void AACEPlayerController::SetPendingUseTargeting(bool bPending)
 {
 	bPendingUseTargeting = bPending;
+	if (bPending) ObjectCursorTargetMode=0;
 	if (bRetailCursorInstalled)
 	{
 		ApplyRetailMouseCursor(false);
 	}
+}
+
+void AACEPlayerController::SetObjectCursorTargeting(int32 Mode)
+{
+	ObjectCursorTargetMode=Mode==1||Mode==2 ? Mode : 0;
+	if (ObjectCursorTargetMode) bPendingUseTargeting=false;
+	if (bRetailCursorInstalled) ApplyRetailMouseCursor(false);
 }
 
 void AACEPlayerController::SetDesktopInterfaceHidden(bool bHideInterface)
@@ -5316,7 +5421,71 @@ void AACEPlayerController::PreparePortalScreen()
 	LoadingScreenActor->SetActorTickEnabled(false);
 }
 
-void AACEPlayerController::BeginWorldTransition(const TCHAR* Reason)
+bool AACEPlayerController::TickLogOffTransition()
+{
+	const auto Session = Client ? Client->GetSession() : nullptr;
+	if (!Session || !Session->IsLogOffPending()) return false;
+	if (!bLogOffPresentationActive)
+	{
+		bLogOffPresentationActive = true;
+		bLocalPredicting = bAutoRun = bMouseForwardActive = false;
+		ClearServerMoveTo();
+		ForwardAxis = RightAxis = TurnAxis = 0.f;
+		PortalWorldRevealElapsed = -1.f;
+		if (PlayerCameraManager) PlayerCameraManager->UnlockFOV();
+		if (DatGameplayBinder)
+		{
+			DatGameplayBinder->CancelPointerGestures();
+			DatGameplayBinder->CancelPendingUseWith();
+			DatGameplayBinder->CancelCombatAttack();
+		}
+		SetIgnoreMoveInput(true);
+		SetIgnoreLookInput(true);
+	}
+	if (!bUseEnterWorldLoadScreen) return true;
+	const float Elapsed = float(FPlatformTime::Seconds() - Session->GetLogOffPortalStartTime());
+	const bool bVR = IsVRActive();
+	if (bEnterWorldLoading || bWorldRevealActive)
+	{
+		// Already in portal space: keep that tunnel rather than restarting it.
+		// Only our own world-fade entry needs the retail one-second tunnel fade-in.
+		if (bLogOffWorldFadeStarted && PlayerCameraManager && !bVR)
+		{
+			if (Elapsed < 2.f)
+			{
+				int32 W=1280,H=720; GetViewportSize(W,H);
+				const float Aspect=float(W)/FMath::Max(1,H);
+				PlayerCameraManager->SetFOV(ACERetailPortalAnimation::StretchFov(
+					ACECameraRetail::HorizontalFovDegrees(Aspect,GetCameraFieldOfViewDegrees()),Aspect,Elapsed-1.f,true));
+			}
+			else PlayerCameraManager->UnlockFOV();
+		}
+		return true;
+	}
+	if (Elapsed < 0.f) return true; // Let the server's logout motion play in the world.
+	PreparePortalScreen();
+	if (!bLogOffWorldFadeStarted)
+	{
+		bLogOffWorldFadeStarted = true;
+		PlayPortalEnterSound();
+	}
+	if (PlayerCameraManager && !bVR)
+	{
+		int32 W=1280,H=720; GetViewportSize(W,H);
+		const float Aspect=float(W)/FMath::Max(1,H);
+		PlayerCameraManager->SetFOV(ACERetailPortalAnimation::StretchFov(
+			ACECameraRetail::HorizontalFovDegrees(Aspect,GetCameraFieldOfViewDegrees()),Aspect,Elapsed,false));
+	}
+	// Do not substitute a blank view if the portal art still needs a frame to load.
+	if (Elapsed >= 1.f && LoadingScreenActor && LoadingScreenActor->bMeshReady)
+	{
+		BeginWorldTransition(TEXT("logout"),false);
+		if (PlayerCameraManager && !bVR) PlayerCameraManager->SetFOV(179.f);
+	}
+	return true;
+}
+
+void AACEPlayerController::BeginWorldTransition(const TCHAR* Reason, bool bPlayEnterSound)
 {
 	PortalWorldRevealElapsed = -1.f;
 	if (PlayerCameraManager) PlayerCameraManager->UnlockFOV();
@@ -5475,6 +5644,14 @@ void AACEPlayerController::BeginWorldTransition(const TCHAR* Reason)
 		}
 	}
 
+	if (bPlayEnterSound) PlayPortalEnterSound();
+	SetIgnoreMoveInput(true);
+	SetIgnoreLookInput(true);
+	UE_LOG(LogTemp, Log, TEXT("ACE: portal-space transition started (%s)"), Reason ? Reason : TEXT("unknown"));
+}
+
+void AACEPlayerController::PlayPortalEnterSound()
+{
 	// Retail portal audio: UI_EnterPortal (SoundTable 0x2000004B type 0x6A) once.
 	// Animation 0x030005AC SoundTweaked @ frame 2 starts the portalspace ambient.
 	AActor* SoundHost = LoadingScreenActor ? static_cast<AActor*>(LoadingScreenActor.Get()) : GetPawn();
@@ -5495,9 +5672,6 @@ void AACEPlayerController::BeginWorldTransition(const TCHAR* Reason)
 		}
 	}
 
-	SetIgnoreMoveInput(true);
-	SetIgnoreLookInput(true);
-	UE_LOG(LogTemp, Log, TEXT("ACE: portal-space transition started (%s)"), Reason ? Reason : TEXT("unknown"));
 }
 
 bool AACEPlayerController::IsWorldEntryGeometryReady(uint32 CandidateCell) const
@@ -6822,6 +6996,11 @@ void AACEPlayerController::HandlePositionUpdate(int32 ObjectGuid, const FACEPosi
 			App->ClearJumpMotionIfAny();
 			App->SetSuppressLocoIdleBlend(false);
 		}
+		// SmartBox::HandleReceivedPosition acknowledges a force-position blip
+		// immediately, with the corrected XYZ and the player's retained heading.
+		// Waiting for input or the periodic report leaves the server correcting
+		// against an obsolete position. Airborne reports remain suppressed.
+		Client->FlushAutonomousPosition(Corrected.bIsGrounded);
 		return;
 	}
 
@@ -6967,6 +7146,8 @@ void AACEPlayerController::HandleCharacterList(const TArray<FACECharacterInfo>& 
 
 void AACEPlayerController::HandleSessionStateChanged(EACESessionState NewState)
 {
+	// A saved FPS preference belongs to the gameplay HUD, not the login/lobby.
+	if (NewState != EACESessionState::InWorld) UpdateFrameRateOverlay();
 	if (NewState == EACESessionState::Connecting) WorldEntryFailureReason.Reset();
 	if (NewState == EACESessionState::EnteringWorld && bUseEnterWorldLoadScreen)
 		bPendingEnterWorldTransition = true; // Outside the Play button's Slate callback.
@@ -6976,9 +7157,10 @@ void AACEPlayerController::HandleSessionStateChanged(EACESessionState NewState)
 	{
 		bPendingEnterWorldTransition = false;
 		bDestinationStreamingStarted = false;
-		if (bEnterWorldLoading || bWorldRevealActive)
+		if (bEnterWorldLoading || bWorldRevealActive || bLogOffPresentationActive)
 		{
 			bEnterWorldLoading = bWorldRevealActive = false;
+			bLogOffPresentationActive = bLogOffWorldFadeStarted = false;
 			if (LoadingScreenActor) { LoadingScreenActor->Destroy(); LoadingScreenActor = nullptr; }
 			ResetIgnoreMoveInput();
 			ResetIgnoreLookInput();
@@ -7512,6 +7694,20 @@ void AACEPlayerController::BeginUseApproach(int32 TargetGuid, float DistanceAc, 
 	}
 }
 
+void AACEPlayerController::PickupSelectedObject()
+{
+	if (!Client || IsWorldTransitionActive()) return;
+	const FACESelectedObject Selected = Client->GetSelectedObject();
+	FACEWorldObject Object;
+	if (Selected.bValid && Client->GetWorldObject(Selected.Guid, Object) && Object.IsWorldLootable())
+	{
+		if (Client->IsUseBusy() || (Client->GetSession() && Client->GetSession()->IsInventoryTransferPending())) return;
+		SendInventoryPickup(Object.Guid);
+		return;
+	}
+	InteractWithSelectedObject();
+}
+
 void AACEPlayerController::InteractWithSelectedObject()
 {
 	if (!Client)
@@ -7521,6 +7717,8 @@ void AACEPlayerController::InteractWithSelectedObject()
 	const FACESelectedObject Sel = Client->GetSelectedObject();
 	if (!Sel.bValid || Sel.Guid == 0)
 	{
+		if (DatGameplayBinder) DatGameplayBinder->CancelPendingUseWith();
+		SetObjectCursorTargeting(1);
 		return;
 	}
 	InteractWithObject(Sel.Guid);
@@ -7584,7 +7782,7 @@ void AACEPlayerController::InteractWithObject(int32 ObjectGuid)
 		return;
 	}
 
-	if (Obj.IsWorldLootable())
+	if (ACEInventoryRules::IsWorldPickupOnUse(Obj))
 	{
 		// ACCWeenieObject::UIAttemptPutInContainer sends the inventory request
 		// immediately. The server supplies any MoveTo and completes the pickup.
@@ -7828,17 +8026,15 @@ void AACEPlayerController::HandleMotionUpdate(int32 ObjectGuid, const FACEObject
 				const uint32 Full = Act <= 0xFFFFu
 					? ACEMotion::ExpandPackedCommand(static_cast<uint16>(Act))
 					: Act;
-				const uint32 Hi = Full & 0xFF000000u;
 				// A held forward pose survives independent sidestep/turn commands.
-				const bool bHoldEmote = Hi == 0x13000000u || Hi == 0x43000000u || Hi == 0x42000000u;
+				const bool bHoldEmote = ACEMotion::IsHeldRestCommand(Full);
 				App->PlayActionMotion(Motion.ActionCommand, Motion.ActionSpeed, Motion.CurrentStyle, bHoldEmote, Motion.bNewAction);
 				if (!bHoldEmote || Motion.bNewAction)
 				{
 					for (int32 I=0;I<Motion.ActionFollowups.Num();++I)
 					{
 						const uint32 Next = ACEMotion::NormalizeCommand(static_cast<uint32>(Motion.ActionFollowups[I]));
-						const uint32 Family = Next & 0xFF000000u;
-						const bool Hold = Family == 0x13000000u || Family == 0x42000000u || Family == 0x43000000u || ACEMotion::IsHeldRestCommand(Next);
+						const bool Hold = ACEMotion::IsHeldRestCommand(Next);
 						App->QueueActionMotion(Motion.ActionFollowups[I], Motion.FollowupSpeed(I), Motion.CurrentStyle, Hold);
 					}
 				}
@@ -8138,7 +8334,7 @@ void AACEPlayerController::PollObjectHover()
 		{
 			HoverTooltipWidget->SetVisibility(ESlateVisibility::Collapsed);
 		}
-		if (bRetailCursorInstalled && bRetailCursorInteractable)
+		if (bRetailCursorInstalled)
 		{
 			ApplyRetailMouseCursor(false);
 		}
@@ -8146,6 +8342,8 @@ void AACEPlayerController::PollObjectHover()
 
 	if (!Client || Client->GetSessionState() != EACESessionState::InWorld)
 	{
+		ObjectCursorTargetMode=0;
+		bPendingUseTargeting=false;
 		HideTip();
 		return;
 	}
@@ -8169,6 +8367,7 @@ void AACEPlayerController::PollObjectHover()
 	if (!IsDesktopInterfaceHidden() && DatGameplayBinder && FSlateApplication::IsInitialized()
 		&& DatGameplayBinder->GetStatTooltipAt(FSlateApplication::Get().GetCursorPos(), HoverTooltipText, &TooltipTemplate))
 	{
+		if (bRetailCursorInstalled) ApplyRetailMouseCursor(false);
 		bHoverTooltipVisible = true;
 		if (HoverTooltipWidget)
 		{
@@ -8182,7 +8381,7 @@ void AACEPlayerController::PollObjectHover()
 	if (IsMouseOverBlockingUI())
 	{
 		HideTip();
-		if (bPendingUseTargeting && DatGameplayBinder && FSlateApplication::IsInitialized())
+		if ((bPendingUseTargeting||ObjectCursorTargetMode) && DatGameplayBinder && FSlateApplication::IsInitialized())
 		{
 			const int32 Target=DatGameplayBinder->GetInventoryTargetAt(FSlateApplication::Get().GetCursorPos());
 			ApplyRetailMouseCursor(Target!=0,DatGameplayBinder->IsPendingUseTargetCompatible(Target));
@@ -8233,7 +8432,7 @@ void AACEPlayerController::PollObjectHover()
 	HoverTooltipText = Name;
 	bHoverTooltipVisible = true;
 
-	if (bRetailCursorInstalled && (!bRetailCursorInteractable || bPendingUseTargeting))
+	if (bRetailCursorInstalled)
 	{
 		const int32 Target=bHitSelf ? Client->GetPlayerGuid() : Entity->GetACEGuid();
 		ApplyRetailMouseCursor(true,!DatGameplayBinder || !bPendingUseTargeting
@@ -8358,7 +8557,7 @@ void AACEPlayerController::PollObjectClick()
 	const int32 SelfGuid = Client->GetPlayerGuid();
 	if (!Entity && !bHitSelf)
 	{
-		if (bLeft && DatGameplayBinder && DatGameplayBinder->GetPendingUseWithSourceGuid() != 0)
+		if (bLeft && DatGameplayBinder)
 		{
 			DatGameplayBinder->CancelPendingUseWith();
 		}
@@ -8375,7 +8574,7 @@ void AACEPlayerController::PollObjectClick()
 	}
 
 	// Dual-use (mana stone / key): single click completes UseWithTarget on self or world object.
-	if (bLeft && bPendingUseTargeting && DatGameplayBinder)
+	if (bLeft && (bPendingUseTargeting||ObjectCursorTargetMode) && DatGameplayBinder)
 	{
 		Client->SelectObject(Guid);
 		if (DatGameplayBinder->TryCompletePendingUseWithTarget(Guid))

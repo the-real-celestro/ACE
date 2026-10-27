@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "ACETestDatDirectory.h"
 #include "Framework/Application/SlateApplication.h"
 #include "ACEPlayerController.h"
 #include "VR/ACEVRComponent.h"
@@ -15,6 +16,7 @@
 #include "ACELoadingScreenActor.h"
 #include "ACERetailPortalAnimation.h"
 #include "ACECharacterAppearanceComponent.h"
+#include "ACEScriptComponent.h"
 #include "ACECharacterCreation.h"
 #include "ACEHoverTooltipWidget.h"
 #include "Components/BoxComponent.h"
@@ -23,6 +25,7 @@
 #include "Engine/StaticMesh.h"
 #include "Components/CapsuleComponent.h"
 #include "Camera/CameraComponent.h"
+#include "Camera/PlayerCameraManager.h"
 #include "ProceduralMeshComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
@@ -96,7 +99,7 @@ bool FACECreatureEscapeTest::RunTest(const FString&)
 {
     FEntryWorld F;
     auto* Dat=F.GI->GetSubsystem<UACEDatSubsystem>();
-    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))return false;
+    if(!Dat->LoadDatDirectory(ACETestDatDirectory()))return false;
     const auto Player=FCollisionShape::MakeCapsule(48,91.75);
     FCollisionQueryParams Q(SCENE_QUERY_STAT(CreatureEscape),true);
     for(uint32 Setup:{0x02000964u,0x02000041u,0x02001121u})
@@ -155,7 +158,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEPortalPlacementTest,"ACE.RetailParity.Porta
 bool FACEPortalPlacementTest::RunTest(const FString&)
 {
     FEntryWorld F;auto* Dat=F.GI->GetSubsystem<UACEDatSubsystem>();
-    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))return false;
+    if(!Dat->LoadDatDirectory(ACETestDatDirectory()))return false;
     auto* Client=F.GI->GetSubsystem<UACEClientSubsystem>();
     auto* PC=F.World->SpawnActor<AACEPlayerController>();PC->Client=Client;F.World->AddController(PC);
     auto* Pawn=F.World->SpawnActor<APawn>();auto* Capsule=NewObject<UCapsuleComponent>(Pawn);
@@ -231,7 +234,7 @@ bool FACEPortalMotionTest::RunTest(const FString&)
 {
     FEntryWorld F;
     auto* Dat=F.GI->GetSubsystem<UACEDatSubsystem>();
-    if(!TestTrue(TEXT("Retail DAT opens"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))))return false;
+    if(!TestTrue(TEXT("Retail DAT opens"),Dat->LoadDatDirectory(ACETestDatDirectory())))return false;
     auto* Client=F.GI->GetSubsystem<UACEClientSubsystem>();auto Session=Client->GetSession();
     auto* PC=F.World->SpawnActor<AACEPlayerController>();PC->Client=Client;F.World->AddController(PC);
     auto* Pawn=F.World->SpawnActor<APawn>();auto* Root=NewObject<USceneComponent>(Pawn);
@@ -327,7 +330,7 @@ bool FACEPortalDropTest::RunTest(const FString&)
     {
         FEntryWorld F;
         auto* Dat=F.GI->GetSubsystem<UACEDatSubsystem>();
-        if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+        if(!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
         auto AddWaterArrivals=[&](uint32 Block,float X,float Y,const TCHAR* GroundName,const TCHAR* DropName)
         {
             Dat->GetOrBuildLandblockMesh(Block,100);
@@ -363,7 +366,7 @@ bool FACEPortalDropTest::RunTest(const FString&)
     {
         FEntryWorld F;
         auto* Dat=F.GI->GetSubsystem<UACEDatSubsystem>();
-        if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+        if(!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
         auto* Client=F.GI->GetSubsystem<UACEClientSubsystem>();auto Session=Client->GetSession();
         F.World->SetGameMode(FURL(nullptr,TEXT("/Game/Test?game=/Script/Engine.GameModeBase"),TRAVEL_Absolute));
         auto* GM=F.World->GetAuthGameMode();
@@ -503,7 +506,7 @@ bool FACEShoushiGapTest::RunTest(const FString&)
 {
     FEntryWorld Fixture;
     auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if(!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     auto Spawn=[&](uint32 Guid,uint32 Setup,FVector Location,FQuat Rotation,uint32 Type) {
         FACEWorldObject O;O.Guid=Guid;O.SetupId=Setup;O.ItemType=Type;
         O.bHasPosition=true;O.Position.CellId=0xDA55001D;O.Position.Location=Location;
@@ -552,7 +555,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERadarArtTest,"ACE.RetailParity.RadarArt",
 bool FACERadarArtTest::RunTest(const FString&)
 {
     FEntryWorld Fixture;auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if(!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     auto* Resources=Dat->GetUiResources();
     for(uint32 Image=1;Image<=12;++Image) {
         const uint32 Id=Resources->ResolveTargetIndicatorId(Image);
@@ -591,7 +594,7 @@ bool FACEStreamingRetirementTest::RunTest(const FString&)
 {
     FEntryWorld Fixture;
     auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if(!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     Dat->EnsureLoaded();
     auto* Client=Fixture.GI->GetSubsystem<UACEClientSubsystem>();
     auto Session=Client->GetSession();
@@ -649,7 +652,7 @@ bool FACEPortalRetirementTest::RunTest(const FString&)
 {
     FEntryWorld Fixture;
     auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if(!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     Dat->EnsureLoaded();Dat->SetWorldStreamingAllowed(false);
     auto* Client=Fixture.GI->GetSubsystem<UACEClientSubsystem>();
     Fixture.World->SetGameMode(FURL(nullptr,TEXT("/Game/Test?game=/Script/Engine.GameModeBase"),TRAVEL_Absolute));
@@ -694,13 +697,137 @@ bool FACEPortalRetirementTest::RunTest(const FString&)
     return !HasAnyErrors();
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERetailLogoutTest, "ACE.RetailParity.LogoutTransition",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FACERetailLogoutTest::RunTest(const FString&)
+{
+    FEntryWorld F;
+    auto* Dat=F.GI->GetSubsystem<UACEDatSubsystem>();
+    FString DatDirectory=TEXT("C:/Turbine/Asheron's Call");FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),DatDirectory);
+    if(!Dat->LoadDatDirectory(DatDirectory))return false;
+    Dat->EnsureLoaded();
+    auto* Client=F.GI->GetSubsystem<UACEClientSubsystem>();auto Session=Client->GetSession();
+    Session->State=EACESessionState::InWorld;Session->PlayerGuid=0x50000100;
+    Session->PlayerVitals.CombatMode=int32(ACECombatMode::NonCombat);
+    auto* PC=F.World->SpawnActor<AACEPlayerController>();PC->Client=Client;
+    PC->SetPlayer(NewObject<ULocalPlayer>(GEngine));F.World->AddController(PC);
+    if(!PC->PlayerCameraManager) {
+        PC->PlayerCameraManager=F.World->SpawnActor<APlayerCameraManager>();
+        PC->PlayerCameraManager->InitializeFor(PC);
+    }
+    auto* Pawn=F.World->SpawnActor<APawn>();auto* Capsule=NewObject<UCapsuleComponent>(Pawn);
+    Pawn->SetRootComponent(Capsule);Pawn->AddInstanceComponent(Capsule);Capsule->InitCapsuleSize(22,88);Capsule->RegisterComponent();
+    PC->Possess(Pawn);PC->PlayerInput=NewObject<UPlayerInput>(PC);PC->SetupInputComponent();
+    PC->SetViewTarget(Pawn);
+    // This isolated world has not begun play, so route the real session event
+    // natively rather than relying on Unreal's suppressed actor script dispatch.
+    const auto StateHandle=Session->OnStateChanged.AddLambda([PC](EACESessionState State){PC->HandleSessionStateChanged(State);});
+    ON_SCOPE_EXIT {Session->OnStateChanged.Remove(StateHandle);};
+    FACEWorldObject Self;Self.Guid=Session->PlayerGuid;Self.bIsSelf=true;Self.bIsPlayer=true;
+    Self.SetupId=0x02000001;Self.MotionTableId=0x09000001;Self.Scale=1;
+    Self.Position.CellId=0xA9A10001;Self.bHasPosition=true;Session->WorldObjects.Add(Self.Guid,Self);
+    Session->PlayerPosition=Self.Position;
+    auto* App=PC->EnsurePawnAppearance();
+    if(!TestTrue(TEXT("Real player DAT appearance loads"),App && App->ApplyWorldObject(Self,100,false)))return false;
+    const double Deadline=FPlatformTime::Seconds()+20;
+    do {
+        PC->PreparePortalScreen();FTaskGraphInterface::Get().ProcessThreadUntilIdle(ENamedThreads::GameThread);
+        if(PC->LoadingScreenActor && PC->LoadingScreenActor->bMeshReady)break;
+        FPlatformProcess::Sleep(.002f);
+    } while(FPlatformTime::Seconds()<Deadline);
+    auto* Tunnel=PC->LoadingScreenActor.Get();
+    if(!TestTrue(TEXT("Logout has the actual retail tunnel ready"),Tunnel && Tunnel->bMeshReady))return false;
+    PC->ShowGameHUD();
+    auto* Canvas=PC->DatCanvasWidget.Get();auto* Binder=PC->DatGameplayBinder.Get();
+    const TSharedPtr<SWidget> Hud=Canvas?Canvas->TakeWidget():TSharedPtr<SWidget>();
+    if(!TestTrue(TEXT("Gameplay UI is present"),Canvas && Binder && Canvas->IsVisible()))return false;
+    auto* Sockets=ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
+    auto* Receiver=Sockets->CreateSocket(NAME_DGram,TEXT("Logout receiver"),false);
+    auto Address=Sockets->CreateInternetAddr();bool Valid=false;
+    Address->SetIp(TEXT("127.0.0.1"),Valid);Address->SetPort(0);
+    if(!TestTrue(TEXT("Isolated logout peer binds"),Receiver && Receiver->Bind(*Address)))return false;
+    ON_SCOPE_EXIT {Receiver->Close();Sockets->DestroySocket(Receiver);};
+    Receiver->GetAddress(*Address);
+    Session->SocketC2S=Sockets->CreateSocket(NAME_DGram,TEXT("Logout sender"),false);
+    Session->ServerC2SAddr=Address;Session->IssacClient=MakeUnique<FACEIsaac>(123u);
+
+    Binder->HandleOptionsNamedClick(TEXT("GameplayOptionsTab"));
+    TestTrue(TEXT("Leave World uses the normal logout path"),Binder->HandleOptionsNamedClick(TEXT("GameplayOptions_LeaveWorld_Button")));
+    TestTrue(TEXT("Logout awaits the server"),Session->IsLogOffPending());
+    TestTrue(TEXT("Retail non-PK delay is three seconds"),FMath::IsNearlyEqual(Session->GetLogOffPortalStartTime()-FPlatformTime::Seconds(),3.,.1));
+    const double StartTime=Session->GetLogOffPortalStartTime();Client->Logout();
+    TestEqual(TEXT("Repeated logout does not restart the animation delay"),Session->GetLogOffPortalStartTime(),StartTime);
+    TestFalse(TEXT("Combat is blocked immediately on logout"),Client->SendCastSpell(1));
+    FACEObjectMotionState Motion;Motion.CurrentStyle=ACEMotion::StanceNonCombat;
+    Motion.ActionCommand=0x1000011e;Motion.ActionSpeed=1;Motion.bNewAction=true;
+    PC->HandleMotionUpdate(Self.Guid,Motion);
+    PC->PlayerTick(.016f);
+    TestEqual(TEXT("Server logout motion survives local input polling"),App->ActionCommand,0x1000011eu);
+    TestTrue(TEXT("The world remains visible during the logout motion"),PC->GetViewTarget()==Pawn && !Pawn->IsHidden());
+    TestFalse(TEXT("The tunnel is not started before the retail delay"),PC->bEnterWorldLoading);
+    TestTrue(TEXT("Logout blocks player movement and look"),PC->IsMoveInputIgnored() && PC->IsLookInputIgnored());
+    auto* Effects=NewObject<UACEScriptComponent>(Pawn);Pawn->AddInstanceComponent(Effects);Effects->RegisterComponent();
+    Effects->InitializeFromObject(Self,100);Effects->NotifyAppearanceReady();
+    auto* Impact=Effects->PlayImpactEffect(0x5B,1.f);
+    if(!TestNotNull(TEXT("Incoming hit has its own effect"),Impact))return false;
+    Impact->TickComponent(.016f,LEVELTICK_All,nullptr);
+    TestFalse(TEXT("Incoming hits remain visible during the logout delay"),Impact->GetOwner()->IsActorBeingDestroyed());
+
+    Session->LogOffPortalStartTime=FPlatformTime::Seconds()-.5;PC->PlayerTick(.016f);
+    PC->PlayerCameraManager->UpdateCamera(.016f);
+    TestTrue(TEXT("World stretches before switching cameras"),PC->bLogOffWorldFadeStarted && PC->GetViewTarget()==Pawn && PC->PlayerCameraManager->GetFOVAngle()>100.f);
+    TestTrue(TEXT("HUD remains visible through world fade"),Canvas->IsVisible());
+    Session->LogOffPortalStartTime=FPlatformTime::Seconds()-1.01;PC->PlayerTick(.016f);
+    TestTrue(TEXT("One-second world fade enters the prepared tunnel"),PC->bEnterWorldLoading && PC->GetViewTarget()==Tunnel && !Tunnel->IsHidden());
+    TestTrue(TEXT("Old world avatar is hidden behind the portal"),Pawn->IsHidden());
+    Impact->TickComponent(.016f,LEVELTICK_All,nullptr);
+    TestTrue(TEXT("Portal view retires the old world's hit effects"),Impact->GetOwner()->IsActorBeingDestroyed());
+    const uint32 Actions=Session->NextGameActionSequence;
+    for(int32 Frame=0;Frame<120;++Frame) {Tunnel->Tick(1.f/60.f);PC->PlayerTick(1.f/60.f);}
+    TestTrue(TEXT("Logout portal animates while waiting for server"),Tunnel->IsActorTickEnabled() && PC->GetViewTarget()==Tunnel);
+    TestFalse(TEXT("Logout cannot run arrival, destination streaming or world reveal"),PC->bDestinationStreamingStarted || PC->bPortalExitNotified || PC->bWorldRevealActive);
+    TestEqual(TEXT("Waiting cannot send LoginComplete or world-entry actions"),Session->NextGameActionSequence,Actions);
+    TestTrue(TEXT("Gameplay UI is retained until server logout completes"),Canvas->IsVisible());
+    Session->LogOffPortalStartTime=FPlatformTime::Seconds()-6.;PC->PlayerTick(.016f);
+    TestTrue(TEXT("Elapsed animation alone cannot switch to character selection"),Session->State==EACESessionState::InWorld && PC->bEnterWorldLoading);
+    FACEBinaryWriter Ack;Ack.WriteUInt32(ACEOpcode::CharacterLogOff);Session->HandleGameMessage(Ack.GetData());
+    TestTrue(TEXT("Logout ack preserves tunnel until roster arrives"),Session->IsLogOffPending() && PC->bEnterWorldLoading);
+    FACEBinaryWriter Roster;Roster.WriteUInt32(ACEOpcode::CharacterList);Roster.WriteUInt32(0);Roster.WriteUInt32(1);
+    Roster.WriteUInt32(Self.Guid);Roster.WriteString16L(TEXT("Logout tester"));Roster.WriteUInt32(0);
+    Roster.WriteUInt32(0);Roster.WriteUInt32(11);Roster.WriteString16L(TEXT("fixture"));
+    Session->HandleGameMessage(Roster.GetData());
+    TestEqual(TEXT("Authoritative roster ends logout"),Session->State,EACESessionState::CharacterSelect);
+    TestFalse(TEXT("Roster clears pending logout and presentation"),Session->IsLogOffPending() || PC->IsWorldTransitionActive());
+    TestTrue(TEXT("Roster releases the portal and input lock"),!PC->LoadingScreenActor && !PC->IsMoveInputIgnored() && !PC->IsLookInputIgnored());
+    TestFalse(TEXT("Roster leaves portal rendering mode"),Dat->IsInPortalSpace());
+
+    // PK and PKLite share retail's additional twenty seconds, sampled at request.
+    for(int32 Status:{ACEPlayerKillerStatus::PK,ACEPlayerKillerStatus::PKLite}) {
+        Session->State=EACESessionState::InWorld;Session->PlayerGuid=Self.Guid;
+        Session->PlayerVitals.PlayerKillerStatus=Status;Client->Logout();PC->PlayerTick(.016f);
+        TestTrue(TEXT("PK logout keeps the retail 23-second delay"),FMath::IsNearlyEqual(Session->GetLogOffPortalStartTime()-FPlatformTime::Seconds(),23.,.1));
+        TestFalse(TEXT("PK delay does not hide the world early"),PC->bEnterWorldLoading);
+        Session->HandleGameMessage(Roster.GetData());
+        TestFalse(TEXT("An early authoritative roster still releases all input"),PC->IsWorldTransitionActive() || PC->IsMoveInputIgnored());
+    }
+    Session->State=EACESessionState::InWorld;Session->PlayerGuid=Self.Guid;
+    Session->PlayerVitals.PlayerKillerStatus=0;
+    PC->BeginWorldTransition(TEXT("logout-during-portal"));auto* ExistingTunnel=PC->LoadingScreenActor.Get();
+    Client->Logout();PC->PlayerTick(.016f);
+    TestTrue(TEXT("Logout inside a portal retains the current tunnel"),PC->LoadingScreenActor==ExistingTunnel && !PC->bLogOffWorldFadeStarted);
+    Session->Disconnect();
+    TestFalse(TEXT("Disconnect cannot strand the logout animation"),PC->IsWorldTransitionActive() || PC->IsMoveInputIgnored() || PC->IsLookInputIgnored());
+    PC->DestroyGameHUD();
+    return !HasAnyErrors();
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACELoadingTransitionTest, "ACE.RetailParity.LoadingTransition",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACELoadingTransitionTest::RunTest(const FString&)
 {
     FEntryWorld Fixture;
     auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if(!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     Dat->EnsureLoaded();
     auto* Client=Fixture.GI->GetSubsystem<UACEClientSubsystem>();auto Session=Client->GetSession();
     auto* PC=Fixture.World->SpawnActor<AACEPlayerController>();PC->Client=Client;
@@ -791,7 +918,8 @@ bool FACEPortalInterfaceTest::RunTest(const FString&)
     ON_SCOPE_EXIT {GGameUserSettingsIni=OriginalConfig;ACEInputBindings::Reload();};
     FEntryWorld F;
     auto* Dat=F.GI->GetSubsystem<UACEDatSubsystem>();
-    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))return false;
+    FString DatDirectory=TEXT("C:/Turbine/Asheron's Call");FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),DatDirectory);
+    if(!Dat->LoadDatDirectory(DatDirectory))return false;
     Dat->EnsureLoaded();
     auto* Client=F.GI->GetSubsystem<UACEClientSubsystem>();auto Session=Client->GetSession();
     Session->State=EACESessionState::InWorld;Session->PlayerGuid=0x50000100;
@@ -884,7 +1012,7 @@ bool FACETerrainPortalRevealTest::RunTest(const FString&)
 {
     FEntryWorld Fixture;
     auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if(!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     Dat->EnsureLoaded();
     auto* Owner=Fixture.World->SpawnActor<AActor>();
     auto* Terrain=NewObject<UACETerrainPresenterComponent>(Owner);
@@ -941,7 +1069,7 @@ bool FACETerrainArrivalTest::RunTest(const FString& Parameters)
     FEntryWorld Fixture;
     auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
     const double Start=FPlatformTime::Seconds();
-    if (!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if (!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     Dat->EnsureLoaded();
     // A unique test fingerprint exercises cold disk misses without removing the
     // user's cache. No maintenance is run with this synthetic fingerprint.
@@ -1009,7 +1137,7 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
 {
     FEntryWorld Fixture;
     auto* Dat = Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if (!Dat || !Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if (!Dat || !Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     auto* Client = Fixture.GI->GetSubsystem<UACEClientSubsystem>();
     auto Session = Client->GetSession();
     auto* Controller = Fixture.World->SpawnActor<AACEPlayerController>();
@@ -1174,6 +1302,13 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
     Floor->SetActorRotation(FRotator::ZeroRotator);
     auto* App=NewObject<UACECharacterAppearanceComponent>(Pawn);
     Pawn->AddInstanceComponent(App); App->RegisterComponent(); App->bAlignMeshToCapsuleBottom=true;
+    // Manual controller stepping must also advance action/style links, as the
+    // world's component tick does in-game; an unticked link locks movement.
+    auto TickPlayer=[&](float Dt)
+    {
+        Controller->PlayerTick(Dt);
+        App->TickComponent(Dt,LEVELTICK_All,nullptr);
+    };
     Pawn->SetActorScale3D(FVector(.7)); App->EnsureMeshRoot();
     TestTrue(TEXT("Scaled player visual foot does not apply actor scale twice"),
         App->MeshRoot->GetComponentLocation().Equals(Capsule->GetComponentLocation()-FVector(0,0,Capsule->GetScaledCapsuleHalfHeight()),.01));
@@ -1182,6 +1317,7 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
     // Object.Scale and must neither compound capsule size nor move visual feet.
     const int32 PreviousGuid = Session->PlayerGuid;
     FACEWorldObject SelfObject; SelfObject.Guid = 12345; SelfObject.SetupId = 0x02000001;
+    SelfObject.MotionTableId = 0x09000001; // real stance links must advance during movement tests
     SelfObject.ItemType = 0x10; SelfObject.Name = TEXT("Scaled local player");
     Session->PlayerGuid = SelfObject.Guid;
     Pawn->SetActorLocation(Feet + FVector(0,0,Capsule->GetScaledCapsuleHalfHeight()));
@@ -1217,8 +1353,7 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
     Pawn->SetActorLocation(Feet+FVector(0,0,Capsule->GetScaledCapsuleHalfHeight()+20));
     for (int32 Frame=0;Frame<30;++Frame)
     {
-        Controller->PlayerTick(.016f);
-        App->TickComponent(.016f,LEVELTICK_All,nullptr);
+        TickPlayer(.016f);
     }
     FBox GroundedBounds(ForceInit); App->GetVisualWorldBounds(GroundedBounds);
     AddInfo(FString::Printf(TEXT("Grounded outfit floor=%.3f capsuleFeet=%.3f visualMin=%.3f"),Feet.Z,
@@ -1242,11 +1377,11 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
         Controller->LastServerPose=FallPose; Controller->bHaveLastServerPose=true; Controller->bHavePredictedPose=false;
         Controller->StepHoldSeconds=0; Session->SetLocalPosition(FallPose);
         Pawn->SetActorLocation(FallFeet+FVector(0,0,Capsule->GetScaledCapsuleHalfHeight()));
-        Controller->PlayerTick(.016f);
+        TickPlayer(.016f);
         TestTrue(TEXT("Unsupported idle player enters falling without a Jump action"),Controller->bJumpAirborne);
-        for (int32 Frame=0;Frame<40;++Frame) Controller->PlayerTick(.016f);
+        for (int32 Frame=0;Frame<40;++Frame) TickPlayer(.016f);
         TestTrue(TEXT("Fall continues without keyboard input"),Pawn->GetActorLocation().Z<FallFeet.Z-100);
-        for (int32 Frame=0;Frame<160;++Frame) Controller->PlayerTick(.016f);
+        for (int32 Frame=0;Frame<160;++Frame) TickPlayer(.016f);
         TestFalse(TEXT("Stationary fall lands on the lower floor"),Controller->bJumpAirborne);
         TestFalse(TEXT("Landing expires the stale server pose above the cliff"),Controller->bHaveLastServerPose);
         TestTrue(TEXT("Client reaches the bottom of a thirty metre drop"),FMath::Abs(Pawn->GetActorLocation().Z-Capsule->GetScaledCapsuleHalfHeight()-(FallFeet.Z-3000))<3);
@@ -1295,7 +1430,7 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
                 Controller->PlayerInput->ProcessInputStack({},.016f,false);
                 Pawn->SetActorTransform(StartTransform);Controller->PredictedPose=StartPose;
                 TestBoom->SetRelativeRotation(FRotator(-15,150,0));
-                Controller->PlayerTick(.016f);
+                TickPlayer(.016f);
                 const float ExpectedTurn=(Key==EKeys::A || Key==EKeys::Left)?-1.f:1.f;
                 TestEqual(TEXT("A/D and arrows remain turn inputs in both mouse modes"),Controller->TurnAxis,ExpectedTurn);
                 TestEqual(TEXT("Turn keys never become sidestep inputs"),Controller->RightAxis,0.f);
@@ -1312,7 +1447,7 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
             Controller->PlayerInput->ProcessInputStack({},.016f,false);
             Pawn->SetActorTransform(StartTransform);Controller->PredictedPose=StartPose;
             TestBoom->SetRelativeRotation(FRotator(-15,90,0));
-            Controller->PlayerTick(.016f);
+            TickPlayer(.016f);
             TestEqual(TEXT("Retail Z/C sidestep bindings"),Controller->RightAxis,Key==EKeys::Z?-1.f:1.f);
             TestEqual(TEXT("Sidestep does not supply keyboard turn input"),Controller->TurnAxis,0.f);
         }
@@ -1322,14 +1457,21 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
         // must never turn an orbit key into forward/backward/turn movement.
         for (bool NumLockOn : {false,true}) for (int32 Direction=0;Direction<4;++Direction)
         {
+#if PLATFORM_WINDOWS
             const uint32 Scans[]={0x4B,0x4D,0x48,0x50}, Navigation[]={0x25,0x27,0x26,0x28}, Numpad[]={0x64,0x66,0x68,0x62};
             const uint32 Mapped=FACEKeyboardRouter::NumpadVirtualKey(NumLockOn?Numpad[Direction]:Navigation[Direction],Scans[Direction],false);
             const FKey PhysicalKey=FInputKeyManager::Get().GetKeyFromCodes(Mapped,0);
+#else
+            // Other platform backends already produce Unreal keypad keys.
+            // Windows VK values are unrelated to SDL's native key codes.
+            const FKey KeypadKeys[]={EKeys::NumPadFour,EKeys::NumPadSix,EKeys::NumPadEight,EKeys::NumPadTwo};
+            const FKey PhysicalKey=KeypadKeys[Direction];
+#endif
             Controller->PlayerInput->FlushPressedKeys();PressKey(PhysicalKey);
             Controller->PlayerInput->ProcessInputStack({},.016f,false);
             Pawn->SetActorTransform(StartTransform);Controller->PredictedPose=StartPose;Controller->bHavePredictedPose=true;
             Controller->bCameraDefaultsCaptured=true;TestBoom->SetRelativeRotation(FRotator(-15,0,0));
-            Controller->PlayerTick(.016f);
+            TickPlayer(.016f);
             TestTrue(TEXT("Numpad camera input never supplies player movement in either Num Lock state"),
                 Controller->ForwardAxis==0 && Controller->RightAxis==0 && Controller->TurnAxis==0);
             TestFalse(TEXT("Numpad still moves the camera in either Num Lock state"),TestBoom->GetRelativeRotation().Equals(FRotator(-15,0,0),.001));
@@ -1344,15 +1486,15 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
             Controller->SyncUserCameraArmLength(TestBoom);
             PressKey(Key);Controller->PlayerInput->ProcessInputStack({},.1f,false);
             const float Before=TestBoom->TargetArmLength;
-            Controller->PlayerTick(.1f);
+            TickPlayer(.1f);
             TestTrue(TEXT("Physical keypad +/- zoom the camera with retail direction"),Key==EKeys::Subtract ? TestBoom->TargetArmLength<Before : TestBoom->TargetArmLength>Before);
             Controller->PlayerInput->FlushPressedKeys();Controller->PlayerInput->ProcessInputStack({},.1f,false);
         }
         PressKey(ACEInputBindings::NumpadEnterKey());Controller->PlayerInput->ProcessInputStack({},.016f,false);
-        Controller->PlayerTick(.016f);
+        TickPlayer(.016f);
         TestTrue(TEXT("Physical keypad Enter toggles overhead mode"),Controller->bCameraMapMode);
-        Controller->PlayerInput->FlushPressedKeys();Controller->PlayerInput->ProcessInputStack({},.016f,false);Controller->PlayerTick(.016f);
-        PressKey(ACEInputBindings::NumpadEnterKey());Controller->PlayerInput->ProcessInputStack({},.016f,false);Controller->PlayerTick(.016f);
+        Controller->PlayerInput->FlushPressedKeys();Controller->PlayerInput->ProcessInputStack({},.016f,false);TickPlayer(.016f);
+        PressKey(ACEInputBindings::NumpadEnterKey());Controller->PlayerInput->ProcessInputStack({},.016f,false);TickPlayer(.016f);
         TestFalse(TEXT("Second physical keypad Enter returns to normal view"),Controller->bCameraMapMode);
         Controller->PlayerInput->FlushPressedKeys();Controller->PlayerInput->ProcessInputStack({},.016f,false);
         // Tiny mouse turns are below the packet-send threshold but still belong
@@ -1367,12 +1509,12 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
         PressKey(EKeys::RightMouseButton);
         Controller->PlayerInput->ProcessInputStack({},.016f,false);
         TestBoom->SetRelativeRotation(FRotator(-15,.1f,0));
-        Controller->PlayerTick(.016f);
+        TickPlayer(.016f);
         const FQuat TinyTurn=Pawn->GetActorQuat();
         TestTrue(TEXT("Sub-threshold mouse turn retains prediction"),Controller->bHavePredictedPose && Controller->bLocalPredicting);
         TestFalse(TEXT("Sub-threshold mouse turn actually changes facing"),TinyTurn.Equals(StartTransform.GetRotation(),.000001f));
         Controller->PlayerInput->FlushPressedKeys();Controller->PlayerInput->ProcessInputStack({},.016f,false);
-        Controller->PlayerTick(.016f);
+        TickPlayer(.016f);
         TestTrue(TEXT("Sub-threshold mouse turn survives the next idle frame"),Pawn->GetActorQuat().Equals(TinyTurn,.00001f));
         FSlateApplication::Get().SetCursorPos(SavedCursor);
         // The double-click interaction path must arrive and send Use with any orbit offset.
@@ -1421,25 +1563,25 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
                 // orbit represents a chosen view that the body must catch up
                 // to, not excess mouse input that should be discarded.
                 Controller->ApplyMouseLookDelta(1000,0,TestBoom);
-                Controller->PlayerTick(1.f/FPS);
+                TickPlayer(1.f/FPS);
                 TestTrue(TEXT("Mouse-facing character obeys retail's angular rate at every FPS"),
                     FMath::IsNearlyEqual(Before.AngularDistance(Controller->PredictedPose.GetAcQuat()),3.375f/FPS,.0001f));
             }
             const int32 Reports=CountAction(ACEGameAction::MoveToState);
             TestTrue(FString::Printf(TEXT("Mouse turn uses half-second reports at %d FPS (got %d)"),FPS,Reports),Reports>=2 && Reports<=3);
             const FQuat AtRest=Controller->PredictedPose.GetAcQuat();
-            Controller->PlayerTick(1.f/FPS);
+            TickPlayer(1.f/FPS);
             TestTrue(TEXT("Stopped mouse does not leave a queued camera-facing turn"),
                 AtRest.Equals(Controller->PredictedPose.GetAcQuat(),.00001f));
             Controller->PlayerInput->FlushPressedKeys();Controller->PlayerInput->ProcessInputStack({},1.f/FPS,false);
-            Controller->MouseTurnReportSeconds=.5f;Controller->PlayerTick(1.f/FPS);
+            Controller->MouseTurnReportSeconds=.5f;TickPlayer(1.f/FPS);
 
             // Airborne rotation is legal in retail while the jump translation
             // remains ballistic. Do not show a local turn but send zero turn.
             Controller->PredictedPose.Location.Z+=5;Controller->bJumpAirborne=true;
             Session->SetLocalPosition(Controller->PredictedPose);
             PressKey(EKeys::D);Controller->PlayerInput->ProcessInputStack({},1.f/FPS,false);
-            Session->CachedC2SPackets.Reset();Controller->PlayerTick(1.f/FPS);
+            Session->CachedC2SPackets.Reset();TickPlayer(1.f/FPS);
             bool SawAirTurn=false;
             for(const auto& Pair:Session->CachedC2SPackets)
             {
@@ -1502,7 +1644,7 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
             TestEqual(TEXT("Use is sent before walking so the server can supply approach rules"),CountAction(ACEGameAction::Use),1);
             Session->CachedC2SPackets.Reset();
             for (int32 Frame=0;Frame<240 && Controller->UseApproachPhase!=AACEPlayerController::EACEUseApproachPhase::Holding;++Frame)
-                Controller->PlayerTick(.016f);
+                TickPlayer(.016f);
             TestEqual(TEXT("Approach never resends Use on arrival"),CountAction(ACEGameAction::Use),0);
             TestEqual(TEXT("Autonomous approach never cancels the server chain with MoveToState"),CountAction(ACEGameAction::MoveToState),0);
             const FVector Arrived=Controller->PredictedPose.ToUnrealLocation(100);
@@ -1523,7 +1665,7 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
             Controller->InteractWithSelectedObject();
             TestTrue(TEXT("Chess boards and corpses start a use approach"), Controller->bServerMoveToActive);
             for (int32 Frame=0; Frame<6.f/Dt && Controller->UseApproachPhase!=AACEPlayerController::EACEUseApproachPhase::Holding; ++Frame)
-                Controller->PlayerTick(Dt);
+                TickPlayer(Dt);
             TestEqual(TEXT("Chess/corpse arrival sends exactly one retail interaction"),
                 CountAction(bCorpse ? ACEGameAction::Use : ACEGameAction::ChessJoin), 1);
             TestEqual(TEXT("Chess boards use JoinGame instead of generic Use"),
@@ -1548,7 +1690,7 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
             ApproachVR->Head->SetWorldRotation(FRotator(0,Yaw,0));
             Controller->InteractWithObject(UseTarget.Guid);
             for(int32 Frame=0;Frame<540 && Controller->UseApproachPhase!=AACEPlayerController::EACEUseApproachPhase::Holding;++Frame)
-                Controller->PlayerTick(1.f/90);
+                TickPlayer(1.f/90);
             TestEqual(TEXT("VR corpse approach sends exactly one Use"),CountAction(ACEGameAction::Use),1);
             TestTrue(TEXT("Neutral stick permits VR corpse approach to the full server cylinder range"),
                 Controller->GetUseCylinderDistanceCm(UseTarget,Controller->PredictedPose.ToUnrealLocation(100),
@@ -1558,12 +1700,12 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
             TestEqual(TEXT("VR approach leaves tracked head yaw unchanged"),ApproachVR->Head->GetComponentRotation().Yaw,double(Yaw));
         }
         ResetApproach(FVector(300,0,0));Controller->InteractWithObject(UseTarget.Guid);
-        ApproachVR->MoveStick=FVector2D(.5f,0);Controller->PlayerTick(1.f/90);
+        ApproachVR->MoveStick=FVector2D(.5f,0);TickPlayer(1.f/90);
         TestFalse(TEXT("Manual VR stick cancels automatic approach immediately"),Controller->bServerMoveToActive);
         TestFalse(TEXT("Manual VR cancellation clears the pending world Use"),Client->IsUseBusy());
         ApproachVR->MoveStick=FVector2D::ZeroVector;
         ResetApproach(FVector(300,0,0));Controller->InteractWithObject(UseTarget.Guid);
-        ApproachVR->bTracking=false;Controller->PlayerTick(1.f/90);
+        ApproachVR->bTracking=false;TickPlayer(1.f/90);
         TestFalse(TEXT("Losing tracking cancels VR automatic translation"),Controller->bServerMoveToActive);
         ApproachVR->Head->DestroyComponent();ApproachVR->bActive=false;ApproachVR->DestroyComponent();
         UseTarget.ObjectDescriptionFlags=ACEObjectDescFlag::Stuck;
@@ -1583,6 +1725,45 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
             W.WriteFloat(1);W.WriteFloat(15);W.WriteFloat(0);W.WriteFloat(1);
             FACEBinaryReader R(W.GetData());Session->HandleUpdateMotion(R);
         };
+        // A corpse can already be inside its advertised radius when clicked,
+        // while ACE later requests a tighter radius (magic stance crouch).
+        // Use actual human Setup dimensions and delay the echo past Holding's
+        // old 0.2-second gate. The one Use request must survive resumed movement.
+        UseTarget.SetupId=0x02000001;UseTarget.UseRadius=.6f;
+        UseTarget.ObjectDescriptionFlags=ACEObjectDescFlag::Stuck|ACEObjectDescFlag::Corpse;
+        UseTarget.ItemType=ACEItemType::Container;UseTarget.ItemUseable=1;
+        UseTarget.InitialMotionCommand=ACEMotion::Dead;
+        float CorpseStep=0,CorpseHeight=0,CorpseRadius=0;uint32 CorpseAnim=0;
+        TestTrue(TEXT("Corpse range fixture loads retail Setup dimensions"),
+            Dat->TryGetSetupPhysics(UseTarget.SetupId,CorpseStep,CorpseHeight,CorpseRadius,CorpseAnim));
+        const float InitialOffset=(Controller->PlayerSetupRadiusAc*Controller->GetLocalCreatureScale()+CorpseRadius+.5f)*100.f;
+        for(float EchoDelay:{.0f,.5f,1.5f}) for(float Dt:{1.f/30,1.f/144})
+        {
+            ResetApproach(FVector(InitialOffset,0,0));
+            Controller->InteractWithObject(UseTarget.Guid);
+            TestEqual(TEXT("Corpse inside advertised range initially holds"),Controller->UseApproachPhase,
+                AACEPlayerController::EACEUseApproachPhase::Holding);
+            for(int32 Frame=0;Frame<EchoDelay/Dt;++Frame)TickPlayer(Dt);
+            ReceiveApproach(MAX_flt,.4f);
+            TestTrue(TEXT("Delayed server radius requires a closer corpse approach"),
+                Controller->GetUseCylinderDistanceCm(UseTarget,Controller->PredictedPose.ToUnrealLocation(100),
+                    UseTarget.Position.ToUnrealLocation(100))>40.f);
+            const int32 MovesBefore=CountAction(ACEGameAction::MoveToState);
+            for(int32 Frame=0;Frame<3.f/Dt;++Frame)
+            {
+                TickPlayer(Dt);
+                if(Controller->UseApproachPhase==AACEPlayerController::EACEUseApproachPhase::Holding
+                    &&Controller->GetUseCylinderDistanceCm(UseTarget,Controller->PredictedPose.ToUnrealLocation(100),
+                        UseTarget.Position.ToUnrealLocation(100))<=40.f)break;
+            }
+            TestTrue(FString::Printf(TEXT("Delayed corpse approach reaches server radius without another click (delay %.1f, FPS %.0f)"),EchoDelay,1.f/Dt),
+                Controller->GetUseCylinderDistanceCm(UseTarget,Controller->PredictedPose.ToUnrealLocation(100),
+                    UseTarget.Position.ToUnrealLocation(100))<=40.f);
+            TestEqual(TEXT("Delayed corpse approach never repeats Use"),CountAction(ACEGameAction::Use),1);
+            TestEqual(TEXT("Resuming approach does not cancel the server's pending Use"),CountAction(ACEGameAction::MoveToState),MovesBefore);
+        }
+        UseTarget.SetupId=0;UseTarget.ObjectDescriptionFlags=ACEObjectDescFlag::Stuck;
+        UseTarget.ItemType=0;UseTarget.ItemUseable=32;UseTarget.InitialMotionCommand=ACEMotion::Ready;
         int32 ChargeErrors=0;
         const auto ChatHandle=Session->OnChatMessage.AddLambda([&](const FString& Message,const FString&,int32 Type)
         {
@@ -1601,7 +1782,7 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
             ReceiveApproach(15);
             TestTrue(TEXT("Server echo does not reset the charge starting position"),
                 Controller->ApproachStartPose.ToUnrealLocation(100).Equals(OriginalStart.ToUnrealLocation(100),.001));
-            Session->CachedC2SPackets.Reset();Controller->PlayerTick(.016f);
+            Session->CachedC2SPackets.Reset();TickPlayer(.016f);
             TestEqual(FString::Printf(TEXT("Charge distance includes vertical travel %.1f cm and only fails beyond limit"),Displacement),Controller->bServerMoveToActive,Displacement<=1500);
             TestEqual(TEXT("Exceeding charge limit reports failure once"),ChargeErrors,Displacement>1500?1:0);
             TestEqual(TEXT("Failed or distant approach never uses the object"),CountAction(ACEGameAction::Use),0);
@@ -1609,11 +1790,11 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
             {
                 TestTrue(TEXT("Failed approach sends stop to the server"),CountAction(ACEGameAction::MoveToState)>0);
                 TestFalse(TEXT("Failure releases forced position reporting"),Session->bForcePositionReporting);
-                Controller->PlayerTick(.016f);TestEqual(TEXT("Later ticks cannot repeat the failure"),ChargeErrors,1);
+                TickPlayer(.016f);TestEqual(TEXT("Later ticks cannot repeat the failure"),ChargeErrors,1);
             }
         }
         ResetApproach(FVector(2000,0,0));ReceiveApproach(15);ChargeErrors=0;
-        Controller->PredictedPose=UseTarget.Position;Controller->PlayerTick(.016f);
+        Controller->PredictedPose=UseTarget.Position;TickPlayer(.016f);
         TestEqual(TEXT("Arrival wins over charge distance at target"),ChargeErrors,0);
         ResetApproach(FVector(10000,0,0));ReceiveApproach(250);
         TestEqual(TEXT("Finite server limits above 100 are preserved"),Controller->ServerMoveToFailDistance,250.f);
@@ -1637,7 +1818,7 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
         TestBoom->DestroyComponent();
         Client->SendSetSingleCharacterOption(0x31,MouseTurningBefore);
         Pawn->SetActorTransform(StartTransform);Controller->PredictedPose=StartPose;
-        Controller->PlayerTick(.016f);
+        TickPlayer(.016f);
     }
     ACEInputBindings::Reload();
     for (uint32 Stance : {ACEMotion::StanceNonCombat,ACEMotion::StanceMagic})
@@ -1687,7 +1868,7 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
             int32 Reversals=0, LastVertical=0, SeatPenetrations=0;
             for (int32 Frame=0;Frame<45;++Frame)
             {
-                Controller->PlayerTick(.016f);
+                TickPlayer(.016f);
                 const float Z=Pawn->GetActorLocation().Z-Capsule->GetScaledCapsuleHalfHeight();
                 const int32 Vertical=Z>PreviousZ+2?1:(Z<PreviousZ-2?-1:0);
                 if (Vertical && LastVertical && Vertical!=LastVertical) ++Reversals;
@@ -1724,8 +1905,7 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
     Pawn->SetActorLocation(YaraqFeet+FVector(0,0,Capsule->GetScaledCapsuleHalfHeight()));
     for (int32 Frame=0;Frame<30;++Frame)
     {
-        Controller->PlayerTick(.016f);
-        App->TickComponent(.016f,LEVELTICK_All,nullptr);
+        TickPlayer(.016f);
     }
     float YaraqGround=0;
     TestTrue(TEXT("Reported Yaraq floor can be sampled"),Dat->SampleOutdoorGroundZ(YaraqFeet.X,YaraqFeet.Y,100,YaraqGround));
@@ -1739,7 +1919,9 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
     auto* DepthCapture=NewObject<USceneCaptureComponent2D>(DepthOwner);
     DepthOwner->SetRootComponent(DepthCapture); DepthCapture->RegisterComponent();
     auto* DepthTarget=NewObject<UTextureRenderTarget2D>(DepthCapture);
-    DepthTarget->RenderTargetFormat=RTF_R32f; DepthTarget->InitAutoFormat(32,32);
+    // Vulkan's FLinearColor readback supports RGBA32f, but not single-channel
+    // R32f. Preserve 32-bit depth precision on both Vulkan and D3D fixtures.
+    DepthTarget->RenderTargetFormat=RTF_RGBA32f; DepthTarget->InitAutoFormat(32,32);
     DepthCapture->TextureTarget=DepthTarget; DepthCapture->CaptureSource=SCS_SceneDepth;
     DepthCapture->bCaptureEveryFrame=false; DepthCapture->bCaptureOnMovement=false; DepthCapture->FOVAngle=10;
     DepthCapture->PrimitiveRenderMode=ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList;
@@ -1852,7 +2034,7 @@ bool FACERetailPortalSpaceTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("Retail UIGlobals fixed-point curve sample"), GetAnimLevel(Pair.Key), Pair.Value);
     FEntryWorld Fixture;
     auto* Dat = Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if (!Dat || !Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if (!Dat || !Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     auto* Tunnel = Fixture.World->SpawnActor<AACELoadingScreenActor>();
     Tunnel->BeginTunnel();
     const double Deadline = FPlatformTime::Seconds() + 20;

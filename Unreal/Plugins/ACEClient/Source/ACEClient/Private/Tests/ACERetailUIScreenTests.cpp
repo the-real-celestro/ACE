@@ -58,6 +58,7 @@
 #include "UI/ACEUIResourceResolver.h"
 #include "UI/ACERetailTextBlock.h"
 #include "UI/ACEAppraisalFormatting.h"
+#include "UI/ACERetailVendorCategories.h"
 #include "UI/ACERetailTextEntry.h"
 #include "UI/ACERetailKeySelector.h"
 #include "Engine/GameInstance.h"
@@ -102,6 +103,15 @@ static FORCENOINLINE void CheckCameraPreview(FAutomationTestBase& Test, UACEUIGa
         ACERuntimeOptions::Set(TEXT("FieldOfViewDegrees"),90.f);Video->ResetVideo();
     }
     else Test.AddError(TEXT("FOV slider is missing"));
+    if(auto* Slope=Cast<UCheckBox>(Video->WidgetTree->FindWidget(TEXT("CameraAlignToSlope"))))
+    {
+        Slope->SetIsChecked(false);Test.TestTrue(TEXT("Slope checkbox participates in pending changes"),Video->HasPendingChanges());
+        Video->ApplyRuntimeOptions();Video->ResetVideo();
+        Test.TestEqual(TEXT("Slope checkbox saves and reloads its preference"),ACERuntimeOptions::Get(TEXT("CameraAlignToSlope")),0.f);
+        Test.TestFalse(TEXT("Saved slope option is reflected in the UI"),Slope->IsChecked());
+        ACERuntimeOptions::Set(TEXT("CameraAlignToSlope"),1);Video->ResetVideo();
+    }
+    else Test.AddError(TEXT("Camera slope checkbox is missing"));
 }
 
 static FORCENOINLINE void CheckKeyboardCapture(FAutomationTestBase& Test, UACERetailKeySelector* Key)
@@ -178,7 +188,7 @@ FORCENOINLINE void FACERetailAugmentationUIFixture::Check(FAutomationTestBase& T
     for (int32 Id : {39, 44, 47, 34})
     {
         FACESkillInfo Skill; Skill.SkillId = Id;
-        Skill.AdvancementClass = Id == 39 ? 3 : 2;
+        Skill.AdvancementClass = Id == 39 ? 3 : Id == 34 ? 1 : 2;
         Skill.InitLevel = Id == 39 ? 10 : 5; Skill.Ranks = 50;
         V.Skills.Add(Skill);
     }
@@ -200,15 +210,42 @@ FORCENOINLINE void FACERetailAugmentationUIFixture::Check(FAutomationTestBase& T
     }
     V.StatQualityInts.Add(326, 1); V.StatQualityInts.Add(344, 3);
     Dat->RecomputePlayerStats(V, {}); Client->OnVitalsUpdated.Broadcast(V);
-    Gameplay->SelectedSkillId = 39; Gameplay->RefreshSkillOverlays();
-    Test.TestEqual(TEXT("Retail Jack/spec luminance remain visible without active spells"),
-        Gameplay->AttrFooterTitle->GetText().ToString(), FString(TEXT("Cooking: 177 (+11)")));
-    const int32 CookingRow = Gameplay->SkillRowIds.IndexOfByKey(39);
-    if (Test.TestTrue(TEXT("Modified-only augmented skill still has a row"), CookingRow != INDEX_NONE))
+    for (int32 Id : {39, 44, 47, 34})
     {
-        const auto Color = Gameplay->SkillRowValues[CookingRow]->GetColorAndOpacity().GetSpecifiedColor();
-        Test.TestTrue(TEXT("Retail modified-only augmentations paint green"), Color.G > Color.R);
+        Gameplay->SelectedSkillId = Id; Gameplay->RefreshSkillOverlays();
+        const int32 Row = Gameplay->SkillRowIds.IndexOfByKey(Id);
+        if (Test.TestTrue(TEXT("Augmented trained, specialized and untrained skills have rows"), Row != INDEX_NONE))
+        {
+            const auto Color = Gameplay->SkillRowValues[Row]->GetColorAndOpacity().GetSpecifiedColor();
+            Test.TestTrue(TEXT("Jack/spec luminance alone paint neutral ivory"), Color.Equals(FLinearColor(.95f, .95f, .9f, 1.f)));
+            Test.TestFalse(TEXT("Permanent gains have no positive footer suffix"), Gameplay->AttrFooterTitle->GetText().ToString().Contains(TEXT(" (+")));
+        }
     }
+    Gameplay->SelectedSkillId = 39;
+    auto CheckCooking = [&](const TCHAR* Title, int32 Modifier)
+    {
+        Client->OnVitalsUpdated.Broadcast(V); Gameplay->RefreshSkillOverlays();
+        Test.TestEqual(TEXT("Skill footer includes permanent gains in its baseline"),
+            Gameplay->AttrFooterTitle->GetText().ToString(), FString(Title));
+        const int32 Row = Gameplay->SkillRowIds.IndexOfByKey(39);
+        if (Test.TestTrue(TEXT("Cooking remains visible"), Row != INDEX_NONE))
+        {
+            const auto Color = Gameplay->SkillRowValues[Row]->GetColorAndOpacity().GetSpecifiedColor();
+            Test.TestTrue(TEXT("Row color agrees with actual spell/vitae contribution"),
+                Modifier > 0 ? Color.G > Color.R : Modifier < 0 ? Color.R > Color.G : Color.Equals(FLinearColor(.95f, .95f, .9f, 1.f)));
+        }
+    };
+    CheckCooking(TEXT("Cooking: 177"), 0);
+    FACEActiveEnchantment Buff; Buff.SpellId = 3; Buff.SpellCategory = 102;
+    Buff.StatModType = 0x8010; Buff.StatModKey = 39; Buff.StatModValue = 40;
+    Dat->RecomputePlayerStats(V, {Buff}); CheckCooking(TEXT("Cooking: 217 (+40)"), 40);
+    Buff.StatModValue = -3;
+    Dat->RecomputePlayerStats(V, {Buff}); CheckCooking(TEXT("Cooking: 174 (-3)"), -3);
+    FACEActiveEnchantment Vitae; Vitae.bVitae = true; Vitae.StatModValue = .9f;
+    Dat->RecomputePlayerStats(V, {Vitae}); CheckCooking(TEXT("Cooking: 160 (-17)"), -17);
+    Dat->RecomputePlayerStats(V, {}); CheckCooking(TEXT("Cooking: 177"), 0);
+    V.StatQualityInts.Remove(326); V.StatQualityInts.Remove(344);
+    Dat->RecomputePlayerStats(V, {}); CheckCooking(TEXT("Cooking: 166"), 0);
     Gameplay->AttributeScrollOffset = 0; Gameplay->SyncSkillPanelTab(TEXT("AttributePage"));
     for (int32 Row = 0; Row < 6; ++Row)
     {
@@ -404,6 +441,97 @@ FString ACERetailUIScreenTestsDatDirectory()
 }
 }
 
+// Keep the counted-contract rendering regression outside the large UI suite.
+static FORCENOINLINE void CheckContractProgress(FAutomationTestBase& Test, UACEDatSubsystem* Dat,
+    UACEUIElementManager* Manager, TArray<FACEContractEntry>& Contracts, const TArray<int32>& RowIds,
+    const TArray<TObjectPtr<UTextBlock>>& StatusRows, TFunctionRef<void()> Refresh,
+    TFunctionRef<void(const FString&,float)> CaptureScreen, TFunctionRef<int32()> ScrollNext)
+{
+    const auto SavedContracts=Contracts;
+    TArray<int32> KillContracts;
+    for(int32 Id=1;Id<1000;++Id)
+        if(const auto* Info=Dat->GetContractInfo(Id);Info && Info->DescriptionProgress.Contains(TEXT("%d")))KillContracts.Add(Id);
+    Test.TestFalse(TEXT("Real DAT contains counted contract tasks"),KillContracts.IsEmpty());
+    KillContracts.Sort([&](int32 A,int32 B){return Dat->GetContractInfo(A)->DescriptionProgress.Len()>Dat->GetContractInfo(B)->DescriptionProgress.Len();});
+    for(int32 Count:{1,25,999})
+    {
+        Contracts.Reset();
+        for(int32 Index=0;Index<FMath::Min(5,KillContracts.Num());++Index)
+        {FACEContractEntry Entry;Entry.ContractId=KillContracts[Index];Entry.Stage=Count+4;Contracts.Add(Entry);}
+        Refresh();
+        for(float Scale:{1.f,1.5f})
+        {
+            CaptureScreen(FString::Printf(TEXT("GameplayContractKills%dScale%d"),Count,int32(Scale*100)),Scale);
+            for(int32 ContractRow=0;ContractRow<StatusRows.Num() && ContractRow<RowIds.Num();++ContractRow)
+            {
+                if(StatusRows[ContractRow]->GetVisibility()==ESlateVisibility::Collapsed)continue;
+                const auto* Info=Dat->GetContractInfo(RowIds[ContractRow]);
+                auto* Label=CastChecked<UACERetailTextBlock>(StatusRows[ContractRow]);
+                const FString Expected=Info->DescriptionProgress.Replace(TEXT("%d"),*FString::FromInt(Count));
+                Test.TestEqual(TEXT("Contract count uses the retail DAT progress description"),Label->GetText().ToString(),Expected);
+                const auto Cell=Label->GetRetailElement();
+                const int32 Width=Cell->Width-int32(Cell->TextMargins.Left+Cell->TextMargins.Right);
+                const auto Lines=ACEDatText::Layout(*Label->GetBitmapFont(),Expected,Width,false);
+                Test.TestTrue(TEXT("Complete wrapped progress, including the count, fits vertically"),Lines.Num()*int32(Label->GetBitmapFont()->MaxCharHeight)<=Cell->Height);
+                for(const auto& Line:Lines)Test.TestTrue(TEXT("Progress fits between the column margins"),Line.Width<=Width);
+                Test.TestTrue(TEXT("Long progress leaves the contract name column intact"),Cell->X>=152);
+                const auto ContractList=Manager->FindElementByName(TEXT("ContractsBox"));
+                Test.TestTrue(TEXT("Count stays inside the list and away from its scrollbar"),Cell->GetScreenOrigin().X+Cell->Width<=ContractList->GetScreenOrigin().X+ContractList->Width);
+                Test.TestEqual(TEXT("Contract status uses the authored retail font"),Cell->FontId,uint32(0x40000001));
+            }
+        }
+        if(Count==999)
+        {
+            int32 VisibleRows=0;
+            for(const auto& Label:StatusRows)if(Label->GetVisibility()!=ESlateVisibility::Collapsed)++VisibleRows;
+            Test.TestTrue(TEXT("Scrolling wrapped contracts never skips an unseen entry"),ScrollNext()<=VisibleRows);
+            CaptureScreen(TEXT("GameplayContractKillsScrolled"),1.f);
+        }
+    }
+    Contracts=SavedContracts;Refresh();CaptureScreen(TEXT("GameplayContractsRestored"),1.f);
+}
+
+struct FACEContractUIFixture
+{
+    static FORCENOINLINE void Run(FAutomationTestBase& Test, UACEDatSubsystem* Dat,
+        UACEUIGameplayBinder* Gameplay, UACEUIElementManager* Manager, UACEUICanvasWidget* Canvas,
+        UACEUIResourceResolver* Resources, TArray<FACEContractEntry>& Contracts,
+        TFunctionRef<void(const FString&,float)> CaptureScreen)
+    {
+        Contracts.Reset();
+        for (int32 Id=1;Id<1000 && Contracts.Num()<2;++Id)
+        {
+            if (!Dat->GetContractInfo(Id)) continue;
+            FACEContractEntry Entry;Entry.ContractId=Id;Entry.Stage=2;
+            Entry.TimeWhenDone=3600;Entry.ReceivedAt=FPlatformTime::Seconds()-60;
+            Contracts.Add(Entry);
+        }
+        Gameplay->ShowPanelPage(TEXT("QuestManagementPanel_Field"));
+        Gameplay->RefreshQuestOverlays();CaptureScreen(TEXT("GameplayContracts"),1.f);
+        Test.TestFalse(TEXT("Personal notes do not overlap the contracts page"),bool(Manager->FindElementByName(TEXT("JournalPage"))->bVisible));
+        Test.TestEqual(TEXT("Journal displays received contracts"),Contracts.Num(),2);
+        if (Gameplay->QuestRows.Num()>1)
+        {
+            const auto NameElement=Gameplay->ContractRowElements[0]->Children[0];
+            FACEDatFont ContractFont;Resources->ResolveFont(NameElement->FontId,ContractFont);
+            Test.TestEqual(TEXT("Journal truncates only the contract name within its retail column"),Gameplay->QuestRows[0]->GetText().ToString(),
+                ACEDatText::Ellipsize(ContractFont,Dat->GetContractInfo(Gameplay->QuestRowIds[0])->Name,
+                    NameElement->Width-int32(NameElement->TextMargins.Left+NameElement->TextMargins.Right)));
+            Test.TestEqual(TEXT("Journal text lets the list receive clicks"),Gameplay->QuestRows[0]->GetVisibility(),ESlateVisibility::HitTestInvisible);
+            Test.TestEqual(TEXT("Journal shows the server stage in the status column"),Gameplay->QuestStatusRows[0]->GetText().ToString(),FString(TEXT("In progress")));
+            Test.TestTrue(TEXT("Journal countdown advances after the server snapshot"),Gameplay->QuestDetailLabels.ContainsByPredicate([](UTextBlock* Label)
+                {return Label && Label->GetText().ToString().Contains(TEXT("00:59:"));}));
+            const auto& RowGeometry=Gameplay->QuestStatusRows[1]->GetCachedGeometry();
+            const FVector2D RowPoint=Canvas->GetCachedGeometry().AbsoluteToLocal(RowGeometry.LocalToAbsolute(RowGeometry.GetLocalSize()*.5));
+            Test.TestTrue(TEXT("Clicking journal status selects its contract"),Gameplay->TryHandleOverlayClick(RowPoint));
+            Test.TestEqual(TEXT("Journal detail follows the clicked second row"),Gameplay->SelectedContractId,Gameplay->QuestRowIds[1]);
+        }
+        CheckContractProgress(Test,Dat,Manager,Contracts,Gameplay->QuestRowIds,Gameplay->QuestStatusRows,
+            [&](){Gameplay->RefreshQuestOverlays();},[&](const FString& Name,float Scale){CaptureScreen(Name,Scale);},
+            [&](){Gameplay->ScrollQuestList(-1.f);return Gameplay->QuestScrollOffset;});
+    }
+};
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERetailScreenTest,"ACE.RetailParity.UIScreens",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACERetailScreenTest::RunTest(const FString& Parameters)
@@ -545,7 +673,11 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     if (TestTrue(TEXT("Casting tab exists"),Tab.IsValid()))
     {
         TestTrue(TEXT("Casting text tab is an activatable hit target"),Tab->IsInteractiveHitTarget());
-        for (auto P=Tab; P; P=P->Parent.Pin()) P->bVisible=true;
+        // Enter through the normal stance path. Forcing only the spell panel
+        // visible leaves the mutually exclusive melee panel over it in retail.
+        Gameplay->SyncCombatModeFromServer(static_cast<int32>(ACECombatMode::Magic));
+        TestFalse(TEXT("Magic stance hides the overlapping melee panel"),
+            bool(Manager->FindElementByName(TEXT("CombatPanel"))->bVisible));
         Manager->ApplyEdgeAnchoredLayout(1600,900);
         const auto Origin=Tab->GetScreenOrigin();
         const FVector2D Pos(Origin.X+Tab->Width/2,Origin.Y+Tab->Height/2);
@@ -913,6 +1045,60 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     CaptureScreen(TEXT("GameplayVendorGreenDropdown"));
     CheckVendorRowArtwork(*this,Gameplay->VendorFilterDropdownRows,Gameplay->VendorVisibleFilterIndices,
         Gameplay->VendorItemTypeFilter,Canvas->GetResourceResolver());
+    [&]()
+    {
+        TGuardValue<TArray<FACEWorldObject>> SavedStock(Client->Session->VendorMerchandise,{});
+        // Enough real item categories and stock to cover an enabled scrollbar
+        // with the dropdown, using the authored layout rather than moving controls.
+        for (const auto& Category : ACERetailVendorCategories::Categories)
+            for (int32 I=0;I<32;++I)
+            {
+                FACEWorldObject Stock;
+                Stock.Guid=980000+Client->Session->VendorMerchandise.Num();
+                Stock.Name=Category.Name;Stock.ContainerId=9876;
+                Stock.ItemType=Category.Mask & (~Category.Mask+1u);
+                Client->Session->VendorMerchandise.Add(Stock);
+            }
+        Gameplay->SetVendorItemTypeFilter(0);
+        Gameplay->ToggleVendorFilterDropdown();
+        CaptureScreen(TEXT("GameplayVendorDropdownHitPriority"));
+        const auto Bar=Manager->FindElementByName(TEXT("Vendor_ItemListScroll"));
+        if (!TestTrue(TEXT("Vendor regression has an enabled item scrollbar"),Bar && Bar->bVisible)) return;
+        const auto& Geo=Canvas->GetCachedGeometry();
+        const FVector2D BarOrigin(Bar->GetScreenOrigin());
+        const auto& DropGeo=Gameplay->VendorFilterDropdownBg->GetCachedGeometry();
+        const FVector2D DropMin=Canvas->ViewportToLayout(Geo.AbsoluteToLocal(DropGeo.GetAbsolutePosition()));
+        const FVector2D DropMax=Canvas->ViewportToLayout(Geo.AbsoluteToLocal(DropGeo.LocalToAbsolute(DropGeo.GetLocalSize())));
+        const FVector2D Min(FMath::Max(BarOrigin.X+17.,DropMin.X),FMath::Max(BarOrigin.Y,DropMin.Y));
+        const FVector2D Max(FMath::Min(BarOrigin.X+Bar->Width-17.,DropMax.X),FMath::Min(BarOrigin.Y+Bar->Height,DropMax.Y));
+        if (!TestTrue(TEXT("Vendor dropdown overlaps the scrollbar track"),Max.X>Min.X && Max.Y>Min.Y)) return;
+        const FVector2D Point=Geo.LocalToAbsolute(Canvas->LayoutToViewport((Min+Max)*.5));
+        const int32 Row=FMath::FloorToInt(DropGeo.AbsoluteToLocal(Point).Y/DropGeo.GetLocalSize().Y*Gameplay->VendorVisibleFilterIndices.Num());
+        const int32 ExpectedFilter=Gameplay->VendorVisibleFilterIndices[Row];
+        const int32 Before=Gameplay->VendorItemsScrollOffset;
+        auto Press=[&](FVector2D P)
+        {
+            TestTrue(TEXT("Vendor popup press is handled"),Canvas->NativeOnMouseButtonDown(Geo,
+                FPointerEvent(0,P,P,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState())).IsEventHandled());
+            TestFalse(TEXT("Vendor popup never begins a scrollbar drag"),Gameplay->IsScrollbarDragActive());
+            Canvas->NativeOnMouseButtonUp(Geo,FPointerEvent(0,P,P,{},EKeys::LeftMouseButton,0,FModifierKeysState()));
+        };
+        Press(Point);
+        TestEqual(TEXT("Covered scrollbar click selects the visible vendor category"),Gameplay->VendorItemTypeFilter,ExpectedFilter);
+        TestFalse(TEXT("Selecting a category closes the vendor dropdown"),Gameplay->bVendorFilterDropdownOpen);
+        TestEqual(TEXT("Category click leaves the scrollbar offset unchanged"),Gameplay->VendorItemsScrollOffset,Before);
+        Gameplay->ToggleVendorFilterDropdown();
+        CaptureScreen(TEXT("GameplayVendorDropdownDismiss"));
+        // The far right arrow is outside the dropdown but still on the vendor.
+        const FVector2D Arrow=Geo.LocalToAbsolute(Canvas->LayoutToViewport(BarOrigin+FVector2D(Bar->Width-8,Bar->Height*.5)));
+        TestFalse(TEXT("Dismiss click is outside the category popup"),Gameplay->VendorFilterDropdownBg->GetCachedGeometry().IsUnderLocation(Arrow));
+        Press(Arrow);
+        TestFalse(TEXT("Outside click dismisses the category popup"),Gameplay->bVendorFilterDropdownOpen);
+        TestEqual(TEXT("Dismiss click does not activate the scrollbar arrow behind it"),Gameplay->VendorItemsScrollOffset,Before);
+        Press(Arrow);
+        TestEqual(TEXT("Scrollbar arrow works again after popup dismissal"),Gameplay->VendorItemsScrollOffset,Before+1);
+        Gameplay->CloseVendorFilterDropdown();
+    }();
     Gameplay->HideVendorPanel();
     Gameplay->ShowExternalContainer(123);
     Gameplay->TickRefresh();
@@ -935,12 +1121,17 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     Gameplay->LastAppraisal.SpellIds={1};
     for (int32 I=0; I<40; ++I) Gameplay->LastAppraisal.Summary+=TEXT("Authored bitmap text wraps and scrolls within the body.\n");
     Gameplay->LastAppraisal.Inscription=TEXT("Inscription stays in the paper strip.");
+    Gameplay->LastAppraisal.StringProperties.Add(8,TEXT("Test Scribe"));
     Gameplay->ShowExamination(true); Gameplay->RefreshExaminationOverlay();
     const auto ItemText=Manager->FindElementUnder(TEXT("ItemExamineUI"),TEXT("ItemDisplayText"));
     TestEqual(TEXT("Inspection body keeps DAT y=0, without guessed icon band"),ItemText->Y,0);
     TestEqual(TEXT("Inspection body keeps DAT x=4"),ItemText->X,4);
     TestFalse(TEXT("Inspection does not graft obsolete item icon"),Manager->FindElementUnder(TEXT("ItemExamineUI"),TEXT("ItemIcon")).IsValid());
     CaptureScreen(TEXT("GameplayInspection"));
+    const auto Signature=Manager->FindElementUnder(TEXT("ItemExamineUI"),TEXT("ItemInscriptionSignatureText"));
+    TestEqual(TEXT("Inscription displays its author"),Gameplay->ExamInscriptionSignature->GetText().ToString(),FString(TEXT("--Test Scribe")));
+    TestEqual(TEXT("Inscription author uses retail's right alignment"),CastChecked<UACERetailTextBlock>(Gameplay->ExamInscriptionSignature)->GetTextJustification(),ETextJustify::Right);
+    TestTrue(TEXT("Inscription signature remains inside the resized examination panel"),Signature&&Signature->Y>=0&&Signature->Y+Signature->Height<=Manager->FindElementByName(TEXT("ItemExamineUI"))->Height);
     TestTrue(TEXT("Long appraisal is scrollable instead of overflowing"),Gameplay->ExamScroll && Gameplay->ExamScroll->GetScrollOffsetOfEnd()>0.f);
     const auto InscriptionBar=Manager->FindElementUnder(TEXT("ItemExamineUI"),TEXT("ItemInscriptionScrollbar"));
     TestTrue(TEXT("Short inscriptions hide their unused arrow controls"),InscriptionBar && !InscriptionBar->bVisible);
@@ -1549,7 +1740,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                     // changes; retain the actual canvas hit testing and activation.
                     Manager->OnElementActivated.Remove(Gameplay->ActivatedHandle);
                     UACEUIElementManager::ApplyFloatyResizeLayout(Floaty);
-                    for(const FIntPoint Size:{FIntPoint(1920,1080),FIntPoint(2560,1440),FIntPoint(3840,2160),FIntPoint(800,600)})
+                    for(const FIntPoint Size:{FIntPoint(1920,1080),FIntPoint(2560,1440),FIntPoint(3840,2160),FIntPoint(800,600),FIntPoint(640,480),FIntPoint(800,450),FIntPoint(480,360)})
                     {
                         ScreenSize=Size;
                         CaptureScreen(FString::Printf(TEXT("OptionsWindowResize_%d"),Size.X));
@@ -1565,7 +1756,9 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                         AddInfo(FString::Printf(TEXT("Scaled options %dx%d at %.2f: frame=%s/%d Apply=%s/%d"),
                             Size.X,Size.Y,Scale,*Floaty->GetScreenOrigin().ToString(),Floaty->Height,*Origin.ToString(),Apply->Height));
                         TestTrue(TEXT("Scaled settings frame fits the visible viewport"),
-                            Floaty->GetScreenOrigin().Y>=0 && Floaty->GetScreenOrigin().Y+Floaty->Height<=LogicalSize.Y);
+                            // Fractional float DPI (e.g. .8) can put the double
+                            // logical extent a few millionths below 600 pixels.
+                            Floaty->GetScreenOrigin().Y>=0 && Floaty->GetScreenOrigin().Y+Floaty->Height<=LogicalSize.Y+.01);
                         TestTrue(TEXT("Apply remains entirely onscreen after enlarging the interface"),
                             Origin.X>=0 && Origin.Y>=0 && Origin.X+Apply->Width<=LogicalSize.X && Origin.Y+Apply->Height<=LogicalSize.Y);
                         const FVector2D ScaleOrigin=Canvas->GetCachedGeometry().AbsoluteToLocal(UIScale->GetCachedGeometry().GetAbsolutePosition());
@@ -1593,6 +1786,21 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                         TestTrue(TEXT("Physical click on scaled Apply reaches the control"),Clicked);
                         TestEqual(TEXT("Player can return to 100% using the visible Apply button"),ACERuntimeOptions::Get(TEXT("DesktopUIScale")),1.f);
                     }
+                    const float OldConstrain=ACERuntimeOptions::Get(TEXT("ConstrainUIWindows"));
+                    ACERuntimeOptions::Set(TEXT("ConstrainUIWindows"),0);
+                    Floaty->UserDragX=10000;Floaty->UserDragY=10000;Floaty->RecomputeLayoutOffset();
+                    Gameplay->ShowPanelPage(TEXT("OptionsPanel_Field"));
+                    Gameplay->SyncOptionsPanelTab(TEXT("GameplayOptionsPage"));
+                    CaptureScreen(TEXT("SmallResolutionRecovery"),ACERuntimeOptions::DesktopUIScale(ScreenSize,false));
+                    const auto Recovery=Manager->FindElementByName(TEXT("GameplayOptions_ResetGraphics_Button"));
+                    if(TestTrue(TEXT("Options expose Reset graphics without scrolling"),Recovery.IsValid()))
+                    {
+                        const auto At=Recovery->GetScreenOrigin();
+                        TestTrue(TEXT("Reset graphics stays in the recovery viewport"),At.X>=0 && At.Y>=0 && At.X+Recovery->Width<=800 && At.Y+Recovery->Height<=600);
+                        TestTrue(TEXT("Reset graphics is clickable with offscreen windows allowed"),Manager->HitTestCanvas(At.X+Recovery->Width/2,At.Y+Recovery->Height/2)==Recovery);
+                    }
+                    ACERuntimeOptions::Set(TEXT("ConstrainUIWindows"),OldConstrain);
+                    Gameplay->SyncOptionsPanelTab(TEXT("ConfigPage"));
                     ScreenSize=OriginalScreen;
                     // Refresh cached Slate geometry before restoring sizes. A
                     // tick with the old 800x600 geometry would clamp them again.
@@ -1656,7 +1864,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         {
             auto* Label=Cast<UACERetailTextBlock>(Gameplay->OptionsButtonLabels[Index]);
             if (!Label) continue;
-            const bool ShouldShow=GameplayPage?Index<8:Index>=8;
+            const bool ShouldShow=GameplayPage?Index<9:Index>=9;
             TestEqual(TEXT("Options captions belong only to the active tab"),Label->GetVisibility()!=ESlateVisibility::Collapsed,ShouldShow);
             if (!ShouldShow) continue;
             ++VisibleLabels;
@@ -1673,7 +1881,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
 
             }
         }
-        TestEqual(TEXT("Only the active page's button captions are visible"),VisibleLabels,GameplayPage?8:3);
+        TestEqual(TEXT("Only the active page's button captions are visible"),VisibleLabels,GameplayPage?9:3);
         if (GameplayPage)
         {
             const auto PluginButton=Manager->FindElementUnder(PageName,TEXT("GameplayOptions_Plugins_Button"));
@@ -2528,13 +2736,15 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             }
         };
         FACESkillInfo Cooking; Cooking.SkillId=39; Cooking.AdvancementClass=2; Cooking.InitLevel=5; Cooking.Ranks=10;
-        Stats.Skills={Cooking}; Session.NotifyVitalsChanged();
+        FACESkillInfo Retired;Retired.SkillId=1;Retired.Name=TEXT("Axe");Retired.AdvancementClass=3;Retired.Ranks=5231;
+        Stats.Skills={Cooking,Retired}; Session.NotifyVitalsChanged();
         Gameplay->ShowPanelPage(TEXT("SkillManagementPanel_Field")); Gameplay->SyncSkillPanelTab(TEXT("SkillPage"));
         Gameplay->SelectedSkillId=39;
         FACEActiveEnchantment CookBuff; CookBuff.SpellId=3; CookBuff.SpellCategory=102;
         CookBuff.StatModType=0x8010; CookBuff.StatModKey=39; CookBuff.StatModValue=40;
         Session.ActiveEnchantments={CookBuff}; Session.NotifyVitalsChanged();
         Client->OnVitalsUpdated.Broadcast(Stats); CaptureScreen(TEXT("GameplayCookingBuffed"));
+        TestFalse(TEXT("Retired server weapon skill has no selectable UI row"),Gameplay->SkillRowIds.Contains(1));
         TestEqual(TEXT("Selected skill footer shows total and bonus"),Gameplay->AttrFooterTitle->GetText().ToString(),FString(TEXT("Cooking: 155 (+40)")));
         const int32 CookingRow = Gameplay->SkillRowIds.IndexOfByKey(39);
         if (TestTrue(TEXT("Cooking has a rendered skill row"),CookingRow!=INDEX_NONE))
@@ -2745,6 +2955,8 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         FACEWorldObject SecondShortcut=ShortcutUse; SecondShortcut.Guid=98766; SecondShortcut.Name=TEXT("Second-row use fixture");
         Session.WorldObjects.Add(SecondShortcut.Guid,SecondShortcut);
         Session.ShortcutObjects[17]=SecondShortcut.Guid;
+        TFunction<void()> CheckShortcutRows = [&]()
+        {
         for (float UIScale : {1.f,2.f})
         {
             CaptureScreen(FString::Printf(TEXT("RetailTwoShortcutRows_%d"),int32(UIScale)),UIScale);
@@ -2756,7 +2968,26 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 TestEqual(TEXT("Every displayed shortcut has an independent hit target"),Gameplay->HitTestShortcutSlot(Local),Index);
                 TestTrue(TEXT("Both rows lie within toolbar clipping bounds"),O.Y+El->Height<=Toolbar->GetScreenOrigin().Y+Toolbar->Height-5);
                 TestTrue(TEXT("Both rows paint icons/backgrounds"),Gameplay->ShortcutIcons[Index]->GetVisibility()!=ESlateVisibility::Collapsed);
+                if(Index>=9 && Index<17)
+                    TestTrue(TEXT("Every empty second-row shortcut uses retail blue art"),Gameplay->ShortcutSlotBgs[Index]->Background.GetResourceObject()==Resources->ResolveIconTexture(0x060074CF));
+                Gameplay->InvDragGuid=ShortcutUse.Guid;Gameplay->bInvDragPending=true;Gameplay->bInvDragActive=true;
+                Gameplay->UpdateInventoryDrag(Local);
+                auto* Marker=Gameplay->PaperDollDragTargetIcon.Get();
+                if(TestNotNull(TEXT("Every hotbar destination has drag feedback"),Marker))
+                {
+                    TestTrue(TEXT("Hotbar drag feedback uses the retail green circle"),Marker->IsVisible()
+                        && Marker->Background.GetResourceObject()==Resources->ResolveIconTexture(0x060011F9));
+                    TestTrue(TEXT("Hotbar ring shares the toolbar clipping panel"),Marker->GetParent()==Gameplay->ShortcutClipPanel);
+                    const auto* RingSlot=Cast<UCanvasPanelSlot>(Marker->Slot);
+                    const auto* CellSlot=Cast<UCanvasPanelSlot>(Gameplay->ShortcutSlotBgs[Index]->Slot);
+                    TestEqual(TEXT("Hotbar ring follows the scaled destination"),RingSlot->GetPosition(),CellSlot->GetPosition());
+                    TestEqual(TEXT("Hotbar ring keeps the scaled icon size"),RingSlot->GetSize(),CellSlot->GetSize());
+                }
             }
+            CaptureScreen(FString::Printf(TEXT("RetailHotbarDragRing_%d"),int32(UIScale)),UIScale);
+            Gameplay->UpdateInventoryDrag(FVector2D(-100,-100));
+            TestFalse(TEXT("Leaving hotbar destinations clears the circle"),Gameplay->PaperDollDragTargetIcon->IsVisible());
+            Gameplay->CancelInventoryDrag();
             Session.bUseBusy=false; Session.CachedC2SPackets.Reset(); Gameplay->LastInvClickGuid=0;
             NativeClick(TEXT("ShortcutBar2_Shortcut9Button"));
             TestEqual(TEXT("Second row selects its item"),Client->GetSelectedObject().Guid,SecondShortcut.Guid);
@@ -2764,6 +2995,8 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             NativeClick(TEXT("ShortcutBar2_Shortcut9Button"));
             TestTrue(TEXT("Second row double click sends use"),HasAction(ACEGameAction::Use));
         }
+        };
+        CheckShortcutRows();
         CaptureScreen(TEXT("RetailShortcutDrag"));
         {
             TGuardValue<FString> SettingsPath(GGameUserSettingsIni,FPaths::ProjectSavedDir()/TEXT("Automation/ToolbarResizeFixture.ini"));
@@ -2846,6 +3079,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         const FVector2D LastPoint=ShortcutPoint(TEXT("ShortcutBar2_Shortcut9Button"));
         TestTrue(TEXT("Shortcut can be dragged from row one"),Gameplay->TryBeginInventoryDrag(FirstPoint));
         Gameplay->UpdateInventoryDrag(LastPoint); Gameplay->TryFinishInventoryDrag(LastPoint);
+        TestFalse(TEXT("Dropping a shortcut clears the green circle"),Gameplay->PaperDollDragTargetIcon->IsVisible());
         TestEqual(TEXT("Shortcut drag moves into row two"),Client->GetShortcutObject(17),ShortcutUse.Guid);
         TestEqual(TEXT("Occupied shortcut swaps back to source slot"),Client->GetShortcutObject(0),SecondShortcut.Guid);
         Session.CachedC2SPackets.Reset();
@@ -2945,6 +3179,63 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         Session.TradePartnerGuid=Partner.Guid;
         Session.TradeSelfItems={Device.Guid}; Session.TradePartnerItems={Item.Guid};
         Gameplay->ShowTradePanel(Partner.Guid); CaptureScreen(TEXT("GameplayTrade"));
+        TFunction<void()> CheckTradeAndToolbarDrops=[&]()
+        {
+            const FVector2D SavedCursor=FSlateApplication::Get().GetCursorPos();
+            ON_SCOPE_EXIT { FSlateApplication::Get().SetCursorPos(SavedCursor); };
+            FACEWorldObject Gift; Gift.Guid=0x790001; Gift.ContainerId=Player.Guid;
+            Gift.Name=TEXT("Trade drop fixture"); Gift.ItemType=ACEItemType::Misc; Gift.IconId=0x060010F9;
+            Gift.StackSize=1; Gift.MaxStackSize=1; Gift.WeenieClassId=0x790001;
+            Session.WorldObjects.Add(Gift.Guid,Gift);
+            auto Begin=[&]()
+            {
+                Gameplay->CancelInventoryDrag(); Gameplay->InvDragGuid=Gift.Guid; Gameplay->InvDragAmount=1;
+                Gameplay->InvDragIconDid=Gift.IconId; Gameplay->bInvDragPending=true; Gameplay->bInvDragActive=true;
+            };
+            auto* Cell=Gameplay->TradeSelfBackgrounds[0].Get();
+            const FVector2D TradePoint=Canvas->GetCachedGeometry().AbsoluteToLocal(
+                Cell->GetCachedGeometry().LocalToAbsolute(Cell->GetCachedGeometry().GetLocalSize()*.5));
+            FSlateApplication::Get().SetCursorPos(Canvas->GetCachedGeometry().LocalToAbsolute(TradePoint));
+            Begin(); Gameplay->UpdateInventoryDrag(TradePoint);
+            auto* Mark=Gameplay->PaperDollDragTargetIcon.Get();
+            TestTrue(TEXT("Trade destination displays the retail green accept ring"),Mark && Mark->IsVisible()
+                && Mark->Background.GetResourceObject()==Resources->ResolveIconTexture(0x060011F9));
+            CaptureScreen(TEXT("GameplayTradeDropAccept"));
+            Session.WorldObjects[Gift.Guid].Attuned=1; Gameplay->UpdateInventoryDrag(TradePoint);
+            TestTrue(TEXT("Untradeable item displays the retail rejection symbol"),Mark && Mark->IsVisible()
+                && Mark->Background.GetResourceObject()==Resources->ResolveIconTexture(0x060011F8));
+            Session.WorldObjects[Gift.Guid].Attuned=0; Gameplay->CancelInventoryDrag();
+            TestFalse(TEXT("Cancelling trade drag clears feedback"),Mark && Mark->IsVisible());
+
+            Gameplay->HidePanel();
+            const auto Bag=Manager->FindElementByName(TEXT("InventoryButton"));
+            const auto Overlay=Manager->FindElementByName(TEXT("BigBackpack_Icon_DragAccept"));
+            const FVector2D BagPoint=Canvas->LayoutToViewport(FVector2D(Bag->GetScreenOrigin())+FVector2D(Bag->Width*.5,Bag->Height*.5));
+            FSlateApplication::Get().SetCursorPos(Canvas->GetCachedGeometry().LocalToAbsolute(BagPoint));
+            Begin(); Gameplay->UpdateInventoryDrag(BagPoint);
+            TestTrue(TEXT("Large toolbar backpack displays its retail drop-in state"),bool(Overlay->bVisible) && Overlay->DefaultState==0x10000046);
+            Gameplay->SyncInventoryButtonVisual();
+            TestTrue(TEXT("HUD refresh preserves active backpack drag feedback"),bool(Overlay->bVisible));
+            CaptureScreen(TEXT("GameplayToolbarBackpackDrop"));
+            Gameplay->UpdateInventoryDrag(FVector2D(-100,-100));
+            TestFalse(TEXT("Leaving toolbar backpack clears drop-in artwork"),bool(Overlay->bVisible));
+            Gameplay->UpdateInventoryDrag(BagPoint); Session.CachedC2SPackets.Reset();
+            Gameplay->TryFinishInventoryDrag(BagPoint);
+            bool MovedToSelf=false;
+            for (const auto& Packet:Session.CachedC2SPackets)
+            {
+                FACEBinaryReader Wire(Packet.Value.Payload); Wire.Skip(16);
+                if (Wire.ReadUInt32()!=ACEOpcode::GameAction) continue;
+                Wire.ReadUInt32();
+                if (Wire.ReadUInt32()==ACEGameAction::PutItemInContainer)
+                    MovedToSelf=Wire.ReadUInt32()==uint32(Gift.Guid) && Wire.ReadUInt32()==uint32(Player.Guid);
+            }
+            TestTrue(TEXT("Toolbar backpack drop moves the item into the player's inventory"),MovedToSelf);
+            TestFalse(TEXT("Completing backpack drop clears feedback"),bool(Overlay->bVisible));
+            Session.WorldObjects.Remove(Gift.Guid); Gameplay->RefreshTradeOverlays();
+            Gameplay->ShowPanelPage(TEXT("InventoryPanel_Field"));
+        };
+        CheckTradeAndToolbarDrops();
         TestEqual(TEXT("Trade paints partner name"),Gameplay->TradeLabels[0]->GetText().ToString(),Partner.Name);
         TestTrue(TEXT("Trade paints item background"),Gameplay->TradeOtherBackgrounds[0]->GetVisibility()!=ESlateVisibility::Collapsed);
         TestTrue(TEXT("Trade paints all default blank slots"),Gameplay->TradeOtherBackgrounds.Last()->GetVisibility()!=ESlateVisibility::Collapsed);
@@ -3830,31 +4121,8 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             TestEqual(TEXT("Repeated world selection retains exactly the authored emitter count"),Script->ActiveEmitters.Num(),Emitters);
             Gameplay->SelectionFlashUntil=0;Gameplay->TickSelectionFlash();WeaponActor->Destroy();
         }
-        Client->Session->Contracts.Reset();
-        for (int32 Id=1;Id<1000 && Client->Session->Contracts.Num()<2;++Id)
-        {
-            if (!PreviewDat->GetContractInfo(Id)) continue;
-            FACEContractEntry Entry;Entry.ContractId=Id;Entry.Stage=2;
-            Entry.TimeWhenDone=3600;Entry.ReceivedAt=FPlatformTime::Seconds()-60;
-            Client->Session->Contracts.Add(Entry);
-        }
-        Gameplay->ShowPanelPage(TEXT("QuestManagementPanel_Field"));
-        Gameplay->RefreshQuestOverlays();CaptureScreen(TEXT("GameplayContracts"));
-        TestFalse(TEXT("Personal notes do not overlap the contracts page"),bool(Manager->FindElementByName(TEXT("JournalPage"))->bVisible));
-        TestEqual(TEXT("Journal displays received contracts"),Client->Session->Contracts.Num(),2);
-        if (Gameplay->QuestRows.Num()>1)
-        {
-            TestEqual(TEXT("Journal uses the real contract name"),Gameplay->QuestRows[0]->GetText().ToString(),
-                PreviewDat->GetContractInfo(Gameplay->QuestRowIds[0])->Name);
-            TestEqual(TEXT("Journal text lets the list receive clicks"),Gameplay->QuestRows[0]->GetVisibility(),ESlateVisibility::HitTestInvisible);
-            TestEqual(TEXT("Journal shows the server stage in the status column"),Gameplay->QuestStatusRows[0]->GetText().ToString(),FString(TEXT("In progress")));
-            TestTrue(TEXT("Journal countdown advances after the server snapshot"),Gameplay->QuestDetailLabels.ContainsByPredicate([](UTextBlock* Label)
-                {return Label && Label->GetText().ToString().Contains(TEXT("00:59:"));}));
-            const auto& RowGeometry=Gameplay->QuestStatusRows[1]->GetCachedGeometry();
-            const FVector2D RowPoint=Canvas->GetCachedGeometry().AbsoluteToLocal(RowGeometry.LocalToAbsolute(RowGeometry.GetLocalSize()*.5));
-            TestTrue(TEXT("Clicking journal status selects its contract"),Gameplay->TryHandleOverlayClick(RowPoint));
-            TestEqual(TEXT("Journal detail follows the clicked second row"),Gameplay->SelectedContractId,Gameplay->QuestRowIds[1]);
-        }
+        FACEContractUIFixture::Run(*this,PreviewDat,Gameplay,Manager,Canvas,Resources,Client->Session->Contracts,
+            [&](const FString& Name,float Scale){CaptureScreen(Name,Scale);});
         Gameplay->JournalStorageRoot=FPaths::ProjectSavedDir()/TEXT("Automation/JournalFixture");
         Gameplay->HandleNamedClick(TEXT("JournalTab")); CaptureScreen(TEXT("GameplayJournal"));
         TestEqual(TEXT("Journal tab remains selected across refresh"),Gameplay->ActiveQuestTab,FString(TEXT("JournalPage")));
@@ -4781,7 +5049,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 Session.CachedC2SPackets.Reset();
                 const FVector2D Point=FVector2D(Origin)+FVector2D(El->Width/2,El->Height/2);
                 Manager->NotifyMouseDown(Point,Canvas->GetCachedGeometry().GetLocalSize(),EKeys::LeftMouseButton);
-                Manager->NotifyMouseUp(Point,Canvas->GetCachedGeometry().GetLocalSize(),EKeys::LeftMouseButton,true);
+                Manager->NotifyMouseUp(Point,Canvas->GetCachedGeometry().GetLocalSize(),EKeys::LeftMouseButton);
                 TestEqual(TEXT("Actual pointer click toggles the server-backed option"),Client->IsCharacterOptionSet(Check.Value),!Before);
                 TestTrue(TEXT("Checkbox emits character option action"),HasAction(ACEGameAction::SetSingleCharacterOption));
             }
@@ -4849,6 +5117,12 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 TestTrue(TEXT("Inventory ellipsis fits inside native margins"),ACEDatText::Layout(TitleFont,Fitted,InventoryTitleElement->Width-10,true)[0].Width<=InventoryTitleElement->Width-10);
             }
         }
+        // Earlier fixture actions send requests without server replies. This
+        // isolated targeting/scale check starts idle; busy precedence is covered
+        // with real request/completion events in MouseCursors.
+        Client->Session->ResetCursorWaits();
+        const int32 PreviousCursorCombatMode=Client->Session->PlayerVitals.CombatMode;
+        Client->Session->PlayerVitals.CombatMode=1;
         Controller->MouseCursorWidget=NewObject<UACEMouseCursorWidget>(); Controller->MouseCursorWidget->Initialize();
         auto CursorSlate=Controller->MouseCursorWidget->TakeWidget();
         Controller->RetailCursorDefaultTex=Resources->ResolveIconTexture(0x06004D68);
@@ -4881,6 +5155,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             Controller->SetPendingUseTargeting(false);
             TestTrue(TEXT("Completed use restores retail arrow"),CursorArt->GetBrush().GetResourceObject()==Controller->RetailCursorDefaultTex);
         }
+        Client->Session->PlayerVitals.CombatMode=PreviousCursorCombatMode;
         FACEWorldObject Stone; Stone.Guid=9876; Stone.ItemType=ACEItemType::ManaStone;
         Stone.ContainerId=Player.Guid; Stone.ItemUseable=0x000A0008; Stone.TargetType=ACEItemType::Caster|ACEItemType::Creature;
         Client->Session->WorldObjects.Add(Stone.Guid,Stone);

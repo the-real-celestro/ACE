@@ -12,6 +12,7 @@ class UCapsuleComponent;
 class UTextRenderComponent;
 class UACECharacterAppearanceComponent;
 class UACEScriptComponent;
+class UACETerrainPresenterComponent;
 
 /** Visual for an ACE world object — Setup + ObjDesc appearance when DAT files are present. */
 UCLASS()
@@ -21,9 +22,14 @@ class ACECLIENT_API AACEWorldEntityActor : public AActor
 	friend class FACEMovementReviewTest;
 	friend class FACERemoteSupportTest;
 	friend class FACERemoteMovementReplayTest;
+	friend class FACERemoteTurnTargetsTest;
+	friend class FACENetworkAnimationParityTest;
+	friend class FACESpawnSupportTest;
 
 public:
 	AACEWorldEntityActor();
+	/** Streaming source that owns the collision needed before gravity can advance. */
+	TWeakObjectPtr<UACETerrainPresenterComponent> PlacementTerrain;
 
 	virtual void Tick(float DeltaTime) override;
 
@@ -35,7 +41,7 @@ public:
 	bool ApplyDatAppearanceFromObject(const FACEWorldObject& Object);
 
 	UFUNCTION(BlueprintCallable, Category = "ACE")
-	void ApplyACEPosition(const FACEPosition& Position);
+	void ApplyACEPosition(const FACEPosition& Position, bool bPositionEvent = true);
 	/** Apply a server placement pose before resolving world contact and selection bounds. */
 	void ApplyPositionPlacement(int32 PlacementId);
 
@@ -238,13 +244,9 @@ public:
 	void EndRemoteVRRoot();
 	FVector InterpolateRemoteLocation(const FVector& Target, float DeltaTime, const FVector& Movement = FVector::ZeroVector) const;
 
-	/** Corrections larger than this many AC units snap (portals/teleports) instead of blending. */
+	/** Non-creature presentation corrections beyond this distance snap. Creatures use retail distance/teleport rules. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACE|Movement", meta = (ClampMin = "5.0", ClampMax = "192.0"))
 	float RemoteSnapDistance = 40.f;
-
-	/** Max seconds of free integration away from the last F748 before clamping drift. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACE|Movement", meta = (ClampMin = "0.0", ClampMax = "2.0"))
-	float RemoteMaxExtrapolate = 2.f;
 
 	/** Signed AC-space degrees/sec at TurnSpeed=1, from the DAT turn modifier. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACE|Movement", meta = (ClampMin = "-360.0", ClampMax = "360.0"))
@@ -252,6 +254,10 @@ public:
 	float RemoteTurnRateDegrees = FMath::RadiansToDegrees(-1.5f);
 	float RemoteWalkSpeedAc = 3.1199999f;
 	float RemoteRunSpeedAc = 4.f;
+	float RemoteRunRate = 1.f; // Last interpreted run rate, retained across stops like retail.
+	bool bRemoteConstrained = false;
+	float RemoteConstraintTravelAc = 0.f;
+	float RemoteConstraintStartAc = 10.f, RemoteConstraintMaxAc = 50.f;
 	float RemoteBackSpeedAc = 1.56f;
 	float RemoteStickySeconds = 0.f;
 	uint32 ApproachTargetSetup = 0;
@@ -277,9 +283,11 @@ public:
 
 protected:
 	/** Local player position is live; its world-object network echo can be stale. */
-	bool ResolveFacingTarget(int32 TargetGuid, FVector& Location) const;
+	bool ResolveFacingTarget(int32 TargetGuid, FVector& Location, bool bAllowCachedPosition = true) const;
 	bool ResolveMovementTarget(int32 TargetGuid, FVector& Location, float& Radius, float& Height);
 	FVector AdvanceRemoteMoveTo(float Seconds);
+	void AdvanceRemoteTurn(const FQuat& Desired, float Speed, float Seconds);
+	float RemoteTurnAnimationRate = 0.f;
 	void SetRemoteLocomotion(float Forward, float Strafe, bool bRunning, float Rate);
 	enum class ERemoteMoveToPhase : uint8 { Begin, Turn, Move, FinalTurn };
 	ERemoteMoveToPhase RemoteMoveToPhase = ERemoteMoveToPhase::Begin;
@@ -293,6 +301,8 @@ protected:
 	float MovementSweepRadius = 25.f;
 	float MovementBodyOffsetZ = 90.f;
 	TArray<FVector4f> MovementSpheresAc;
+	/** A loaded setup explicitly has no spheres; an unavailable setup is not evidence of this. */
+	bool bSetupHasNoMovementSpheres = false;
 	float MovementStepDownHeight = 50.f;
 	float MovementStepHeight = 50.f;
 	bool bHaveVRPresentation = false;

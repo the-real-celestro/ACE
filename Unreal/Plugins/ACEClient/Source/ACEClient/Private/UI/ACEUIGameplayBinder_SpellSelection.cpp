@@ -7,12 +7,15 @@
 #include "ACESpellbookFilters.h"
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACEUIResourceResolver.h"
+#include "UI/ACEUIElementManager.h"
 
 void UACEUIGameplayBinder::HandleSpellLearned(int32 SpellId)
 {
 	if (!Client || !Manager || !Canvas || SpellId <= 0) return;
 	const auto Session = Client->GetSession();
 	if (!Session || Session->GetState() != EACESessionState::InWorld || !Session->GetKnownSpells().Contains(SpellId)) return;
+	if (PlayerController)
+		if (auto* VR = PlayerController->GetVRComponent(); VR && VR->RevealLearnedSpellInMenu(SpellId)) return;
 	// Reveal the learned spell even if its school/level was unchecked. Retain
 	// all other filter choices instead of resetting the player's book filters.
 	if (auto* Dat = Canvas->GetResourceResolver() ? Canvas->GetResourceResolver()->GetDatSubsystem() : nullptr)
@@ -116,6 +119,11 @@ void UACEUIGameplayBinder::SetCombatSpellBar(int32 Tab)
 	if (!Client || Tab < 0 || Tab >= 8) return;
 	SyncSpellTabSelection();
 	Client->SetActiveSpellBar(Tab);
+	// Tab selection is presentation only; reapplying magic stance here sends
+	// ChangeCombatMode and interrupts the server's current spell.
+	if (Manager) for (int32 I = 0; I < 8; ++I)
+		Manager->SetElementVisibleByName(FString::Printf(TEXT("Spellcasting_Bank%d"), I + 1),
+			CombatMode == int32(ACECombatMode::Magic) && I == Tab);
 	SyncSpellTabSelection();
 	SyncSpellcastTabChrome();
 	RefreshSpellHotbarOverlays();

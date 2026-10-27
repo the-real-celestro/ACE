@@ -86,11 +86,15 @@ public:
 
 	/** Raise a floaty (or the floaty containing Element) above sibling floaties. */
 	void BringFloatyToFront(const TSharedPtr<FACEUIElement>& Element);
+	/** Keep a window accessible; recovery can override the offscreen-drag preference. */
+    void ConstrainWindow(const TSharedPtr<FACEUIElement>& Window, FIntPoint ViewSize, bool bForce=false);
 
 	/** Mouse in viewport space; converts to canvas then routes like retail. */
 	void NotifyMouseMove(FVector2D ViewportPos, FVector2D ViewportSize);
 	void NotifyMouseDown(FVector2D ViewportPos, FVector2D ViewportSize, FKey Button);
-	void NotifyMouseUp(FVector2D ViewportPos, FVector2D ViewportSize, FKey Button, bool bRequireSameTarget = false);
+	void NotifyMouseUp(FVector2D ViewportPos, FVector2D ViewportSize, FKey Button);
+	/** Retail hot buttons activate on press and repeat while held over the button. */
+	void TickPointerInput(double Now);
 	/** Drop capture without activating the button that was pressed. */
 	void CancelPointerCapture();
 
@@ -124,7 +128,6 @@ public:
 
 private:
 	UPROPERTY(Transient) TObjectPtr<UACEUIResourceResolver> ResourceResolver;
-    void ConstrainWindow(const TSharedPtr<FACEUIElement>& Window, FIntPoint ViewSize);
 	mutable TMap<FString, TArray<TSharedPtr<FACEUIElement>>> NameLookupIndex;
 	mutable bool bNameLookupIndexValid = false;
 	mutable uint64 NameLookupRevision = 0;
@@ -137,7 +140,9 @@ private:
 	TSharedPtr<FACEUIElement> CaptureElement;
 	TSharedPtr<FACEUIElement> HoverElement;
 	TMap<uint32, FElementFactory> Factories;
-	int32 CaptureRefCount = 0;
+	bool bHotClicking = false;
+	double NextHotClickTime = 0;
+	FIntPoint PointerCanvas = FIntPoint::ZeroValue;
 	bool bUiLocked = true;
 	bool bQuickShowUi = false;
 	uint32 NextFloatyZ = 1000;

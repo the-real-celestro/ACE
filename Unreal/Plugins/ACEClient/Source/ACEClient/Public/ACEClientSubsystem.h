@@ -61,11 +61,13 @@ UCLASS()
 class ACECLIENT_API UACEClientSubsystem : public UGameInstanceSubsystem, public FTickableGameObject
 {
 	friend class FACEPortalLifetimeTest;
+	friend class FACEFoundryTest;
 	friend class FACEUIWorkloadTest;
 	friend class FACEPluginEquipmentTest;
 	friend class FACEPluginRequestsTest;
 	friend class FACEUCMLootLatencyTest;
     friend class FACEPluginCompanionTest;
+    friend class FACEPluginWorldPlateTest;
     friend class FACEThirdEyeTest;
     friend class FACEPluginPublicAPITest;
 	friend class FACEItemToolsTest;
@@ -81,6 +83,7 @@ class ACECLIENT_API UACEClientSubsystem : public UGameInstanceSubsystem, public 
 	friend class FACEItemPresentationTest;
 	friend class FACESelectionToolbarTest;
     friend class FACEActionDeckTest;
+    friend class FACERetailCursorTest;
 	friend class FACEChatParityTest;
 	friend class FACEUILayoutCommandsTest;
 	friend class FACEUIInteractionParityTest;

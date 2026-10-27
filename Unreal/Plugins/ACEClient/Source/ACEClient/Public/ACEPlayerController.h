@@ -32,6 +32,7 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
 {
 	GENERATED_BODY()
 	friend class FACEPerformanceScene;
+	friend class FACERemoteTurnTargetsTest;
 	friend class FACEWaspNetworkLagTest;
 	friend class FACEDungeonInterfacesTest;
 	friend class FACECollisionSizingTest;
@@ -57,6 +58,7 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
 	friend class FACEPortalMotionTest;
 	friend class FACELoadingTransitionTest;
 	friend class FACEPortalInterfaceTest;
+	friend class FACERetailLogoutTest;
 	friend class FACEPortalRetirementTest;
 	friend class FACELedgeStairsTest;
 	friend class FACELedgeSafetyTest;
@@ -137,7 +139,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACE|UI")
 	bool bUsePortalTransitionOnTeleport = true;
 
-	bool IsWorldTransitionActive() const { return bEnterWorldLoading || bWorldRevealActive; }
+	bool IsWorldTransitionActive() const { return bEnterWorldLoading || bWorldRevealActive || bLogOffPresentationActive; }
 
 	/** Enables the loud per-tick / on-screen diagnostic messages used while bringing up the
 	 *  login UI. Off by default — the UMG login widget is the primary UI now, so this debug
@@ -198,7 +200,9 @@ public:
 	 */
 	void BeginUseApproach(int32 TargetGuid, float DistanceAc, bool bPickupIntoInventory = false,
 		bool bFireActionWhenInRange = true, int32 PickupAmount = 0);
-	/** Retail F / hand icon: Use selected, or PutItemInContainer for ground loot. */
+	/** Explicit pickup (F) also collects portable containers instead of opening them. */
+	void PickupSelectedObject();
+	/** Hand icon / double-click: use containers, or pick up loose non-container loot. */
 	void InteractWithSelectedObject();
 	void InteractWithObject(int32 ObjectGuid);
 
@@ -226,10 +230,13 @@ public:
 
 	/** Dual-use targeting (mana stone / key) — keep interactable cursor until cancelled. */
 	void SetPendingUseTargeting(bool bPending);
+	void SetObjectCursorTargeting(int32 Mode);
+	int32 GetObjectCursorTargeting() const { return ObjectCursorTargetMode; }
 
 public:
     class UACEUIGameplayBinder* GetActionDeckBinder() const { return DatGameplayBinder; }
     friend class FACEActionDeckTest;
+    friend class FACERetailCursorTest;
 protected:
 	bool bDesktopInterfaceHidden = false;
 	UPROPERTY()
@@ -242,6 +249,8 @@ protected:
 	bool bRetailCursorInstalled = false;
 	bool bRetailCursorInteractable = false;
 	bool bPendingUseTargeting = false;
+	int32 ObjectCursorTargetMode = 0;
+	UPROPERTY(Transient) TMap<int32,TObjectPtr<UTexture2D>> RetailActionCursorTextures;
 	UPROPERTY(Transient) TObjectPtr<UTexture2D> RetailCursorDefaultTex = nullptr;
 	UPROPERTY(Transient) TObjectPtr<UTexture2D> RetailCursorBusyTex = nullptr;
 	UPROPERTY(Transient) TArray<TObjectPtr<UACEMouseCursorWidget>> RetailWindowCursorWidgets;
@@ -456,6 +465,10 @@ protected:
 	bool bLookDownHasSaved = false;
 
 	void UpdateOrbitCamera(float DeltaTime);
+	void UpdateCameraSlope(USpringArmComponent* Boom, float DeltaTime);
+	TArray<FVector> CameraSlopeVelocities;
+	FVector CameraSlopeLastPosition = FVector::ZeroVector;
+	bool bHaveCameraSlopePosition = false;
 	void ApplyRetailCameraFov();
 	void ApplyRetailCameraPivot(USpringArmComponent* Boom, UCapsuleComponent* Capsule) const;
 	void ApplyCameraOffset(USpringArmComponent* Boom, float OffsetYAc, float OffsetZAc, float PitchDegrees, bool bKeepYaw);
@@ -569,7 +582,9 @@ protected:
 	void ApplyPendingSelfAppearance();
 	int32 PendingSelfAppearanceGuid = 0;
 
-	void BeginWorldTransition(const TCHAR* Reason);
+	void BeginWorldTransition(const TCHAR* Reason, bool bPlayEnterSound = true);
+	void PlayPortalEnterSound();
+	bool TickLogOffTransition();
 	void PreparePortalScreen();
 	void TickWorldTransition();
 	void BeginWorldReveal();
@@ -600,6 +615,8 @@ protected:
 	TObjectPtr<AACELoadingScreenActor> LoadingScreenActor = nullptr;
 
 	bool bEnterWorldLoading = false;
+	bool bLogOffPresentationActive = false;
+	bool bLogOffWorldFadeStarted = false;
 	bool bPendingEnterWorldTransition = false;
 	bool bDestinationStreamingStarted = false;
 	/** Retire the previous scene before allocating the destination; never block on a render fence. */

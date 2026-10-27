@@ -40,6 +40,40 @@ local loot_job_pending=nil
 local scroll_reads={}
 local combine_pending=nil
 local stack_pending=nil
+local history_cleanup_at=0
+-- Retry limits belong to live objects. A hunting session continually sees new
+-- GUIDs; keeping their appraisal/equipment/debuff attempts forever leaks the
+-- Lua heap even after the host has removed the corresponding world objects.
+local function prune_history(s)
+ if s.time<history_cleanup_at then return end
+ history_cleanup_at=s.time+10
+ for _,timers in ipairs({until_time,corpses,buff_skips,unavailable_spells}) do
+  for key,expires in pairs(timers) do if expires<=s.time then timers[key]=nil end end
+ end
+ local present={};if s.player then present[s.player]=true end
+ for _,list in ipairs({s.inventory or {},s.contents or {},s.targets or {},s.corpses or {},s.route_objects or {},
+  (s.fellowship or {}).members or {},(s.buff_request or {}).equipment or {}}) do
+  for _,object in ipairs(list) do if object.id then present[object.id]=true end end
+ end
+ if s.container then present[s.container]=true end
+ if s.buff_request and s.buff_request.player then present[s.buff_request.player]=true end
+ local function target_id(text)
+  for i=1,#text do if text:sub(i,i)==':' then return tonumber(text:sub(1,i-1)) end end
+  return tonumber(text)
+ end
+ for key in pairs(retries) do
+  local id=target_id(tostring(key));if id and not present[id] then retries[key]=nil end
+ end
+ for key,value in pairs(item_attempts) do
+  local id
+  if key:sub(1,2)=='id' then id=tonumber(key:sub(3))
+  elseif key:sub(1,5)=='equip' then id=target_id(key:sub(6))
+  elseif key:sub(1,6)=='corpse' then id=tonumber(key:sub(7))
+  elseif key:sub(1,6)=='debuff' then id=target_id(key:sub(7))
+  elseif key:sub(1,6)=='helper' then id=tonumber(key:sub(7,-2)) end
+  if value==0 or (id and not present[id]) then item_attempts[key]=nil end
+ end
+end
 -- An operational failure belongs to one activity, never the whole scheduler.
 -- Cooldowns prevent a failing high-priority activity starving combat/recovery.
 local activity,activity_time,activity_pauses='meta',0,{}
@@ -212,6 +246,7 @@ local function stronger_spell(v,other)
  return v.power>other.power
 end
 local function buff_tier(v,p)
+ if v.school==3 and p.item_buffs_enabled==false then return false end
  local key=v.school==4 and 'creature_buff_level' or v.school==2 and 'life_buff_level' or v.school==3 and 'item_buff_level'
  local level=key and (p[key] or 0) or 0
  return level==0 or v.level==level
@@ -240,6 +275,11 @@ local function timed_buff(e)
  return e.duration==nil or e.duration>0
 end
 -- A side-effect-free buff plan is shared by NeedBuff and the casting policy.
+local function item_enchantable(item)
+ -- Retail appraisal's ResistMagic (36), also used by ACE's IsEnchantable.
+ -- Covenant is one example; never infer eligibility from an item's name.
+ return item and ((item.int_properties or {})['36'] or 0)<9999
+end
 local function compute_buff(s,p)
  local trained={};for _,id in ipairs(s.trained_skills or {}) do trained[id]=true end
  -- Index selections once. Scanning long imported buff/exclusion lists for every
@@ -264,7 +304,7 @@ local function compute_buff(s,p)
     else item_best[v.category]=v end
    end
   end
-  if v.known~=false and (v.self_buff or (v.beneficial and v.school==3 and (v.duration or 0)>0
+  if v.known~=false and (v.school~=3 or p.item_buffs_enabled~=false) and (v.self_buff or (v.beneficial and v.school==3 and (v.duration or 0)>0
    and (v.caster_target or band(v.target_type,0x8107)~=0))) then
   local eligible=eligibility[v.category]
   if eligible==nil then
@@ -305,19 +345,31 @@ local function compute_buff(s,p)
  -- the same family on every carried weapon or armor piece. Other-player banes
  -- intentionally retain their separate equipment targeting below.
  local id=s.player or 0
+ local owned,usable_names,current_weapon={},{},nil
+ for _,v in ipairs(s.inventory or {}) do owned[v.id]=v;if v.usable and v.name then usable_names[v.name]=v end;if v.equipped and band(v.type,0x8101)~=0 then current_weapon=v end end
+ local missing={}
+ for _,e in ipairs(s.item_buffs or {}) do
+  local v=best[e.category] or item_best[e.category]
+  if v and e.target==id and confirmed[tostring(id)..':'..e.category] then
+   for _,item in ipairs(e.missing_equipment or {}) do
+    if item_enchantable(owned[item]) and (confirmed[tostring(item)..':'..e.category] or -1)<v.power and not buff_skipped(s,item,e.category) then
+     missing[e.category]=missing[e.category] or item
+    end
+   end
+  end
+ end
  for _,category in ipairs(order) do local v=best[category]
   if not buff_skipped(s,id,category) then
   local refreshed=forced_buff and (forced_buff.done[tostring(id)..':'..v.category] or -1)>=v.power
   if forced_buff and not refreshed then return v,id end
   if not forced_buff and not ((active[v.category] or -1)>=v.power or (confirmed[tostring(id)..':'..v.category] or -1)>=v.power) then return v,id end
+  if not forced_buff and missing[category] and not buff_skipped(s,missing[category],category) then return v,missing[category] end
   end
  end
- local owned,usable_names,current_weapon={},{},nil
- for _,v in ipairs(s.inventory or {}) do owned[v.id]=v;if v.usable and v.name then usable_names[v.name]=v end;if v.equipped and band(v.type,0x8101)~=0 then current_weapon=v end end
  for _,binding in ipairs(p.item_buff_targets or {}) do
   local item=binding.item==0 and current_weapon or owned[binding.item];local exemplar=by_id[binding.spell]
   local v=exemplar and item_best[exemplar.category]
-  if item and v then
+  if item_enchantable(item) and v then
    -- Keep UCM's player-targeted armor/weapon auras. Explicit non-redirectable
    -- item enchantments (for example a jewelry target) retain their own target.
    local target=(v.caster_target or band(v.target_type,0x8107)~=0) and id or item.id
@@ -325,6 +377,7 @@ local function compute_buff(s,p)
     local key=tostring(target)..':'..v.category
     if forced_buff and (forced_buff.done[key] or -1)<v.power then return v,target end
     if not forced_buff and (confirmed[key] or -1)<v.power and (target~=id or (active[v.category] or -1)<v.power) then return v,target end
+    if not forced_buff and target==id and missing[v.category] then return v,missing[v.category] end
    end
   elseif item and exemplar and item_blocked[exemplar.category] then blocked[exemplar.category]=exemplar
   end
@@ -336,7 +389,7 @@ local function compute_buff(s,p)
  for _,expires in pairs(buff_skips) do if s.time<expires then incomplete=true;break end end
  for _,b in ipairs(p.buff_items or {}) do
   local v=by_id[b.spell]
-  if v and (band(v.flags,0x2000)==0 or s.in_fellowship) and (active[v.category] or -1)<v.power then
+  if v and (v.school~=3 or p.item_buffs_enabled~=false) and (band(v.flags,0x2000)==0 or s.in_fellowship) and (active[v.category] or -1)<v.power then
    if usable_names[b.name] and (item_attempts['buffitem'..b.name] or 0)<3 then return nil,nil,incomplete,true end
   end
  end
@@ -347,7 +400,7 @@ end
 -- or inventory across ticks.
 local buff_plan
 local function next_buff(s,p)
- local keys={'auto_buffs','buffs','excluded_buffs','excluded_buff_spells','item_buff_targets','buff_items','skill_margin','buff_skill_margin','refresh_seconds','creature_buff_level','life_buff_level','item_buff_level','protection_profile','bane_profile','protection_custom','bane_custom'}
+ local keys={'auto_buffs','item_buffs_enabled','buffs','excluded_buffs','excluded_buff_spells','item_buff_targets','buff_items','skill_margin','buff_skill_margin','refresh_seconds','creature_buff_level','life_buff_level','item_buff_level','protection_profile','bane_profile','protection_custom','bane_custom'}
  local same=buff_plan and buff_plan.snapshot==s
  if same then for _,k in ipairs(keys) do if buff_plan.options[k]~=p[k] then same=false;break end end end
  if not same then
@@ -1013,17 +1066,23 @@ end
 local function empty_mana_stone(v,p)
  return v.identified and v.usable and v.mana_empty and band(v.type,0x80000)~=0
 end
+local function reserved_mana_source(v,q,p,option)
+ -- Pickup can recreate the object and invalidate its corpse appraisal. Keep
+ -- that exact pickup reserved while reassessing it; unknown is not unsuitable.
+ return q and q.wcid==v.wcid and q.count==(v.count or 1) and v.resource_available~=false
+  and (not v.identified or mana_source_candidate(v,p,option))
+end
 local function mana_source_demand(inventory,p,option)
  if not option('fill_mana_stones',false) or mana_fill_pending then return 0 end
  local empty,reserved=0,0
  for _,v in ipairs(inventory) do
   if empty_mana_stone(v,p) then empty=empty+1 end
   local q=mana_sources[v.id]
-  if q and q.wcid==v.wcid and q.count==(v.count or 1) and v.resource_available~=false and mana_source_candidate(v,p,option) then reserved=reserved+1 end
+  if reserved_mana_source(v,q,p,option) then reserved=reserved+1 end
  end
  return math.max(0,empty-reserved)
 end
-local function equipment_mana(s,p,inventory,option)
+local function equipment_mana(s,p,inventory,option,assess)
  if not activity_ready('item_mana') then return end
  if mana_fill_pending then
   local q=mana_fill_pending;local stone
@@ -1056,13 +1115,14 @@ local function equipment_mana(s,p,inventory,option)
   end
  end
  if option('fill_mana_stones',false) and s.time>=(until_time.mana_fill or 0) then
-  local stone,source;local present={}
+  local stone,source,unassessed;local present={}
   for _,v in ipairs(inventory) do
    if empty_mana_stone(v,p) then stone=stone or v end
    local q=mana_sources[v.id]
    if q then
     present[v.id]=true
-    if q.wcid==v.wcid and q.count==(v.count or 1) and v.resource_available~=false and mana_source_candidate(v,p,option) then source=source or v
+    if reserved_mana_source(v,q,p,option) then
+     if v.identified then source=source or v else unassessed=unassessed or v end
     else mana_sources[v.id]=nil end -- A player changed/protected the item after pickup.
    end
   end
@@ -1071,6 +1131,7 @@ local function equipment_mana(s,p,inventory,option)
    mana_fill_pending={stone=stone.id,source=source.id,serial=s.action_serial or 0,deadline=s.time+15}
    return {action='apply_item',item=stone.id,target=source.id,status='Filling '..stone.name..' from '..source.name..' (consumes item)'}
   end
+  if stone and unassessed and s.time>=(until_time['id'..unassessed.id] or 0) then return assess(unassessed) end
  end
 end
 
@@ -1394,9 +1455,9 @@ local function tick(s,p)
  local usable_names={};for _,v in ipairs(inventory) do if v.usable and v.name then usable_names[v.name]=v end end
  local weapon_allowed,pet_allowed=equipment_selection(p,inventory)
  for _,v in ipairs(inventory) do
-  if not v.equipped then item_attempts['equip'..v.id..':remove']=0
-  elseif band(v.equipped_slot,0x200000)~=0 then item_attempts['equip'..v.id..':offhand']=0
-  else item_attempts['equip'..v.id]=0 end
+  if not v.equipped then item_attempts['equip'..v.id..':remove']=nil
+  elseif band(v.equipped_slot,0x200000)~=0 then item_attempts['equip'..v.id..':offhand']=nil
+  else item_attempts['equip'..v.id]=nil end
  end
  local function equip(v,offhand,unequip)
   local key='equip'..v.id..(offhand and ':offhand' or unequip and ':remove' or '')
@@ -1912,7 +1973,7 @@ local function tick(s,p)
     and s.time>=(until_time['id'..v.id] or 0) then activity='item_mana';return assess(v) end
   end
  end
- local mana_action=equipment_mana(s,p,inventory,option);if mana_action then return mana_action end
+ local mana_action=equipment_mana(s,p,inventory,option,assess);if mana_action then return mana_action end
  local function buffs(refresh)
  if health_critical or not activity_ready('buffs') then return end
  if forced_buff or option('buffing',true) then
@@ -1933,6 +1994,17 @@ local function tick(s,p)
   -- Missing components or rejected families must not stop the rest of a run.
   if v then
    local key=tostring(id)..':'..v.category
+   -- Assess direct equipment targets before changing weapons or attempting a
+   -- cast. Unknown gear can be unenchantable even though it can be wielded.
+   if id~=(s.player or 0) then
+    for _,item in ipairs(inventory) do if item.id==id and item.identified==false then
+     if (item_attempts['id'..id] or 0)>=3 then
+      buff_skips[key]=s.time+120;buff_plan=nil
+      return result(nil,'Skipping unassessed buff target: '..item.name)
+     end
+     return assess(item)
+    end end
+   end
    if not forced_buff and s.time<(until_time['buffack'..id..':'..v.id] or 0) then return result(nil,'Waiting for buff timer update') end
    if s.time<(until_time[key] or 0) then return result(nil,'Waiting for buff confirmation') end
    if mp<option('stop_mana',10) then return failed('Mana too low to buff; configure recovery') end
@@ -1952,7 +2024,7 @@ local function tick(s,p)
   end
   for _,b in ipairs(p.buff_items or {}) do
    local spell=by_id[b.spell];local item=usable_names[b.name]
-   if spell and item and (band(spell.flags,0x2000)==0 or s.in_fellowship) then
+   if spell and item and (spell.school~=3 or p.item_buffs_enabled~=false) and (band(spell.flags,0x2000)==0 or s.in_fellowship) then
     local active,before=false,0;for _,e in ipairs(s.enchantments or {}) do if timed_buff(e) and e.category==spell.category and e.power>=spell.power then before=math.max(before,e.remaining);if e.remaining>buff_refresh_window(s,settings,e.duration or spell.duration) then active=true end end end
     local needed=forced_buff and not forced_buff.done['item'..b.name] or (not forced_buff and not active)
     if needed and (item_attempts['buffitem'..b.name] or 0)<3 then
@@ -3079,6 +3151,16 @@ return function(s,p)
   retries={};until_time={};item_attempts={};corpses={};monster_failures={};monster_blacklist={};ghost_attempts={};ghost_hp={}
   follow_path={};follow_target=nil;follow_teleport=nil
   activity_pauses={};activity_pause_reasons={}
+  history_cleanup_at=0
+ end
+ prune_history(s)
+ -- Count consecutive unresolved requests, not successful assessments over the
+ -- whole session. Loot receipt and real item changes may legitimately require
+ -- a fresh appraisal later, including the currently configured weapon/ammo.
+ for _,list in ipairs({s.inventory or {},s.contents or {},(s.buff_request or {}).equipment or {}}) do
+  for _,item in ipairs(list) do if item.identified then
+   local key='id'..item.id;item_attempts[key]=nil;until_time[key]=nil
+  end end
  end
  buff_plan=nil
  local intent=run(s,p)

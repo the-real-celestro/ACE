@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "ACETestDatDirectory.h"
 #include "Misc/ScopeExit.h"
 #include "ACECharacterAppearanceComponent.h"
 #include "ACEClientSubsystem.h"
@@ -27,7 +28,7 @@ bool FACEDeferredWorldAppearanceTest::RunTest(const FString&)
     ON_SCOPE_EXIT { GI->Shutdown(); World->DestroyWorld(false); GEngine->DestroyWorldContext(World); };
 
     auto* Dat = GI->GetSubsystem<UACEDatSubsystem>();
-    if (!TestTrue(TEXT("Retail models are available"), Dat && Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))) return false;
+    if (!TestTrue(TEXT("Retail models are available"), Dat && Dat->LoadDatDirectory(ACETestDatDirectory()))) return false;
     Dat->SetLightweightStreaming(false);
     auto* Client = GI->GetSubsystem<UACEClientSubsystem>();
     auto Session = Client->GetSession();
@@ -63,11 +64,13 @@ bool FACEDeferredWorldAppearanceTest::RunTest(const FString&)
         Session->WorldObjects.Add(Immediate.Guid, Immediate);
         Presenter->SpawnOrUpdateEntity(Immediate, true);
         for (int32 Frame = 0; Frame < 30; ++Frame) Presenter->DrainPendingDatAppearance();
-        TestTrue(TEXT("Stationary server prop remains queued throughout DAT indexing"), Presenter->PendingDatAppearance.Contains(Prop.Guid));
+        TestTrue(TEXT("Stationary server prop remains queued throughout DAT indexing"),
+            Presenter->PendingSpawns.ContainsByPredicate([&](const auto& Item) { return Item.Guid == Prop.Guid; }));
         TestEqual(TEXT("Waiting for the archive spends no asset failures"), Presenter->AppearanceRetryCounts.FindRef(Prop.Guid), 0);
         TestTrue(TEXT("A cold immediate setup with scripts is not mistaken for completed particle-only geometry"),
-            Presenter->PendingDatAppearance.Contains(Immediate.Guid));
+            Presenter->PendingSpawns.ContainsByPredicate([&](const auto& Item) { return Item.Guid == Immediate.Guid; }));
     }
+    Presenter->DrainPendingSpawns();
     // Each drain may stop after one expensive mesh to honor its frame budget.
     for (int32 Pass = 0; Pass < 2; ++Pass) Presenter->DrainPendingDatAppearance();
     auto* Actor = Presenter->FindEntityActor(Prop.Guid);
