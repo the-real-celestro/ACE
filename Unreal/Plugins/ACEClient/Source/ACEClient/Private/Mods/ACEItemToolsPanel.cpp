@@ -45,7 +45,7 @@ public:
         for(const auto& P:Host->Plugins)if(P->Id==TEXT("itemtools"))Plugin=P;
         if(!Plugin)return;
         auto Tabs=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4,4));
-        for(const TCHAR* Name:{TEXT("Give"),TEXT("Buy / Sell"),TEXT("Profiles"),TEXT("Chests"),TEXT("Restock")})
+        for(const TCHAR* Name:{TEXT("Give"),TEXT("Buy / Sell"),TEXT("Profiles"),TEXT("Chests"),TEXT("Restock"),TEXT("Merge")})
             Tabs->AddSlot()[SNew(SACEPluginTab).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).Tag(TEXT("ItemToolsTab")).Text(FText::FromString(Name))
                 .Selected_Lambda([this,Name](){return Page==Name;})
                 .OnClicked_Lambda([this,Name](){Page=Name;Rebuild();Scroll->ScrollToStart();return FReply::Handled();})];
@@ -205,6 +205,14 @@ private:
             Quantity(TEXT("give_limit"),TEXT("Max units (0 = all)"));Quantity(TEXT("delay_ms"),TEXT("Transfer delay (ms)"),250,5000);
             Start(TEXT("give"),TEXT("Start giving"));
         }
+        else if(Page==TEXT("Merge"))
+        {
+            Heading(TEXT("Merge similar items"),TEXT("Combine matching partial stacks across your main backpack and all carried bags, up to each item's maximum stack size."));
+            Add(Text(TEXT("Equipped, retained and offered items are excluded. Full stacks stay intact. Each merge waits for server confirmation; Stop cancels the remaining work."),14,Muted));
+            Quantity(TEXT("delay_ms"),TEXT("Pause between merges (milliseconds)"),250,5000);
+            Start(TEXT("merge"),TEXT("Merge similar items"));
+            Add(Text(TEXT("Chat command: /acueitems merge"),12,Muted));
+        }
         else if(Page==TEXT("Buy / Sell"))
         {
             Heading(TEXT("Vendor exchange"),TEXT("Open a vendor and select its stock to buy. Choose an inventory item to sell for funding, or leave the buy item empty to sell only."));
@@ -268,7 +276,7 @@ bool FACEItemToolsPanelTest::RunTest(const FString&)
     {
         FWidgetRenderer Renderer(false,true);
         const FString Folder=FPaths::ProjectSavedDir()/TEXT("ItemToolsReview/UI");IFileManager::Get().MakeDirectory(*Folder,true);
-        for(const TCHAR* Page:{TEXT("Give"),TEXT("Buy / Sell"),TEXT("Profiles"),TEXT("Chests"),TEXT("Restock")})for(int Width:{480,380})
+        for(const TCHAR* Page:{TEXT("Give"),TEXT("Buy / Sell"),TEXT("Profiles"),TEXT("Chests"),TEXT("Restock"),TEXT("Merge")})for(int Width:{480,380})
         {
             auto Panel=SNew(ACEItemToolsPanel::SItemToolsPanel).Host(H).Page(Page).ShowTitle(false);
             const FVector2D Size(Width,360);auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);

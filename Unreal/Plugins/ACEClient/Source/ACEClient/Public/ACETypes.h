@@ -1200,6 +1200,8 @@ struct ACECLIENT_API FACEWorldObject
 	GENERATED_BODY()
 	/** Transient event metadata: cached placement is not a fresh physics update. */
 	bool bAppearanceOnlyUpdate = false;
+	/** Transient event metadata: a wield/parent notification, not a new item description. */
+	bool bAttachmentOnlyUpdate = false;
 
 	UPROPERTY(BlueprintReadOnly, Category = "ACE")
 	int32 Guid = 0;
@@ -1716,6 +1718,8 @@ struct ACECLIENT_API FACEAppraisalInfo
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 Mana = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 MaxMana = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 Strength = 0;
+    /** Presence in the creature appraisal, independent of zero-valued vitals. */
+    bool bHasCreatureHealth = false, bHasCreatureAttributes = false;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 Endurance = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 Quickness = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 Coordination = 0;

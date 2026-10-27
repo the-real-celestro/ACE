@@ -576,9 +576,9 @@ void FACESession::TickPositionReporting(float DeltaSeconds)
 		const bool CellOrContactChanged = bHaveReportedPosition
 			&& (LastReportedPosition.CellId != PlayerPosition.CellId || bLastReportedContact != bAutoPosContact);
 		const bool PoseChanged = !bHaveReportedPosition || CellOrContactChanged
-			|| !LastReportedPosition.Location.Equals(PlayerPosition.Location, .0001)
-			|| !LastReportedPosition.RotationXYZ.Equals(PlayerPosition.RotationXYZ, .0001)
-			|| !FMath::IsNearlyEqual(LastReportedPosition.RotationW, PlayerPosition.RotationW, .0001f);
+			|| !LastReportedPosition.Location.Equals(PlayerPosition.Location, .0002)
+			|| !LastReportedPosition.RotationXYZ.Equals(PlayerPosition.RotationXYZ, .0002)
+			|| !FMath::IsNearlyEqual(LastReportedPosition.RotationW, PlayerPosition.RotationW, .0002f);
 		// SendVRPose now pairs each tracked sample with its feet. Do not send a
 		// second timed report in the same frame; retain normal reporting if the
 		// tracking stream pauses or the headset is disabled.
@@ -4547,10 +4547,13 @@ void FACESession::SendSoulEmoteMotion(uint32 MotionCommand)
 	W.WriteUInt16(ServerControlSeq);
 	W.WriteUInt16(TeleportSeq);
 	W.WriteUInt16(ForcePositionSeq);
-	W.WriteUInt8(0x01); // contact
+	W.WriteUInt8(bAutoPosContact ? 0x01 : 0x00);
 	W.Align();
 
 	SendGameAction(ACEGameAction::MoveToState, W.GetData(), ACEQueue::WeenieQueue);
+	// A gesture is another SendMovementEvent: retain physical contact and
+	// restart the periodic position clock just like an ordinary movement send.
+	AutoPosTimer = 0.f;
 }
 
 void FACESession::SendTell(const FString& TargetName, const FString& Message)
@@ -4731,6 +4734,43 @@ void FACESession::SendTurbineChat(uint32 ChannelId, uint32 ChatType, const FStri
 	SendGameMessage(ACEOpcode::TurbineChat, W.GetData(), ACEQueue::LoginQueue);
 }
 
+int32 FACESession::FindContainerMergeTarget(int32 ItemGuid, int32 ContainerGuid, int32 Amount) const
+{
+	const auto* Item=WorldObjects.Find(ItemGuid);
+	const auto* Destination=WorldObjects.Find(ContainerGuid);
+	if (!Item || !ContainerGuid || ItemGuid==ContainerGuid || Amount<=0
+		|| !Item->WeenieClassId || Item->MaxStackSize<=1
+		|| Item->ContainerId==ContainerGuid || Item->WielderId || Item->ParentGuid || Item->CurrentWieldedLocation
+		|| Item->StackSize<0 || Amount>FMath::Max(1,Item->StackSize)
+		|| (Destination && !ACEInventoryRules::CheckHookStatus(*Item,*Destination))) return 0;
+	auto Offered=[&](int32 Guid)
+	{
+		for(int32 Depth=0;Guid && Guid!=PlayerGuid && Depth<32;++Depth)
+		{
+			if(TradeSelfItems.Contains(Guid)||TradePartnerItems.Contains(Guid))return true;
+			const auto* Object=WorldObjects.Find(Guid);Guid=Object?Object->ContainerId:0;
+		}
+		return false;
+	};
+	if(Offered(ItemGuid)||Offered(ContainerGuid))return 0;
+	// ItemHolder::AttemptAutoMerge uses the destination's retail item-list order,
+	// then its contained packs. Same-bag moves remain deliberate reorders/splits.
+	TArray<int32> Containers{ContainerGuid};
+	TArray<int32> Packs;GetContainerPackGuids(ContainerGuid,Packs);Containers.Append(Packs);
+	for(int32 Container:Containers)
+	{
+		if(Offered(Container))continue;
+		TArray<int32> Items;GetPackItemGuids(Container,Items);
+		for(int32 Guid:Items)
+		{
+			const auto* Other=WorldObjects.Find(Guid);
+			if(Other && !Other->WielderId && !Other->ParentGuid && !Other->CurrentWieldedLocation
+				&& Other->StackSize>=0 && !Offered(Guid) && ACEInventoryRules::MergeAmount(*Item,*Other)>=Amount)return Guid;
+		}
+	}
+	return 0;
+}
+
 void FACESession::SendPutItemInContainer(int32 ItemGuid, int32 ContainerGuid, int32 Placement)
 {
 	if (State != EACESessionState::InWorld || ItemGuid == 0 || ContainerGuid == 0)
@@ -4743,41 +4783,25 @@ void FACESession::SendPutItemInContainer(int32 ItemGuid, int32 ContainerGuid, in
 	// Placement is an insertion index, never a sparse grid address (IDList::AddAtNum).
 	if (const FACEWorldObject* Item = WorldObjects.Find(ItemGuid))
 	{
-		auto IsInContainer = [&](const FACEWorldObject& Object, int32 Root)
+		// Manual unequip/hotbar use reaches this path without the swap planner.
+		// ACE can dequip before rejecting a full bag, then silently restore the
+		// item elsewhere without ContainID. Check room before sending that action.
+		if (PlayerGuid && Item->CurrentWieldedLocation && Item->WielderId == PlayerGuid
+			&& ResolveContainerRoot(ContainerGuid) == PlayerGuid
+			&& !CanStowEquipmentInContainer(ContainerGuid))
 		{
-			int32 Owner = Object.ContainerId;
-			for (int32 Depth = 0; Owner && Depth < 32; ++Depth)
+			const int32 Fallback = ContainerGuid == PlayerGuid ? FindEquipmentStowContainer({}) : 0;
+			if (!Fallback)
 			{
-				if (Owner == Root) return true;
-				const auto* Parent = WorldObjects.Find(Owner);
-				Owner = Parent ? Parent->ContainerId : 0;
+				EmitChatMessage(TEXT("Not enough room in that pack to put away this equipment."), TEXT(""), ACEChatMessageType::TransientInfo);
+				return;
 			}
-			return false;
-		};
-		const auto* Destination = WorldObjects.Find(ContainerGuid);
-		const bool OwnedDestination = ContainerGuid == PlayerGuid || (Destination && IsInContainer(*Destination, PlayerGuid));
-		// ItemHolder::AttemptAutoMerge searches the destination and its packs for
-		// a same-WCID stack that can hold the entire pickup. Preserve deliberate
-		// rearrangement of already-owned stacks and wait for server inventory ACKs.
-		if (OwnedDestination && !IsInContainer(*Item, PlayerGuid) && Item->WielderId == 0
-			&& Item->CurrentWieldedLocation == 0 && Item->MaxStackSize > 1 && Item->StackSize >= 0
-			&& Item->WeenieClassId != 0 && !TradeSelfItems.Contains(ItemGuid) && !TradePartnerItems.Contains(ItemGuid))
-		{
-			// Retail GetObjectSplitSize treats an omitted/zero count as one item.
-			const int32 PickupCount = FMath::Max(1, Item->StackSize);
-			int32 MergeTo = 0;
-			for (const auto& Pair : WorldObjects)
-			{
-				const auto& Other = Pair.Value;
-				if (Other.Guid == ItemGuid || !IsInContainer(Other, ContainerGuid)
-					|| Other.WielderId || Other.ParentGuid || Other.CurrentWieldedLocation
-					|| Other.WeenieClassId != Item->WeenieClassId || Other.MaxStackSize <= 1
-					|| Other.StackSize < 0 || Other.MaxStackSize - FMath::Max(1, Other.StackSize) < PickupCount
-					|| TradeSelfItems.Contains(Other.Guid) || TradePartnerItems.Contains(Other.Guid)) continue;
-				if (!MergeTo || uint32(Other.Guid) < uint32(MergeTo)) MergeTo = Other.Guid;
-			}
-			if (MergeTo) { SendStackableMerge(ItemGuid, MergeTo, PickupCount); return; }
+			ContainerGuid = Fallback;
+			Placement = 0;
 		}
+		const int32 Amount=FMath::Max(1,Item->StackSize);
+		if(const int32 MergeTo=FindContainerMergeTarget(ItemGuid,ContainerGuid,Amount))
+		{SendStackableMerge(ItemGuid,MergeTo,Amount);return;}
 		int32 Count = 0;
 		for (const auto& Pair : WorldObjects)
 		{
@@ -4909,6 +4933,14 @@ void FACESession::SendCharacterOptions(uint32 Options1, uint32 Options2)
 	{
 		return;
 	}
+	// The individual appearance options trigger ACE's ObjDesc broadcast. The
+	// bulk preferences packet alone changes the flags without rebuilding gear.
+	for (int32 Option : {0x2F, 0x32})
+		if (const auto* Desc = ACECharacterOptions::Find(Option))
+		{
+			const bool Value = ((Desc->bInOptions2 ? Options2 : Options1) & Desc->Flag) != 0;
+			if (Value != IsCharacterOptionSet(Option)) SendSetSingleCharacterOption(Option, Value);
+		}
 	CharacterOptions1 = Options1;
 	CharacterOptions2 = Options2;
 	// Preserve the server's spell filters when applying other character options.
@@ -4972,32 +5004,35 @@ int32 FACESession::FindEquipmentStowContainer(const TMap<int32, int32>& Reserved
 {
     TArray<int32> Packs;GetPlayerPackGuids(Packs);Packs.Insert(PlayerGuid,0);
     for(int32 Container:Packs)
-    {
-        const auto* Pack=WorldObjects.Find(Container);
-        if(Container!=PlayerGuid && (!Pack || ResolveContainerRoot(Container)!=PlayerGuid
-            || TradeSelfItems.Contains(Container) || TradePartnerItems.Contains(Container)))continue;
-        const int32 Capacity=Container==PlayerGuid && (!Pack || Pack->ItemsCapacity==0)?102:Pack->ItemsCapacity;
-        if(Capacity==-1)return Container;
-        if(Capacity<=0)continue; // foci occupy pack slots but cannot store equipment
-        TSet<int32> Items;
-        if(const auto* List=ContainerContents.Find(Container))for(const auto& Ref:*List)
-        {
-            const auto* Item=WorldObjects.Find(Ref.ItemGuid);
-            if(Ref.ContainerType==0 && (!Item || (!IsPackSlotItem(*Item) && !Item->WielderId
-                && !Item->CurrentWieldedLocation && !Item->ParentGuid
-                && (!Item->ContainerId || Item->ContainerId==Container))))Items.Add(Ref.ItemGuid);
-        }
-        // Include ObjectCreate entries even before a contents list arrives, and
-        // reserve unknown list entries so a late description cannot overfill it.
-        for(const auto& Pair:WorldObjects)
-        {
-            const auto& Item=Pair.Value;
-            if(Item.ContainerId==Container && !Item.WielderId && !Item.CurrentWieldedLocation
-                && !Item.ParentGuid && !IsPackSlotItem(Item))Items.Add(Item.Guid);
-        }
-        if(Items.Num()+Reserved.FindRef(Container)<Capacity)return Container;
-    }
+        if (CanStowEquipmentInContainer(Container, Reserved.FindRef(Container))) return Container;
     return 0;
+}
+
+bool FACESession::CanStowEquipmentInContainer(int32 Container, int32 Reserved) const
+{
+    if (!PlayerGuid || !Container) return false;
+    const auto* Pack=WorldObjects.Find(Container);
+    if(Container!=PlayerGuid && (!Pack || ResolveContainerRoot(Container)!=PlayerGuid
+        || TradeSelfItems.Contains(Container) || TradePartnerItems.Contains(Container)))return false;
+    const int32 Capacity=Container==PlayerGuid && (!Pack || Pack->ItemsCapacity==0)?102:Pack->ItemsCapacity;
+    if(Capacity==-1)return true;
+    if(Capacity<=0)return false; // foci occupy pack slots but cannot store equipment
+    TSet<int32> Items;
+    if(const auto* List=ContainerContents.Find(Container))for(const auto& Ref:*List)
+    {
+        const auto* Item=WorldObjects.Find(Ref.ItemGuid);
+        if(Ref.ContainerType==0 && (!Item || (!IsPackSlotItem(*Item)
+            && (!Item->ContainerId || Item->ContainerId==Container))))Items.Add(Ref.ItemGuid);
+    }
+    // Include ObjectCreate entries even before a contents list arrives, and
+    // reserve unknown list entries so a late description cannot overfill it.
+    for(const auto& Pair:WorldObjects)
+    {
+        const auto& Item=Pair.Value;
+        // Early attachment does not free the source slot: WieldItem does.
+        if(Item.ContainerId==Container && !IsPackSlotItem(Item))Items.Add(Item.Guid);
+    }
+    return Items.Num()+Reserved<Capacity;
 }
 
 void FACESession::SendGetAndWieldItem(int32 Guid, int64 Loc)
@@ -5171,6 +5206,10 @@ void FACESession::SendBuyItems(int32 VendorGuid, const TArray<TPair<int32, int32
 		W.WriteInt32(Pair.Key);   // amount
 		W.WriteUInt32(static_cast<uint32>(Pair.Value)); // objectID
 	}
+	// Retail CM_Vendor::Event_Buy (006AA0F0) always appends this field,
+	// including zero for pyreals. Stock ACE ignores it, but servers that read
+	// the complete retail request cannot process a packet without the trailer.
+	W.WriteUInt32(VendorCurrencyWeenie);
 	SendGameAction(ACEGameAction::Buy, W.GetData(), ACEQueue::WeenieQueue);
 }
 
@@ -6112,6 +6151,7 @@ void FACESession::HandleIdentifyObjectResponse(FACEBinaryReader& Reader)
 			const uint32 CreatureFlags = Reader.ReadUInt32();
 			Info.Health = static_cast<int32>(Reader.ReadUInt32());
 			Info.MaxHealth = static_cast<int32>(Reader.ReadUInt32());
+			Info.bHasCreatureHealth = true;
 			Info.bIsCreature = true;
 			if (CreatureFlags & 0x8) // ShowAttributes — 10 u32 attrs/vitals
 			{
@@ -6127,6 +6167,7 @@ void FACESession::HandleIdentifyObjectResponse(FACEBinaryReader& Reader)
 					Info.Mana = static_cast<int32>(Reader.ReadUInt32());
 					Info.MaxStamina = static_cast<int32>(Reader.ReadUInt32());
 					Info.MaxMana = static_cast<int32>(Reader.ReadUInt32());
+					Info.bHasCreatureAttributes = true;
 					Summary += FString::Printf(
 						TEXT("Str %d  End %d  Qui %d\nCoo %d  Foc %d  Sel %d\nStamina %d/%d  Mana %d/%d\n"),
 						Info.Strength, Info.Endurance, Info.Quickness,
@@ -7120,80 +7161,16 @@ void FACESession::HandleWieldItem(FACEBinaryReader& Reader)
 	}
 	const int32 ItemGuid = static_cast<int32>(Reader.ReadUInt32());
 	const int64 Location = static_cast<int64>(Reader.ReadInt32());
-	// Retail: weapons in the same hand replace each other. Clothing/armor uses
-	// ClothingPriority (CoverageMask) — pants UnderwearLegs and boots Feet share
-	// LowerLegWear on EquipMask but must NOT clear each other.
-	constexpr int64 WeaponHand = ACEEquipMask::MeleeWeapon | ACEEquipMask::TwoHanded
-		| ACEEquipMask::MissileWeapon | ACEEquipMask::Held;
-	constexpr int64 HeldVisual = WeaponHand | ACEEquipMask::Shield;
-	const bool bWeaponHand = (Location & WeaponHand) != 0;
-	int32 NewItemType = 0;
-	if (FACEWorldObject* NewObj = WorldObjects.Find(ItemGuid))
+	// The ordered receipt changes only this item. Other equipment has its own
+	// ContainID/removal receipt; never guess that it was moved to the main pack.
+	constexpr int64 HeldVisual = ACEEquipMask::MeleeWeapon | ACEEquipMask::TwoHanded
+		| ACEEquipMask::MissileWeapon | ACEEquipMask::Held | ACEEquipMask::Shield;
+	// A UI receipt can precede the item's Smartbox description, just as at login.
+	if (!WorldObjects.Contains(ItemGuid))
 	{
-		NewItemType = NewObj->ItemType;
-	}
-	const uint32 NewCov = ACEInferClothingPriority(Location, NewItemType);
-
-	for (TPair<int32, FACEWorldObject>& Pair : WorldObjects)
-	{
-		if (Pair.Key == ItemGuid)
-		{
-			continue;
-		}
-		FACEWorldObject& Other = Pair.Value;
-		const bool bOurs = Other.WielderId == PlayerGuid || Other.ParentGuid == PlayerGuid;
-		if (!bOurs || Other.CurrentWieldedLocation == 0)
-		{
-			continue;
-		}
-		const int64 EqLoc = Other.CurrentWieldedLocation;
-		bool bOverlap = false;
-		if (bWeaponHand && (EqLoc & WeaponHand) != 0)
-		{
-			bOverlap = true;
-		}
-		else if (NewCov != 0)
-		{
-			const uint32 EqCov = ACEInferClothingPriority(EqLoc, Other.ItemType);
-			if (EqCov != 0)
-			{
-				bOverlap = (NewCov & EqCov) != 0;
-			}
-			else if ((EqLoc & Location) != 0)
-			{
-				bOverlap = true;
-			}
-		}
-		else if ((EqLoc & Location) != 0)
-		{
-			bOverlap = true;
-		}
-		if (!bOverlap)
-		{
-			continue;
-		}
-		const bool bHadHeldMesh = Other.ParentLocation != 0;
-		Other.CurrentWieldedLocation = 0;
-		Other.WielderId = 0;
-		Other.ParentGuid = 0;
-		Other.ParentLocation = 0;
-		if (Other.ContainerId == 0)
-		{
-			Other.ContainerId = PlayerGuid;
-		}
-		RemoveFromContainerLists(Other.Guid);
-		if (TArray<FACEContainerItemRef>* Contents = ContainerContents.Find(Other.ContainerId))
-		{
-			FACEContainerItemRef Ref;
-			Ref.ItemGuid = Other.Guid;
-			Ref.ContainerType = 0;
-			Contents->Add(Ref);
-		}
-		// Only destroy held weapon/shield/ammo actors — clothing is ObjDesc-only.
-		if (bHadHeldMesh)
-		{
-			RemoveObjectFromWorldVisual(Other.Guid);
-		}
+		FACEWorldObject& Stub = WorldObjects.Add(ItemGuid);
+		Stub.Guid = ItemGuid;
+		Stub.bPhysicsDescriptionPending = true;
 	}
 	if (FACEWorldObject* Obj = WorldObjects.Find(ItemGuid))
 	{
@@ -7253,7 +7230,8 @@ void FACESession::HandleWieldItem(FACEBinaryReader& Reader)
 				{
 					Obj->PlacementId = HeldPlacement;
 				}
-				OnObjectCreated.Broadcast(*Obj);
+				FACEWorldObject AttachmentUpdate = *Obj; AttachmentUpdate.bAttachmentOnlyUpdate = true;
+				OnObjectCreated.Broadcast(AttachmentUpdate);
 			}
 		}
 		else
@@ -7262,10 +7240,6 @@ void FACESession::HandleWieldItem(FACEBinaryReader& Reader)
 			Obj->ParentLocation = 0;
 			if ((Location & ACEEquipMask::MissileAmmo) != 0) Obj->ParentGuid = 0;
 		}
-	}
-	else
-	{
-		RemoveFromContainerLists(ItemGuid);
 	}
 	if (ItemGuid == PendingEquipmentGuid && bPendingEquipmentWieldSent)
 	{
@@ -7371,18 +7345,10 @@ void FACESession::HandlePickupEvent(FACEBinaryReader& Reader)
 		if (Obj->bHasPhysicsTimestamps
 			&& !ACEPhysicsTimeStamp::IsNewer(Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Position], IncomingPosition)) return;
 		Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Position] = IncomingPosition;
-		const bool bWasEquipped = Obj->CurrentWieldedLocation != 0
-			&& (Obj->WielderId == PlayerGuid || Obj->ParentGuid == PlayerGuid);
-		const bool bHeldAmmo = bWasEquipped && (Obj->CurrentWieldedLocation & (ACEEquipMask::MissileAmmo | ACEEquipMask::MissileWeapon)) != 0;
-		if (!bHeldAmmo)
-		{
-			Obj->WielderId = 0;
-			Obj->CurrentWieldedLocation = 0;
-			// This is a visual detach, not a move into the main backpack.
-			// ContainId supplies the actual destination and insertion index.
-		}
 	}
-	// Ammo remains equipped until authoritative ContainId/wield/remove updates.
+	// SmartBox::DoPickupEvent only unparents/leaves the physical world. It
+	// cannot erase a newer WieldItem received on the independent UI queue.
+	// All equipment retains its inventory state until ContainId/wield/remove.
 	RemoveObjectFromWorldVisual(ItemGuid);
 }
 void FACESession::HandleParentEvent(FACEBinaryReader& Reader)
@@ -7443,11 +7409,9 @@ void FACESession::HandleParentEvent(FACEBinaryReader& Reader)
 			RemoveFromContainerLists(ChildGuid);
 		}
 		Obj->bHasPosition = false; // world origin comes from parent attachment
-		if (ParentGuid == PlayerGuid)
-		{
-			Obj->WielderId = PlayerGuid;
-		}
-		OnObjectCreated.Broadcast(*Obj);
+		// Local wield ownership comes from WieldItem, not a physics attachment.
+		FACEWorldObject AttachmentUpdate = *Obj; AttachmentUpdate.bAttachmentOnlyUpdate = true;
+		OnObjectCreated.Broadcast(AttachmentUpdate);
 	}
 }
 
@@ -7641,7 +7605,9 @@ void FACESession::HandlePublicUpdatePropertyInt(FACEBinaryReader& Reader)
 		else if (Prop == 152) Obj->HookItemTypes = static_cast<uint32>(Value);
 		else if (Prop == 10) // PropertyInt.CurrentWieldedLocation
 		{
-			Obj->CurrentWieldedLocation = static_cast<int64>(Value);
+			// ACCWeenieObject::OnStatUpdated leaves owned/requested equipment to
+			// the ordered inventory events, including ACE's preliminary zeroes.
+			if (!HasPlayerInventoryState(*Obj)) Obj->CurrentWieldedLocation = static_cast<int64>(Value);
 		}
 		else if (Prop == 33) // PropertyInt.Bonded
 		{
@@ -7745,6 +7711,14 @@ void FACESession::HandlePrivateUpdatePropertyDataID(FACEBinaryReader& Reader)
 	}
 }
 
+bool FACESession::HasPlayerInventoryState(const FACEWorldObject& Object) const
+{
+	return PlayerGuid && (Object.WielderId == PlayerGuid
+		|| ResolveContainerRoot(Object.Guid) == PlayerGuid
+		|| PendingInventoryTransfers.Contains(Object.Guid)
+		|| PendingEquipmentGuid == Object.Guid || PendingEquipmentRemovals.Contains(Object.Guid));
+}
+
 void FACESession::HandlePublicUpdateInstanceId(FACEBinaryReader& Reader)
 {
 	// 0x02DA: u8 sequence, u32 objectGuid, u32 propertyId, u32 instanceGuid.
@@ -7768,6 +7742,7 @@ void FACESession::HandlePublicUpdateInstanceId(FACEBinaryReader& Reader)
 		}
 		else if (Prop == 3) // PropertyInstanceId.Wielder
 		{
+			if (HasPlayerInventoryState(*Obj)) return;
 			Obj->WielderId = Value;
 			if (Value != 0 && !(PlayerGuid && Obj->ContainerId && ResolveContainerRoot(Guid) == PlayerGuid))
 			{
@@ -8178,11 +8153,15 @@ void FACESession::HandleUpdatePosition(FACEBinaryReader& Reader)
 					Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::ForcePosition], IncomingForce);
 				if (!bNewPosition && !bForceSelf) return;
 			}
+			// POSITION_TS can advance while an older FORCE_POSITION_TS is still
+			// in flight. Retail newer_event never rolls the force epoch backwards.
+			if (!Obj->bHasPhysicsTimestamps || ACEPhysicsTimeStamp::IsNewer(
+				Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::ForcePosition], IncomingForce))
+				Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::ForcePosition] = IncomingForce;
 			Obj->bHasPhysicsTimestamps = true;
 			Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance] = IncomingInstance;
 			Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Position] = IncomingPosition;
 			Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Teleport] = IncomingTeleport;
-			Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::ForcePosition] = IncomingForce;
 			Obj->Position = Pos;
 			Obj->bHasPosition = true;
 			Obj->PlacementId = PlacementId;
@@ -8197,7 +8176,10 @@ void FACESession::HandleUpdatePosition(FACEBinaryReader& Reader)
 			InstanceSeq = IncomingInstance;
 			if (TeleportSeq != IncomingTeleport) SelectObject(0);
 			TeleportSeq = IncomingTeleport;
-			ForcePositionSeq = IncomingForce;
+			if (const auto* Obj = WorldObjects.Find(Guid))
+				ForcePositionSeq = Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::ForcePosition];
+			else if (ACEPhysicsTimeStamp::IsNewer(ForcePositionSeq, IncomingForce))
+				ForcePositionSeq = IncomingForce;
 		}
 	}
 	else if (FACEWorldObject* Obj = WorldObjects.Find(Guid))
@@ -8362,9 +8344,9 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 			const bool bStance = (Full & 0xFF000000u) == 0x80000000u;
 			if (!IsLocoOrDoorOrReady(Low) && !bStance)
 			{
-				const uint32 Fam = Full & 0xFF000000u;
-				const bool bChatPose = Fam == 0x13000000u || Fam == 0x42000000u || Fam == 0x43000000u;
-				const float ClampedSpeed = bChatPose ? 1.f : FMath::Max(0.05f, Speed);
+				// A zero rate pauses the authored motion; do not invent a minimum
+				// playback speed for a server-controlled action.
+				const float ClampedSpeed = FMath::Max(0.f, Speed);
 				if (Motion.ActionCommand == 0)
 				{
 					Motion.ActionCommand = static_cast<int32>(Full);
@@ -8423,16 +8405,9 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 				if (!IsLocoOrDoorOrReady(Low) && !bStance)
 				{
 					Motion.ActionCommand = static_cast<int32>(Full);
-					// ChatPose hold states use speed_mod 1; don't inherit a stale run rate.
-					const uint32 Fam = Full & 0xFF000000u;
-					if (Fam == 0x13000000u || Fam == 0x42000000u || Fam == 0x43000000u)
-					{
-						Motion.ActionSpeed = 1.f;
-					}
-					else
-					{
-						Motion.ActionSpeed = FMath::Max(0.05f, ForwardSpeed);
-					}
+					// Interpreted forward speed belongs to this substate, including
+					// held emotes. Retail passes it through to DoInterpretedMotion.
+					Motion.ActionSpeed = FMath::Max(0.f, ForwardSpeed);
 				}
 			}
 			break;

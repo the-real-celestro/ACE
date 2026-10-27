@@ -23,10 +23,43 @@ namespace
 	class SACECursorSafeTooltip : public SBox
 	{
 	public:
-		SACECursorSafeTooltip() { SetCanTick(true); }
+		SACECursorSafeTooltip() { SetCanTick(true); ForceVolatile(true); }
+		virtual int32 OnPaint(const FPaintArgs& Args, const FGeometry& Geometry, const FSlateRect& Culling,
+			FSlateWindowElementList& Elements, int32 Layer, const FWidgetStyle& Style, bool Enabled) const override
+		{
+			// SGameLayerManager routes inventory/plugin tips to STooltipPresenter.
+			// That presenter uses a fixed 12px cursor size and ignores native-popup
+			// force fields. Correct its noninteractive content in the same paint,
+			// using the presenter's viewport (including PIE offsets and UI scaling).
+			for (auto Parent = GetParentWidget(); Parent; Parent = Parent->GetParentWidget())
+			{
+				if (Parent->GetType() != FName(TEXT("STooltipPresenter"))) continue;
+				const FSlateRect View = Parent->GetCachedGeometry().GetLayoutBoundingRect();
+				const auto& DesktopGeometry = GetCachedGeometry();
+				const float Scale = DesktopGeometry.GetAccumulatedLayoutTransform().GetScale();
+				if (View.GetSize().X <= 0 || View.GetSize().Y <= 0 || Scale <= 0) break;
+				const FVector2D Origin(View.Left, View.Top);
+				const FVector2D Position = Origin + UACEHoverTooltipWidget::CalculateTooltipPosition(
+					FSlateApplication::Get().GetCursorPos() - Origin,
+					DesktopGeometry.GetLocalSize() * Scale, FVector2D(View.GetSize()), Scale);
+				const FVector2D Offset = (Position - DesktopGeometry.GetAbsolutePosition()) / Scale;
+				const FGeometry Adjusted = Geometry.MakeChild(Geometry.GetLocalSize(), FSlateLayoutTransform(Offset));
+				return SBox::OnPaint(Args, Adjusted, Culling, Elements, Layer, Style, Enabled);
+			}
+			// Slate can reposition its popup after the widget tick. Enforce cursor
+			// clearance at the final paint as well. Paint geometry is window-local:
+			// move the window, never translate/clamp the text within that window.
+			EnsureCursorClearance();
+			return SBox::OnPaint(Args,Geometry,Culling,Elements,Layer,Style,Enabled);
+		}
 		virtual void Tick(const FGeometry& Geometry, double Time, float Delta) override
 		{
 			SBox::Tick(Geometry, Time, Delta);
+			EnsureCursorClearance();
+		}
+	private:
+		void EnsureCursorClearance() const
+		{
 			auto& Slate = FSlateApplication::Get();
 			const auto Window = Slate.FindWidgetWindow(AsShared());
 			// World hovers are positioned in the viewport by their controller.

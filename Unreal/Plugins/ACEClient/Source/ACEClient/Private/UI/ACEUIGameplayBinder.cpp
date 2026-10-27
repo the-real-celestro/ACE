@@ -2211,8 +2211,8 @@ void UACEUIGameplayBinder::SyncInventoryButtonVisual()
 		Btn->bHighlighted = bInvOpen;
 		Btn->ImageFileId = bInvOpen ? DidBagOpen : DidBagClosed;
 	}
-	// 0x060011F9 is ItemSlot_GenericDragOver (green ring) — only for drag-over, not idle chrome.
-	Manager->SetElementVisibleByName(TEXT("BigBackpack_Icon_DragAccept"), false);
+	// Drag feedback is managed by the hover path and cleared on cancellation.
+	if (!bInvDragActive) Manager->SetElementVisibleByName(TEXT("BigBackpack_Icon_DragAccept"), false);
 }
 
 void UACEUIGameplayBinder::TogglePanelPage(const FString& PageElementName)
@@ -2980,7 +2980,7 @@ void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 			}
 			// ClientCombatSystem::HandleAttackDone only replaces a server repeat when
 			// the desired slider power changed. Sending every second restarted melee turns.
-			if (!AdvancedCombat && !bCombatMovementBlocked && IsCombatPoseReady() && bCombatPowerCharging && bCombatRepeatActive && !bCombatAttackRequestPending
+			if (!bCombatPluginAttack && !AdvancedCombat && !bCombatMovementBlocked && IsCombatPoseReady() && bCombatPowerCharging && bCombatRepeatActive && !bCombatAttackRequestPending
 				&& !FMath::IsNearlyEqual(LastCombatAttackPower, RequestedAttackPower, .01f))
 			{
 				CombatPowerOrAccuracy = RequestedAttackPower;
@@ -3050,6 +3050,7 @@ void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 void UACEUIGameplayBinder::ShowPluginAttack(int32 Target, uint32 Height, float Power)
 {
 	bCombatRetargetPending = false;
+	bCombatPluginAttack = true;
 	// Observe the already-sent action. Never send a second attack from the UI.
 	CombatAttackHeight = Height;
 	RequestedAttackPower = LastCombatAttackPower = CombatPowerOrAccuracy = FMath::Clamp(Power, 0.f, 1.f);
@@ -3082,6 +3083,7 @@ void UACEUIGameplayBinder::BeginCombatPowerCharge(uint32 AttackHeight, bool bHel
 	}
 	CombatAttackHeight = AttackHeight;
 	bCombatRetargetPending = false;
+	bCombatPluginAttack = false; // a manual attack takes over from automation
 	if (PlayerController)
 	{
 		PlayerController->PrepareManualCombat(true);
@@ -3116,6 +3118,7 @@ void UACEUIGameplayBinder::CancelCombatAttack()
 {
 	const bool bWasRetargeting = bCombatRetargetPending;
 	bCombatRetargetPending = false;
+	bCombatPluginAttack = false;
 	if (!bWasRetargeting && !bCombatAttackRequestPending && !bCombatRepeatActive && !bCombatAttackHeld && !bCombatRequestSent) return;
 	bCombatRequestSent = false;
 	bCombatAttackHeld = bCombatPointerHeld = bCombatKeyboardHeld = false;
@@ -3199,6 +3202,11 @@ void UACEUIGameplayBinder::TryAutoTargetOnCombatEnter(int32 ExcludeGuid)
             && !Fellowship.Members.ContainsByPredicate([&](const auto& M) { return M.Guid==Guid; });
     };
     if (Eligible(Client->GetSelectedObject().Guid)) return;
+    // Retail AutoTarget only changes selection. End the previous attack before
+    // broadcasting the new selection, otherwise HandleSelectionChanged treats
+    // a kill as a deliberate target switch and queues another melee charge or
+    // missile shot (including at enemies behind walls).
+    CancelCombatAttack();
     const auto Session = Client->GetSession();
     const int32 Attacker = Session->GetLastAttackerGuid();
     // Retaliate on combat entry only. After a kill, choose the nearest eligible
@@ -5261,19 +5269,22 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 		return true;
 	}
 
+	// gmToolbarUI::HandleDrop: the large toolbar pack accepts items even when
+	// the inventory window is closed. Shortcuts are handled above, not relocated.
+	if (Manager && Canvas->IsElementExposedAt(Manager->FindElementByName(TEXT("InventoryButton")), CanvasLocalPos))
+	{
+		if (Guid != Client->GetPlayerGuid()) MoveInventoryAmount(Guid, Client->GetPlayerGuid(), 0, Amount);
+		return true;
+	}
+
 	// Drop onto open vendor UI → stage the item or a pack's contents in the Sell cart.
 	if (OpenVendorGuid != 0 && Manager)
 	{
 		auto HitVendorUi = [&](const TCHAR* Name) -> bool
 		{
 			TSharedPtr<FACEUIElement> El = Manager->FindElementByName(Name);
-			if (!El.IsValid() || !El->bVisible || !Canvas->IsElementExposedAt(El, CanvasLocalPos))
-			{
-				return false;
-			}
-			const FIntPoint O = El->GetScreenOrigin();
-			return CanvasLocalPos.X >= O.X && CanvasLocalPos.Y >= O.Y
-				&& CanvasLocalPos.X < O.X + El->Width && CanvasLocalPos.Y < O.Y + El->Height;
+			// Exposure checks already convert viewport coordinates to DAT layout units.
+			return Canvas->IsElementExposedAt(El, CanvasLocalPos);
 		};
 		if (HitVendorUi(TEXT("Vendor")) || HitVendorUi(TEXT("VendorPanel"))
 			|| HitVendorUi(TEXT("RootGameplay_FloatyEnvPanel_Field")))
@@ -5389,13 +5400,7 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 		auto HitTradeUi = [&](const TCHAR* Name) -> bool
 		{
 			TSharedPtr<FACEUIElement> El = Manager->FindElementByName(Name);
-			if (!El.IsValid() || !El->bVisible || !Canvas->IsElementExposedAt(El, CanvasLocalPos))
-			{
-				return false;
-			}
-			const FIntPoint O = El->GetScreenOrigin();
-			return CanvasLocalPos.X >= O.X && CanvasLocalPos.Y >= O.Y
-				&& CanvasLocalPos.X < O.X + El->Width && CanvasLocalPos.Y < O.Y + El->Height;
+			return Canvas->IsElementExposedAt(El, CanvasLocalPos);
 		};
 		if (HitTradeUi(TEXT("SecureTrade")) || HitTradeUi(TEXT("TradePanel"))
 			|| HitTradeUi(TEXT("TradeSelfItemsList")) || HitTradeUi(TEXT("TradeOtherItemsList"))
@@ -6559,8 +6564,11 @@ void UACEUIGameplayBinder::HandleSelectionChanged(const FACESelectedObject& Sele
 		&& (CombatMode == int32(ACECombatMode::Melee) || CombatMode == int32(ACECombatMode::Missile))
 		&& bCombatAutoRepeat && (bCombatRepeatActive || bCombatRetargetPending))
 	{
+		// UCM must choose its next action through its own range, sight and loot
+		// checks. Showing its power bar does not grant the UI a repeat request.
+		const bool bAllowRetarget = !bCombatPluginAttack;
 		CancelCombatAttack();
-		bCombatRetargetPending = Selection.bValid && Client->GetSession()->IsCombatTarget(Selection.Guid);
+		bCombatRetargetPending = bAllowRetarget && Selection.bValid && Client->GetSession()->IsCombatTarget(Selection.Guid);
 	}
 	if (!Selection.bValid && LastSelection.bValid && Client)
 	{
@@ -8341,8 +8349,8 @@ void UACEUIGameplayBinder::RefreshShortcutOverlays()
 		}
 		else
 		{
-			if (SlotIndex0 < 10) SetIconDid(Bg, SlotIndex0 < 9 ? 0x060010FA + SlotIndex0 : 0x060074CF);
-			else SetItemSlotBackground(Bg, nullptr);
+			// DAT ItemSlot_Shortcut_10..18 all use the same blue empty art.
+			SetIconDid(Bg, SlotIndex0 < 9 ? 0x060010FA + SlotIndex0 : 0x060074CF);
 		}
 		PlaceShortcut(Bg, El, 0);
 		Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
@@ -11665,6 +11673,7 @@ void UACEUIGameplayBinder::RefreshExaminationOverlay()
 			PlaceTextUnder(ExamInscriptionSignature, TEXT("RootGameplay_FloatyExamination_Field"),
 				TEXT("ItemInscriptionSignatureText"), bPrompt || Scribe.IsEmpty() ? FString() : TEXT("--")+Scribe,
 				8, FLinearColor::Black, ExamOverlayZ+4);
+			ExamInscriptionSignature->SetJustification(ETextJustify::Right);
 			if (EditingInscriptionGuid == LastAppraisal.ObjectGuid && ExamInscriptionEditor)
 			{
 				ExamInscriptionLabel->SetVisibility(ESlateVisibility::Collapsed);
@@ -13424,14 +13433,15 @@ bool UACEUIGameplayBinder::IsScrollbarDragActive() const
 	return ScrollDragTarget != EACEUIScrollTarget::None;
 }
 
-bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
+bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D ViewportPos)
 {
+	const FVector2D CanvasLocalPos = Canvas ? Canvas->ViewportToLayout(ViewportPos) : ViewportPos;
 	// Selected-item stack amount slider (toolbar SelectedObjectField).
 	if (Manager && SelectedStackMax > 1)
 	{
 		if (TSharedPtr<FACEUIElement> Slider = Manager->FindElementByName(TEXT("StackSizeSlider")))
 		{
-			if (Slider->bVisible && Canvas && Canvas->IsElementExposedAt(Slider, CanvasLocalPos))
+			if (Slider->bVisible && Canvas && Canvas->IsElementExposedAt(Slider, ViewportPos))
 			{
 				const FIntPoint O = Slider->GetScreenOrigin();
 				if (CanvasLocalPos.X >= O.X && CanvasLocalPos.Y >= O.Y
@@ -13455,7 +13465,7 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
 						: FMath::Clamp((LocalX - ThumbWidth * .5f) / FMath::Max(1, ScrollDragTravel - 1), 0.f, 1.f);
 					ScrollDragGrabOffset = LocalX - ScrollDragFraction * ScrollDragTravel;
 					if (bOnThumb) ScrollDragLastOffset = SelectedStackAmount;
-					else UpdateScrollbarDrag(CanvasLocalPos);
+					else UpdateScrollbarDrag(ViewportPos);
 					return true;
 				}
 			}
@@ -13466,7 +13476,7 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
 		int32 MaxOff, bool bHorizontal) -> bool
 	{
 		if (!Bar.IsValid() || !Bar->bVisible || MaxOff <= 0
-			|| !Canvas || !Canvas->IsElementExposedAt(Bar, CanvasLocalPos))
+			|| !Canvas || !Canvas->IsElementExposedAt(Bar, ViewportPos))
 		{
 			return false;
 		}
@@ -13492,7 +13502,7 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
 		{
 			return false;
 		}
-		// Exclude up/down (or left/right) button chrome — those use click-to-step.
+		// Arrow buttons use the element manager's DAT hot-button repeat behavior.
 		if (bHorizontal)
 		{
 			if (CanvasLocalPos.X < BarO.X + Btn || CanvasLocalPos.X >= BarO.X + Bar->Width - Btn)
@@ -13527,7 +13537,7 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
 		const float ThumbSize = Thumb ? (bHorizontal ? Thumb->Width : Thumb->Height) : 8.f;
 		ScrollDragGrabOffset = Cursor >= ThumbStart && Cursor <= ThumbStart + ThumbSize ? Cursor - ThumbStart : ThumbSize * .5f;
 		ScrollDragVisibleFraction = ThumbSize / FMath::Max(1.f, float((bHorizontal ? Bar->Width : Bar->Height) - Btn*2));
-		UpdateScrollbarDrag(CanvasLocalPos);
+		UpdateScrollbarDrag(ViewportPos);
 		return true;
 	};
 
@@ -13768,8 +13778,9 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
 	return false;
 }
 
-void UACEUIGameplayBinder::UpdateScrollbarDrag(FVector2D CanvasLocalPos)
+void UACEUIGameplayBinder::UpdateScrollbarDrag(FVector2D ViewportPos)
 {
+	const FVector2D CanvasLocalPos = Canvas ? Canvas->ViewportToLayout(ViewportPos) : ViewportPos;
 	if (ScrollDragTarget == EACEUIScrollTarget::None || ScrollDragTravel <= 0)
 	{
 		return;

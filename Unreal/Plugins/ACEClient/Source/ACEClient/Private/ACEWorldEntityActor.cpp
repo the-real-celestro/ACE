@@ -453,6 +453,7 @@ void AACEWorldEntityActor::ConfigureWorldCollision(bool bEnable)
 	TArray<FACEDatCollisionShape> MovementShapes;
 	MovementSpheresAc.Reset();
 	const bool bHaveSetupMetadata=Dat && Dat->GetSetupMovementSpheres(SetupId,MovementShapes);
+	bSetupHasNoMovementSpheres = bHaveSetupMetadata && MovementShapes.IsEmpty();
 	if(bHaveSetupMetadata && !MovementShapes.IsEmpty())
 	{
 		float R=0,Bottom=MAX_flt,Top=-MAX_flt;
@@ -997,6 +998,10 @@ void AACEWorldEntityActor::UpdateHeldAttachmentPose()
 FVector AACEWorldEntityActor::ResolvePredictedMovement(const FVector& From, const FVector& Destination, TOptional<bool> Grounded) const
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(ACE_RemoteCollision);
+	// CPhysicsObj::UpdateObjectInternal (005156B0) retains XYZ when
+	// CPartArray::GetNumSphere is zero, regardless of the object's item type.
+	// A fallback pick capsule is not a retail movement body.
+	if (bSetupHasNoMovementSpheres) return From;
 	if (!GetWorld() || IsCorpse() || (PhysicsState & ACEPhysicsState::Missile)
 		|| (!bIsPlayer && !(ItemType & ACEItemType::Creature))) return Destination;
 	const float Scale = GetActorScale3D().GetAbsMax();
@@ -1205,6 +1210,15 @@ void AACEWorldEntityActor::SetRemoteLocomotion(float Forward, float Strafe, bool
 	if (Appearance) Appearance->SetLocomotionInput(Forward, Strafe, bRunning, Rate, true);
 }
 
+void AACEWorldEntityActor::AdvanceRemoteTurn(const FQuat& Desired, float Speed, float Seconds)
+{
+	const float Delta = FMath::FindDeltaAngleDegrees(RemotePredictRotation.Rotator().Yaw, Desired.Rotator().Yaw);
+	RemotePredictRotation = ACERetailTurn::Advance(RemotePredictRotation, Desired, Speed, Seconds,
+		FMath::DegreesToRadians(RemoteTurnRateDegrees));
+	RemoteTurnAnimationRate = RemotePredictRotation.Equals(Desired, .000001f) ? 0.f
+		: FMath::Sign(-Delta * RemoteTurnRateDegrees) * Speed;
+}
+
 FVector AACEWorldEntityActor::AdvanceRemoteMoveTo(float Seconds)
 {
 	RemoteMoveToStepLimit = 0.f;
@@ -1261,8 +1275,7 @@ FVector AACEWorldEntityActor::AdvanceRemoteMoveTo(float Seconds)
 		StopTranslation();
 		if (RemoteWalkingMotion.HasPending()) return FVector::ZeroVector;
 		const bool WasTurning = !RemotePredictRotation.Equals(RemoteMoveToHeading, .000001f);
-		RemotePredictRotation = ACERetailTurn::Advance(RemotePredictRotation, RemoteMoveToHeading,
-			RemoteMotion.MoveToSpeed, Seconds, FMath::DegreesToRadians(RemoteTurnRateDegrees));
+		AdvanceRemoteTurn(RemoteMoveToHeading, RemoteMotion.MoveToSpeed, Seconds);
 		if (!RemotePredictRotation.Equals(RemoteMoveToHeading, .000001f)) return FVector::ZeroVector;
 		RemoteMoveToPhase = ERemoteMoveToPhase::Move;
 		// BeginMoveForward selects the gait once. Re-selecting it each frame
@@ -1291,9 +1304,7 @@ FVector AACEWorldEntityActor::AdvanceRemoteMoveTo(float Seconds)
 			// HandleMoveToPosition uses a turn modifier beyond 20 degrees,
 			// while translation continues along the body's current facing.
 			if (!RemoteWalkingMotion.HasPending() && RemotePredictRotation.AngularDistance(Desired) > FMath::DegreesToRadians(20.f))
-				RemotePredictRotation = ACERetailTurn::Advance(RemotePredictRotation, Desired,
-					RemoteMotion.MoveToSpeed * (RemoteMotion.bRunning ? 1.5f : 1.f), Seconds,
-					FMath::DegreesToRadians(RemoteTurnRateDegrees));
+				AdvanceRemoteTurn(Desired, RemoteMotion.MoveToSpeed * (RemoteMotion.bRunning ? 1.5f : 1.f), Seconds);
 			RemoteMoveToStepLimit = Remaining * WorldScale;
 			const float Speed = (Forward < 0 ? RemoteBackSpeedAc : RemoteMotion.bRunning ? RemoteRunSpeedAc : RemoteWalkSpeedAc) * RemoteMotion.AnimPlayRate;
 			RemoteMotion.Forward = Forward;
@@ -1309,8 +1320,7 @@ FVector AACEWorldEntityActor::AdvanceRemoteMoveTo(float Seconds)
 	{
 		// BeginTurnToHeading waits for the preceding walk exit to finish.
 		if (RemoteWalkingMotion.HasPending()) return FVector::ZeroVector;
-		RemotePredictRotation = ACERetailTurn::Advance(RemotePredictRotation, RemoteMoveToFinalHeading,
-			RemoteMotion.MoveToSpeed, Seconds, FMath::DegreesToRadians(RemoteTurnRateDegrees));
+		AdvanceRemoteTurn(RemoteMoveToFinalHeading, RemoteMotion.MoveToSpeed, Seconds);
 		if (!RemotePredictRotation.Equals(RemoteMoveToFinalHeading, .000001f)) return FVector::ZeroVector;
 	}
 	Complete();
@@ -1329,6 +1339,9 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 	// second root writer here used to undo grounding/interpolation each frame.
 	if (!HasVRRoot) EndRemoteVRRoot();
 	else RemoteWalkingMotion.Reset();
+	RemoteTurnAnimationRate = !HasVRRoot && !bHavePhysicsVelocity && !RemoteMotion.IsDeathMotion()
+		&& RemoteMotion.MovementType == 0 ? RemoteMotion.Turn : 0.f;
+	if (Appearance && (HasVRRoot || bHavePhysicsVelocity)) Appearance->SetTurnInput(0.f);
 	if (!HasVRRoot && !bHavePhysicsVelocity && PendingRemoteLanding.IsSet())
 	{
 		const FACEPosition Landing = PendingRemoteLanding.GetValue();
@@ -1392,7 +1405,7 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 			// ACE PhysicsGlobals.Gravity = 9.8 in AC units/sec² (same magnitude as Earth m/s²).
 			const bool bMissile = (PhysicsState & ACEPhysicsState::Missile) != 0;
 			const bool bProp = !bMissile && !bIsPlayer && !(ItemType & ACEItemType::Creature) && !IsCorpse();
-			const bool bNeedsFloor = bProp && (PhysicsState & ACEPhysicsState::Gravity);
+			const bool bNeedsFloor = bProp && !bSetupHasNoMovementSpheres && (PhysicsState & ACEPhysicsState::Gravity);
 			// Retail enters physics only after SetPosition resolves the resident
 			// cell. A terrain-height fallback is insufficient while an outdoor
 			// pedestal/table or indoor furniture is still being installed.
@@ -1406,7 +1419,9 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 			const bool bWaitForRoom = bNeedsFloor && !bPropSupport
 				&& ResolveIndoorOccupancy(RemotePredictLocation, PropCell)
 				&& !AACEEnvCellActor::HasActiveCollision(GetWorld(), static_cast<int32>(PropCell));
-			const float PhysicsStep = bWaitForRoom ? 0.f : Step;
+			// Sphere-less objects may still rotate, animate and emit particles.
+			// They cannot translate, even if a create/vector packet carries gravity velocity.
+			const float PhysicsStep = bWaitForRoom || bSetupHasNoMovementSpheres ? 0.f : Step;
 			const FVector Acceleration = (PhysicsState & ACEPhysicsState::Gravity) != 0
 				? FVector(0.f, 0.f, -9.8f) : FVector::ZeroVector;
 			// Velocity in ObjectCreate / VectorUpdate is world-space ACE units/sec.
@@ -1442,7 +1457,7 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 
 			// Creatures/pets are not Unreal pawns — ballistic integrate has no capsule contact.
 			// Seat on traced ground so summons don't fall through floors after a jump F748.
-			if (!bMissile && (PhysicsState & ACEPhysicsState::Gravity) && AcePhysicsVelocity.Z <= 0.f)
+			if (!bSetupHasNoMovementSpheres && !bMissile && (PhysicsState & ACEPhysicsState::Gravity) && AcePhysicsVelocity.Z <= 0.f)
 			{
 				float GroundZ = 0.f;
 				if (bProp ? (GroundZ = PropGroundZ, bPropSupport) : TraceGroundZ(RemotePredictLocation, GroundZ, true))
@@ -1512,8 +1527,7 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 				{
 					const FQuat Want = FACEPosition::QuatFromUnrealTravelDir2D(FaceDir);
 					if (!bRemoteCorrectionPending)
-						RemotePredictRotation = ACERetailTurn::Advance(
-							RemotePredictRotation, Want, RemoteMotion.TurnToSpeed, DeltaTime, FMath::DegreesToRadians(RemoteTurnRateDegrees));
+						AdvanceRemoteTurn(Want, RemoteMotion.TurnToSpeed, DeltaTime);
 					SetRemoteLocomotion(0.f, 0.f, false, 1.f);
 					if (!bRemoteCorrectionPending && RemotePredictRotation.Equals(Want, .000001f))
 					{
@@ -1582,6 +1596,9 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 				else RemoteMotion.StickyTargetGuid = 0;
 			}
 
+			// Update once per physics step: clearing/reapplying a directed turn
+			// each frame would continually restart its animation at frame zero.
+			if (Appearance) Appearance->SetTurnInput(RemoteTurnAnimationRate);
 			// CPartArray advances non-cyclic position frames before the cyclic
 			// velocity and before interpolation. Starting at full walk speed or
 			// discarding the exit gets ahead/behind the next server position.
@@ -2158,7 +2175,7 @@ bool AACEWorldEntityActor::ClampLocationToGround(FVector& InOutLocation, const F
 	// Honor the effective network state for every item type, including Creature
 	// props. ACE's explicit GravityStatus=false overrides an integer default that
 	// still contains Gravity; do not reintroduce it through visual ground seating.
-	if (!bClampToGround || (PhysicsState & ACEPhysicsState::Gravity) == 0)
+	if (bSetupHasNoMovementSpheres || !bClampToGround || (PhysicsState & ACEPhysicsState::Gravity) == 0)
 	{
 		return true;
 	}
@@ -2326,8 +2343,19 @@ void AACEWorldEntityActor::ApplyACEPosition(const FACEPosition& Position, bool b
 		RemoteTeleportSequence=Position.TeleportSequence;
 	}
 	const bool Creature=bIsPlayer || (ItemType & ACEItemType::Creature) || IsCorpse();
-	const bool bSnap = !bHaveRemotePredict || NewTeleport
-		|| FVector::DistSquared(GetActorLocation(),NewLocation)>FMath::Square(RemoteSnapDistance*WorldScale);
+	FVector PlayerLocation;
+	const auto* Client = GetGameInstance() ? GetGameInstance()->GetSubsystem<UACEClientSubsystem>() : nullptr;
+	// MoveOrTeleport chooses SetPositionSimple at player_distance >= 96 AC.
+	// Nearby corrections use interpolation even for a large error; only a new
+	// teleport epoch bypasses it. Error magnitude is not a teleport signal.
+	const bool FarPosition = Creature && bPositionEvent && Position.bHasContactState && Position.bIsGrounded
+		&& Client && ResolveFacingTarget(Client->GetPlayerGuid(), PlayerLocation)
+		&& FVector::DistSquared(GetActorLocation(), PlayerLocation) >= FMath::Square(96.f * WorldScale);
+	const bool bSnap = !bHaveRemotePredict || NewTeleport || FarPosition
+		// A full descriptor supplies placement, not extrapolated movement. A
+		// sphere-less model cannot walk from its old placement to that frame.
+		|| (bSetupHasNoMovementSpheres && !bPositionEvent)
+		|| (!Creature && FVector::DistSquared(GetActorLocation(),NewLocation)>FMath::Square(RemoteSnapDistance*WorldScale));
 	if (bSnap) PendingRemoteLanding.Reset();
 	// Cell notifications still update the collision context during a jump across
 	// a building entrance; delaying the transform must not retain an old floor.
@@ -2490,6 +2518,8 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
     else if (!bDeath && RemoteMotion.CurrentStyle != Motion.CurrentStyle)
         RemoteWalkingMotion.Reset();
 	RemoteMotion = Motion;
+	if (Appearance)
+		Appearance->SetTurnInput(!bDeath && !bHavePhysicsVelocity && Motion.MovementType == 0 ? Motion.Turn : 0.f);
 	// CMotionInterp::apply_interpreted_movement remembers my_run_rate. Ready,
 	// walking, turning and death do not reset the speed used by interpolation.
 	if (Motion.MovementType == 0 && uint16(Motion.ForwardCommand) == 7)
@@ -2555,10 +2585,7 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
 				|| Cmd == static_cast<int32>(ACEMotion::Dead);
 			if (Action != 0)
 			{
-				const uint32 ActionHi = Action & 0xFF000000u;
-				const bool bHoldEmote = ActionHi == 0x13000000u
-					|| ActionHi == 0x42000000u || ActionHi == 0x43000000u
-					|| ACEMotion::IsHeldRestCommand(Action);
+				const bool bHoldEmote = ACEMotion::IsHeldRestCommand(Action);
 				if (bDying)
 				{
 					// Dead is a held state only for a newly created corpse. A living
@@ -2579,8 +2606,7 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
 					for (int32 I=0;I<Motion.ActionFollowups.Num();++I)
 					{
 						const uint32 Next = ACEMotion::NormalizeCommand(static_cast<uint32>(Motion.ActionFollowups[I]));
-						const uint32 Family = Next & 0xFF000000u;
-						const bool Hold = Family == 0x13000000u || Family == 0x42000000u || Family == 0x43000000u || ACEMotion::IsHeldRestCommand(Next);
+						const bool Hold = ACEMotion::IsHeldRestCommand(Next);
 						Appearance->QueueActionMotion(Motion.ActionFollowups[I], Motion.FollowupSpeed(I), Motion.CurrentStyle, Hold);
 					}
 				}
@@ -2642,7 +2668,7 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
 			{
 				Dat->BuildTransitionRootTrack(MotionTableId,ACEMotion::Ready,ACEMotion::Dead,Motion.CurrentStyle,RemoteDeathRootTrack);
 				RemoteDeathRootTrack.bApplyEntry = RemoteWalkingMotion.HasPending();
-				RemoteDeathPlayRate = FMath::Max(.05f,Motion.ActionSpeed);
+				RemoteDeathPlayRate = FMath::Max(0.f,Motion.ActionSpeed);
 			}
 			else if (!bDeath) RemoteDeathRootTrack.Reset();
 			FVector Velocity;
@@ -2699,20 +2725,24 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
 void AACEWorldEntityActor::ApplyPhysicsVelocity(const FVector& AceVelocity, const FVector& AceOmega)
 {
 	// CPhysicsObj::UpdateObjectInternal translates through the setup's movement
-	// spheres. Stuck containers still settle; sphere-less signs stay attached.
+	// spheres. Creature is also used for stationary quest objects and does not
+	// exempt them from the zero-sphere rule. Stuck containers with spheres settle.
 	const bool bAnchoredProp = (MovementSpheresAc.IsEmpty()
 		|| (PhysicsState & (ACEPhysicsState::Static | ACEPhysicsState::Ethereal)))
 		&& !bIsPlayer && !bIsSelf && (ItemType & ACEItemType::Creature) == 0
 		&& (PhysicsState & ACEPhysicsState::Missile) == 0;
-	AcePhysicsVelocity = bAnchoredProp ? FVector::ZeroVector : AceVelocity;
+	AcePhysicsVelocity = bAnchoredProp || bSetupHasNoMovementSpheres ? FVector::ZeroVector : AceVelocity;
 	AcePhysicsOmega = AceOmega;
-	bHavePhysicsVelocity = !AcePhysicsVelocity.IsNearlyZero();
+	// Keep angular motion without waking an idle sphere-less object for a
+	// translational velocity it cannot apply (e.g. the Apostate quest crystals).
+	bHavePhysicsVelocity = !AcePhysicsVelocity.IsNearlyZero()
+		|| (bSetupHasNoMovementSpheres && !AcePhysicsOmega.IsNearlyZero());
 	if (AcePhysicsVelocity.Z > .01f) PendingRemoteLanding.Reset();
 	// VectorUpdate describes velocity, not loss of contact. Retail retains its
 	// contact plane while running down a slope; treating every horizontal vector
 	// as a jump leaves the body on a shelf until gravity/the next F748 catches up.
 	// Upward impulses and bodies genuinely above their support remain ballistic.
-	if (bHavePhysicsVelocity && bClampToGround && !(PhysicsState & ACEPhysicsState::Missile)
+	if (!bSetupHasNoMovementSpheres && bHavePhysicsVelocity && bClampToGround && !(PhysicsState & ACEPhysicsState::Missile)
 		&& (bIsPlayer || (ItemType & ACEItemType::Creature)) && AceVelocity.Z <= .01f)
 	{
 		float GroundZ;

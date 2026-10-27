@@ -1179,6 +1179,20 @@ void UACECharacterAppearanceComponent::SetRemoteWalkingFrame(const ACEWalkingMot
 	AnimTime = CycleTime >= 0.f ? CycleTime : AnimTime + CycleSeconds * LocomotionPlayRate;
 }
 
+void UACECharacterAppearanceComponent::SetTurnInput(float Turn)
+{
+	if (FMath::Sign(Turn)!=FMath::Sign(LocomotionTurn) && AnimMode==EACEAnimMode::Locomotion
+		&& FMath::IsNearlyZero(LocomotionForward) && FMath::IsNearlyZero(LocomotionStrafe))
+	{ AnimTime=0.f; ResetHookTracking(); }
+	LocomotionTurn=Turn;
+}
+
+bool UACECharacterAppearanceComponent::IsMovementLockedByAction() const
+{
+	return AnimMode==EACEAnimMode::ActionOneShot && !bHoldActionFinal
+		&& (ACEAttackMotion::IsAction(ActionCommand) || (ActionCommand&0xFF000000u)==0x80000000u);
+}
+
 void UACECharacterAppearanceComponent::SetLocomotionInput(float Forward, float Strafe, bool bRunning, float PlayRate, bool bInterpretedRate)
 {
 	if (AnimMode == EACEAnimMode::DoorTransition)
@@ -1197,13 +1211,19 @@ void UACECharacterAppearanceComponent::SetLocomotionInput(float Forward, float S
 	SetComponentTickEnabled(true);
 	}
 	if (!bWalkingTransitionsEnabled || bVRPoseControlled || bInterpretedRate
-		|| AnimMode != EACEAnimMode::Locomotion || (bRunning && !FMath::IsNearlyZero(Forward)))
+		|| AnimMode != EACEAnimMode::Locomotion)
 		WalkingMotion.Reset();
 	else if (UGameInstance* GI = GetWorld() ? GetWorld()->GetGameInstance() : nullptr)
 		if (auto* Dat = GI->GetSubsystem<UACEDatSubsystem>())
-			WalkingMotion.SetDirection(FMath::IsNearlyZero(Forward) ? 0 : Forward > 0.f ? 1 : -1,
+			WalkingMotion.SetDirection(FMath::IsNearlyZero(Forward) ? 0 : Forward < 0.f ? -1 : bRunning ? 2 : 1,
 				[&](int8 From, int8 To, ACEWalkingMotion::FLink& Link)
-				{ return Dat->BuildWalkingLink(MotionTableId, From, To, PreferredStyle, Link); });
+				{
+					if (!Dat->BuildWalkingLink(MotionTableId, From, To, PreferredStyle, Link)) return false;
+					const float Scale = To ? FMath::Max(.05f,PlayRate) : 1.f;
+					for (auto& Clip:Link.Clips) Clip.Framerate*=Scale;
+					for (auto& Key:Link.Root.Keys) Key.Time/=Scale;
+					return true;
+				});
 	// CMotionTable replaces the previous cyclic sequence at its starting frame.
 	// This applies to forward movement as well as sidesteps: repeated short nav
 	// segments otherwise spend most of their travel blending out of idle.
@@ -1305,11 +1325,11 @@ void UACECharacterAppearanceComponent::SetPreferredStyle(int32 Style)
 	PoseBlendDuration = StanceBlendDuration;
 	const uint32 PreviousStyle = PreferredStyle;
 	PreferredStyle = Expanded;
-	if (PreviousStyle != 0 && (ACEIsLauncherStyle(PreviousStyle) || ACEIsLauncherStyle(Expanded))
+	if (PreviousStyle != 0
 		&& AnimMode != EACEAnimMode::DoorTransition && ActionCommand != ACEMotion::Dead)
 	{
-		// Retail changes style through its authored linkage before entering the
-		// new Ready cycle. Cross-fading directly to drawn-bow Ready skips this.
+		// Every stance change uses its authored linkage, including sheathing
+		// melee weapons. The linkage owns the pause before the next Ready cycle.
 		PlayActionMotion(Expanded, 1.f, PreviousStyle, false);
 	}
 }
@@ -1402,6 +1422,9 @@ void UACECharacterAppearanceComponent::PlayActionMotion(int32 InActionCommand, f
 	{
 		Cmd = ACEMotion::ExpandPackedCommand(static_cast<uint16>(Cmd));
 	}
+	// CMotionTable appends action links before the existing cyclic tail.
+	// A Wave/ClapHands action returns to that cycle; only substates hold.
+	if (Cmd & 0x10000000u) bHoldFinalPose = false;
 	const bool bMagicPowerUp = (Cmd >= 0x1000006Fu && Cmd <= 0x10000078u)
 		|| (Cmd >= 0x1000012Bu && Cmd <= 0x10000134u);
 	const bool bMagicCastGesture = (Cmd >= 0x4000002Bu && Cmd <= 0x40000039u)
@@ -1423,7 +1446,13 @@ void UACECharacterAppearanceComponent::PlayActionMotion(int32 InActionCommand, f
 	// another crafting ClapHands) is a distinct performance, even without movement.
 	if (AnimMode == EACEAnimMode::ActionOneShot && ActionCommand == Cmd)
 	{
-		if (!bNewAction) return;
+		if (!bNewAction)
+		{
+			// A repeated interpreted substate can change speed without restarting
+			// its entry or cyclic pose (CMotionInterp::apply_interpreted_movement).
+			if (!(Cmd & 0x10000000u)) ActionPlayRate = FMath::Max(0.f, PlayRate);
+			return;
+		}
 		if (!bHoldActionFinal)
 		{
 			QueueActionMotion(Cmd, PlayRate, Style, bHoldFinalPose);
@@ -1433,10 +1462,10 @@ void UACECharacterAppearanceComponent::PlayActionMotion(int32 InActionCommand, f
 	const bool bFromEmote = AnimMode == EACEAnimMode::ActionOneShot && ACEIsEmoteSubstate(ActionCommand)
 		&& !(bNewAction && ActionCommand == Cmd);
 	if (bNewAction && AnimMode == EACEAnimMode::ActionOneShot && !bHoldActionFinal
-		&& ACEAttackMotion::IsAction(ActionCommand) && ACEAttackMotion::IsAction(Cmd))
+		&& (ActionCommand & 0x10000000u) && (Cmd & 0x10000000u))
 	{
 		// CMotionTable::GetObjectSequence appends actions before the cyclic
-		// tail. Changing height or hand must not truncate the preceding swing.
+		// tail. A new gesture or swing must not truncate the preceding action.
 		QueueActionMotion(Cmd, PlayRate, Style, bHoldFinalPose);
 		return;
 	}
@@ -1451,7 +1480,7 @@ void UACECharacterAppearanceComponent::PlayActionMotion(int32 InActionCommand, f
 	}
 	const bool bToEmoteOrReady = (ACEMotion::IsHeldRestCommand(Cmd) && Cmd != ACEMotion::Dead) || Cmd == ACEMotion::Ready;
 	if (AnimMode == EACEAnimMode::ActionOneShot && !bHoldActionFinal
-		&& (bFromMissile || (bToEmoteOrReady && (bFromEmote || bActionUsesStateTransition))))
+		&& (bFromMissile || ((bToEmoteOrReady || (Cmd & 0x80000000u)) && (bFromEmote || bActionUsesStateTransition))))
 	{
 		// Retail removes only the cyclic tail, not an unfinished entry/exit.
 		// Repeated movement/Ready echoes must not append another stand-up sequence.
@@ -1462,7 +1491,7 @@ void UACECharacterAppearanceComponent::PlayActionMotion(int32 InActionCommand, f
 	}
 	ActionFromCommand = bFromEmote || bFromMissile ? ActionCommand : ACEMotion::Ready;
 	WalkingMotion.Reset();
-	bActionUsesStateTransition = bFromEmote || bFromMissile;
+	bActionUsesStateTransition = bFromEmote || bFromMissile || (Cmd & 0x80000000u);
 	// Falling already contains retail's takeoff link (~0.2 s). A full stance
 	// cross-fade hid it behind the previous jump's frozen endpoint.
 	// Attack links already contain their authored approach and recovery poses.
@@ -1477,10 +1506,10 @@ void UACECharacterAppearanceComponent::PlayActionMotion(int32 InActionCommand, f
 	PendingActionHolds.Reset();
 	bHoldActionFinal = false;
 	bHoldActionFinalAfterFinish = bHoldFinalPose;
-	// ChatPose / soul-emote states (0x1300 / 0x4200 / 0x4300) always hold the final frame
-	// until locomotion — even if the caller forgot bHoldFinalPose.
+	// Held soul-emote substates keep their endpoint until the next forward
+	// command. One-shot social actions have already returned through their link.
 	const uint32 HoldFam = Cmd & 0xFF000000u;
-	if (HoldFam == 0x13000000u || HoldFam == 0x42000000u || HoldFam == 0x43000000u
+	if (HoldFam == 0x42000000u || HoldFam == 0x43000000u
 		|| ACEMotion::IsHeldRestCommand(Cmd) || Cmd == 0x40000015u || Cmd == 0x4000001Du)
 	{
 		bHoldActionFinalAfterFinish = true;
@@ -1503,20 +1532,9 @@ void UACECharacterAppearanceComponent::PlayActionMotion(int32 InActionCommand, f
 	{
 		ActionStyle = ACEMotion::StanceMagic;
 	}
-	ActionPlayRate = FMath::Max(0.05f, PlayRate);
-	// Pickup motions must not inherit run-rate ForwardSpeed (>1) from InterpretedState.
-	const uint16 Low = static_cast<uint16>(Cmd);
-	if (Low == 0x0018 || Low == 0x0136 || Low == 0x0137 || Low == 0x0138 || Low == 0x0139)
-	{
-		ActionPlayRate = FMath::Clamp(ActionPlayRate, 0.05f, 1.f);
-	}
-	// Retail chat poses always enqueue at speed_mod 1.0 (MotionData framerate drives the
-	// pace). A run-speed InterpretedState echo must not fast-forward *wave* / *bow*.
-	const uint32 HiFam = Cmd & 0xFF000000u;
-	if (HiFam == 0x13000000u || HiFam == 0x42000000u || HiFam == 0x43000000u)
-	{
-		ActionPlayRate = 1.f;
-	}
+	ActionPlayRate = FMath::Max(0.f, PlayRate);
+	// Local chat requests supply 1.0; received motions supply their own rate.
+	// Do not overwrite an NPC emote, pickup, or combat action's server speed.
 	if (bMagicPowerUp || bMagicCastGesture)
 	{
 		UE_LOG(LogTemp, Verbose,
@@ -1543,14 +1561,14 @@ void UACECharacterAppearanceComponent::QueueActionMotion(int32 InActionCommand, 
 	}
 	bHoldActionFinalAfterFinish = false; // A queued action must run before the final hold.
 	PendingActionCommands.Add(Cmd);
-	PendingActionPlayRates.Add(FMath::Max(0.05f, PlayRate));
+	PendingActionPlayRates.Add(FMath::Max(0.f, PlayRate));
 	uint32 St = static_cast<uint32>(Style);
 	if (St != 0 && St <= 0xFFFFu)
 	{
 		St = ACEMotion::ExpandPackedCommand(static_cast<uint16>(St));
 	}
 	PendingActionStyles.Add(St);
-	PendingActionHolds.Add(bHoldFinalPose);
+	PendingActionHolds.Add(bHoldFinalPose && !(Cmd & 0x10000000u));
 }
 
 void UACECharacterAppearanceComponent::FinishMissileMotion()
@@ -1792,8 +1810,8 @@ void UACECharacterAppearanceComponent::SetHeldActionMotion(int32 InActionCommand
 	{
 		return;
 	}
-	// A held spawn pose is already at its authoritative final frame. Do not blend
-	// back from the Setup bind pose on the next animation tick.
+	// A received substate starts directly in its cycle; zero-rate cycles are
+	// static poses. Do not blend back from the Setup bind pose on the next tick.
 	StanceBlendFrom.Reset();
 	StanceBlendAlpha = 1.f;
 	AnimMode = EACEAnimMode::ActionOneShot;
@@ -1813,9 +1831,13 @@ void UACECharacterAppearanceComponent::SetHeldActionMotion(int32 InActionCommand
 	{
 		ActionStyle = PreferredStyle != 0 ? PreferredStyle : ACEMotion::StanceNonCombat;
 	}
+	// A newly observed resting creature already has a style in CreateObject.
+	// Retain it so the first combat update can play its full activation link.
+	if (PreferredStyle == 0) PreferredStyle = ActionStyle;
 	ActionPlayRate = 1.f;
 	bSuppressNextHookDispatch = true;
-	AnimTime = 1000.f;
+	const bool bLoopSubstate = Cmd != ACEMotion::Dead && ACEMotion::IsHeldRestCommand(Cmd);
+	AnimTime = bLoopSubstate ? 0.f : 1000.f;
 	ResetHookTracking();
 
 	if (!bHasMesh || MotionTableId == 0 || PartMeshes.Num() == 0)
@@ -1837,7 +1859,7 @@ void UACECharacterAppearanceComponent::SetHeldActionMotion(int32 InActionCommand
 	bOk = Dat->EvaluateMotionCommand(
 		static_cast<uint32>(MotionTableId), ActionCommand, AnimTime,
 		PartMeshes.Num(), Animated, WorldScale, AnimatedCount,
-		nullptr, nullptr, ActionStyle, /*bLoop*/ false, &bFinished);
+		nullptr, nullptr, ActionStyle, bLoopSubstate, &bFinished);
 	if (!bOk)
 	{
 		bOk = Dat->EvaluateMotionLink(
@@ -2108,7 +2130,9 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 	if (bReusePose) Swap(Animated, TickPoseScratch);
 	ON_SCOPE_EXIT { if (bReusePose) Swap(Animated, TickPoseScratch); };
 
-	if (!(AnimMode == EACEAnimMode::ActionOneShot && bHoldActionFinal)
+	const bool bLoopHeldSubstate = AnimMode == EACEAnimMode::ActionOneShot && bHoldActionFinal
+		&& ActionCommand != ACEMotion::Dead && ACEMotion::IsHeldRestCommand(ActionCommand);
+	if ((!(AnimMode == EACEAnimMode::ActionOneShot && bHoldActionFinal) || bLoopHeldSubstate)
 		&& !(RemoteWalkingFrame && (AnimMode == EACEAnimMode::Locomotion || ActionCommand == ACEMotion::Dead)))
 	{
 		const float Rate = AnimMode == EACEAnimMode::DoorTransition ? 1.f
@@ -2192,9 +2216,9 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 			|| ActionFam8 == 0x43000000u;
 		const bool bIsRestHold = ACEMotion::IsHeldRestCommand(ActionCommand);
 		const bool bIsJump = ActionCommand == 0x1000004Bu || ActionCommand == 0x40000015u || ActionCommand == 0x4000001Du;
-		// ChatPose / soul emotes (Point, PossumState, …) must play Ready→action Links then
-		// hang. Preferring Cycles for 0x4300 made *playpossum* a 1-frame snap that never held.
-		// Sleeping/Sitting/Crouch also hold — but spawn uses SetHeldActionMotion (final frame).
+		// Soul-emote substates play their entry, then their authored cycle. Some
+		// cycles hold at zero rate; others (dances, gestures) keep animating.
+		// Spawn uses SetHeldActionMotion to begin directly in that cycle.
 		const bool bPreferCycle = bHoldActionFinal || (!bActionUsesStateTransition && !bIsDead && !bIsPickup && !bIsMagicCast && !bIsMissileGesture && !bIsConsumable && !bIsChatPose && !bIsRestHold && !bIsJump
 			&& (Family == 0x40000000u || Family == 0x41000000u));
 		bool bOk = false;
@@ -2203,7 +2227,7 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 			bOk = Dat->EvaluateMotionCommand(
 				static_cast<uint32>(MotionTableId), ActionCommand, AnimTime,
 				PartMeshes.Num(), Animated, WorldScale, AnimatedCount,
-				PreviousTime, &Hooks, ActionStyle, /*bLoop*/ false, &bFinished);
+				PreviousTime, &Hooks, ActionStyle, bLoopHeldSubstate, &bFinished);
 		}
 		if (!bOk)
 		{
@@ -2288,6 +2312,13 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 			{
 				bHoldActionFinal = true;
 				bHoldActionFinalAfterFinish = false;
+				if (ActionCommand != ACEMotion::Dead && ACEMotion::IsHeldRestCommand(ActionCommand))
+				{
+					// The link and cyclic tail have separate clocks/hook traversal.
+					// Keeping the link's end time froze every persistent dance.
+					AnimTime = 0.f;
+					ResetHookTracking();
+				}
 			}
 			else if (bHoldActionFinalAfterFinish && !bOk && bActionEverEvaluated)
 			{
@@ -2308,7 +2339,7 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 				if (PendingActionHolds.Num() > 0) { PendingActionHolds.RemoveAt(0); }
 				// Start next without wiping the rest of the scarab/cast queue.
 				ActionFromCommand = ACEIsEmoteSubstate(ActionCommand) || ACEIsMissileSubstate(ActionCommand) ? ActionCommand : ACEMotion::Ready;
-				bActionUsesStateTransition = ActionFromCommand != ACEMotion::Ready;
+				bActionUsesStateTransition = ActionFromCommand != ACEMotion::Ready || (Next & 0x80000000u);
 				BeginPoseBlendFromCurrent(ACEAttackMotion::IsAttack(Next) ? 0.f : bActionUsesStateTransition ? .06f : StanceBlendDuration);
 				AnimMode = EACEAnimMode::ActionOneShot;
 				ActionCommand = Next;
@@ -2332,7 +2363,7 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 				{
 					ActionStyle = ACEMotion::StanceMagic;
 				}
-				ActionPlayRate = FMath::Max(0.05f, NextRate);
+				ActionPlayRate = FMath::Max(0.f, NextRate);
 				bActionEverEvaluated = false;
 				AnimTime = 0.f;
 				DeferredPoseDeltaTime = 0.f;
@@ -2552,6 +2583,8 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 			bOk = Evaluate(WalkForward, AnimTime, Animated, AnimatedCount, true, &Hooks);
 		}
 	}
+	if (!bMoving && !FMath::IsNearlyZero(LocomotionTurn))
+		bOk = Evaluate(ACEMotion::TurnRight, AnimTime*LocomotionTurn, Animated, AnimatedCount, true, &Hooks);
 	if (!bOk)
 	{
 		const uint64 IdleTrackKey = (5ull << 60) | static_cast<uint32>(MotionTableId)

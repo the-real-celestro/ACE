@@ -1,36 +1,29 @@
-# AC:Unreal / AC:VR release 134
+# AC:Unreal / AC:VR release 141
 
 Windows desktop, PC VR, native Linux x86_64, and standalone Quest share version
-**2026.10.23.134**. Android version code: 134. Quest installer revision: 9.
+**2026.10.27.141**. Android version code: 141. Quest installer revision: 9.
 
-These notes cover all changes since **v133 / 2026.10.23.133**.
+These notes cover all changes since **v140 / 2026.10.27.140**.
 
-## UCM equipment buffing
+## Vendor purchases
 
-- Skip Covenant shields and other equipment that cannot receive enchantments,
-  using the same appraisal property as retail rather than item-name exceptions.
-- Remove unenchantable equipment from pending buff queues, including items
-  identified after the queue was built and saved explicit item-buff bindings.
-- Appraise unknown equipment before switching to a wand or attempting its buffs.
-  Failed appraisal attempts remain bounded by the existing retry limits.
-- Prevent repeated failed item-buff attempts and unnecessary weapon/wand switching
-  so UCM can proceed into combat with the selected shield.
-
-## Journal contract progress
-
-- Restore the retail contract-row fonts, margins, columns, and selection artwork.
-- Show each contract's own progress text and remaining count in the status column.
-  Long progress text wraps and increases the row height so kill counts stay visible.
-- Keep contract descriptions in the notes area and truncate long names within
-  their own column, preserving space for progress.
-- Adjust scrolling for taller rows so entries are not skipped at larger UI scales.
+- Match retail's complete Buy request by including the vendor's currency field,
+  including zero for ordinary pyreals. The missing field could prevent servers
+  that read the complete request from processing purchases, leaving the cursor
+  waiting on an hourglass. This addresses a protocol mismatch found while
+  investigating the grocer purchase reports on Frostcull.
+- Apply the correction to individual purchases and carts through native vendor
+  UI, VR, UCM restocking, and Item Tools, which share the same purchase sender.
+- Use the current vendor's advertised currency, including after switching
+  between alternate-currency and ordinary vendors. Selling retains its separate
+  retail packet format.
 
 ## Validation and distribution
 
-- Regression coverage includes unenchantable equipment at the retail property
-  threshold, carried and equipped shields, late appraisal, explicit buff bindings,
-  confirmed buffs, equipment handoff, and continued combat.
-- Rendered journal checks cover real DAT contract text, small and large remaining
-  counts, scrolling, and 100% and 150% UI scales.
-- Ship matching Windows, Linux, and Quest versions. Packages exclude account
-  settings, personal saves, server data, and the original game's DAT files.
+- Add packet regressions for ordinary and alternate currencies, vendor changes,
+  single-item and cart purchases, unsigned stock IDs, selling, and cursor
+  completion. The previous Buy request fails the retail packet contract.
+- Ship matching Windows, Linux, and Quest packages without personal settings,
+  account data, server databases, or retail DAT files.
+- Automated checks do not replace live Frostcull confirmation, native Linux GPU
+  testing, or physical Quest/PC VR acceptance.
