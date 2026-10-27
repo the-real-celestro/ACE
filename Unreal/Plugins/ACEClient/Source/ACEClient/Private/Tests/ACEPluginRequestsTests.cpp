@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "ACETestDatDirectory.h"
 #include "HAL/FileManager.h"
 #include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
@@ -265,6 +266,53 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
     }
     H->RefreshAutomationData();
     {
+        const auto SavedObjects=Session.WorldObjects;const auto SavedAppraisals=H->Appraisals;
+        const auto SavedRequests=H->AppraisalRequests;const auto SavedSelection=Session.SelectedObject;
+        ON_SCOPE_EXIT {Session.WorldObjects=SavedObjects;H->Appraisals=SavedAppraisals;H->AppraisalRequests=SavedRequests;
+            Session.SelectedObject=SavedSelection;H->InventoryRevision=MAX_uint64;};
+        Session.WorldObjects.Empty();H->Appraisals.Empty();H->AppraisalRequests.Empty();
+        FACEWorldObject Owner;Owner.Guid=Session.PlayerGuid;Owner.bIsPlayer=true;Session.WorldObjects.Add(Owner.Guid,Owner);
+        FACEWorldObject Item;Item.Guid=9201;Item.ContainerId=Session.PlayerGuid;Item.ItemType=256;Item.Name=TEXT("Atlatl dart");
+        Session.WorldObjects.Add(Item.Guid,Item);
+        FACEAppraisalInfo Info;Info.ObjectGuid=Item.Guid;Info.bSuccess=true;Info.Damage=30;Info.DamageType=2;
+        H->ObserveAppraisal(Info);
+        for(int Shot=0;Shot<6;++Shot)
+        {
+            FACEBinaryWriter W;W.WriteUInt32(Item.Guid);W.WriteUInt32(ACEEquipMask::MissileAmmo);
+            FACEBinaryReader WR(W.GetData());Session.HandleWieldItem(WR);
+            FACEBinaryWriter Parent;Parent.WriteUInt32(Owner.Guid);Parent.WriteUInt32(Item.Guid);Parent.WriteUInt32(1);Parent.WriteUInt32(1);Parent.WriteUInt16(0);Parent.WriteUInt16(Shot*2+1);
+            FACEBinaryReader PR(Parent.GetData());Session.HandleParentEvent(PR);
+            TestTrue(TEXT("Reload/attachment retains assessed ammunition"),H->Appraisals.Contains(Item.Guid));
+            FACEBinaryWriter Pickup;Pickup.WriteUInt32(Item.Guid);Pickup.WriteUInt16(0);Pickup.WriteUInt16(Shot*2+2);
+            FACEBinaryReader RR(Pickup.GetData());Session.HandlePickupEvent(RR);
+            TestTrue(TEXT("Shot removes only the visual, not the ammunition appraisal"),H->Appraisals.Contains(Item.Guid));
+        }
+        // Held weapon wield and appearance updates use the same cache.
+        FACEBinaryWriter W;W.WriteUInt32(Item.Guid);W.WriteUInt32(ACEEquipMask::MissileWeapon);
+        FACEBinaryReader WR(W.GetData());Session.HandleWieldItem(WR);
+        TestTrue(TEXT("Switching the equipped weapon retains its appraisal"),H->Appraisals.Contains(Item.Guid));
+        auto Visual=Session.WorldObjects[Item.Guid];Visual.bAppearanceOnlyUpdate=true;Session.OnObjectCreated.Broadcast(Visual);
+        TestTrue(TEXT("Appearance-only changes retain owned item stats"),H->Appraisals.Contains(Item.Guid));
+        H->AppraisalRequests.Add(Item.Guid,FPlatformTime::Seconds());
+        Session.OnObjectCreated.Broadcast(Session.WorldObjects[Item.Guid]);
+        TestFalse(TEXT("A real replacement description still invalidates appraisal"),H->Appraisals.Contains(Item.Guid));
+        TestFalse(TEXT("Replacement data can be appraised immediately"),H->AppraisalRequests.Contains(Item.Guid));
+        H->ObserveAppraisal(Info);Session.WorldObjects.Remove(Item.Guid);Session.OnObjectDeleted.Broadcast(Item.Guid);
+        TestFalse(TEXT("Actual removal discards the item's appraisal"),H->Appraisals.Contains(Item.Guid));
+
+        FACEWorldObject Player;Player.Guid=9202;Player.bIsPlayer=true;Player.ItemType=ACEItemType::Creature;
+        Player.ObjectDescriptionFlags=ACEObjectDescFlag::Attackable;Session.WorldObjects.Add(Player.Guid,Player);
+        Session.SelectedObject.Guid=Player.Guid;
+        for(int Scan=0;Scan<3;++Scan)
+        {
+            H->NextAppraisalScan=0;H->LastAppraisalRequest=0;H->RefreshAutomationData();
+            TestFalse(TEXT("Selecting a fellow player never schedules UCM appraisal"),H->AppraisalRequests.Contains(Player.Guid));
+        }
+        Session.WorldObjects[Player.Guid].bIsPlayer=false;
+        H->NextAppraisalScan=0;H->LastAppraisalRequest=0;H->RefreshAutomationData();
+        TestTrue(TEXT("Selected enemies still receive background appraisal"),H->AppraisalRequests.Contains(Player.Guid));
+    }
+    {
         TestTrue(TEXT("Native vitals view uses session storage"),&C->GetPlayerVitalsView()==&Session.GetPlayerVitals());
         H->DrawRoute();TestNull(TEXT("No route does not allocate a world actor"),H->RouteActor.Get());
         // A fully appraised inventory previously rescanned at render frequency.
@@ -487,6 +535,7 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
             bool Found=false;for(const auto& V:Snapshot->GetArrayField(TEXT("inventory")))if(V->AsObject()->GetNumberField(TEXT("id"))==Blade.Guid)
             {Found=true;TestEqual(TEXT("UCM sees tether changes without relog or appraisal"),V->AsObject()->GetBoolField(TEXT("auto_wield_left")),Left);}
             TestTrue(TEXT("Tethered weapon is in inventory snapshot"),Found);
+            H->Appraisals.Add(Blade.Guid,BladeInfo); // changed inventory qualities require reassessment
             Session.PendingCombatMode=0;Session.ApplyServerCombatMode(1);Session.CachedC2SPackets.Reset();H->ExecuteInventory(*P,Equip,TEXT("equip"));
             bool Sent=false;for(const auto& Packet:Session.CachedC2SPackets)
             {FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);if(R.ReadUInt32()!=ACEGameAction::GetAndWieldItem)continue;Sent=true;TestEqual(TEXT("Equip packet identifies blade"),R.ReadUInt32(),uint32(Blade.Guid));TestEqual(TEXT("Equip packet uses retail right/left location"),R.ReadUInt32(),uint32(Left?ACEEquipMask::Shield:ACEEquipMask::MeleeWeapon));}
@@ -497,7 +546,7 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
         for(int Protection=0;Protection<4;++Protection)
         {
             auto& Live=Session.WorldObjects[Blade.Guid];Live=Blade;Live.MaterialType=59;Live.Structure=200;
-            H->Appraisals[Blade.Guid]=BladeInfo;
+            H->Appraisals.Add(Blade.Guid,BladeInfo); // equip invalidates the previous appraisal
             if(Protection==1)H->Appraisals[Blade.Guid].IntProperties.Add(171,1);
             if(Protection==2)H->Appraisals[Blade.Guid].StringProperties.Add(8,TEXT("Owner"));
             if(Protection==3)Live.ObjectDescriptionFlags|=ACEObjectDescFlag::Retained;
@@ -575,15 +624,29 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
             TestFalse(TEXT("Wall / closed door blocks low, middle and high monster sight despite ignoring Camera"),Sight.Clear(Origin+FVector(0,0,120),Origin+FVector(-1000,0,Height)));
         Obstacle->SetCollisionResponseToChannel(ECC_Pawn,ECR_Ignore);
         TestTrue(TEXT("Open door immediately restores sight"),Sight.Clear(Origin+FVector(0,0,120),Origin+FVector(-1000,0,120)));
+        Obstacle->SetCollisionResponseToChannel(ECC_Pawn,ECR_Block);
+        Wall->SetActorLocation(Origin+FVector(-500,305,200));
+        TestTrue(TEXT("Center ray can clear a wall corner by five centimetres"),Sight.Clear(Origin+FVector(0,0,120),Origin+FVector(-1000,0,120)));
+        TestFalse(TEXT("Finite firing corridor rejects a grazing corner"),Sight.Clear(Origin+FVector(0,0,120),Origin+FVector(-1000,0,120),15.f));
+        Wall->SetActorLocation(Origin+FVector(-500,330,200));
+        TestTrue(TEXT("Adequate corner clearance allows the shot"),Sight.Clear(Origin+FVector(0,0,120),Origin+FVector(-1000,0,120),15.f));
         Wall->Destroy();
         auto* Room=World->SpawnActor<AACEEnvCellActor>();
         Room->SetActorLocation(Origin+FVector(-500,0,0));
-        Room->CellMesh->CreateMeshSection(0,{FVector(0,-300,0),FVector(0,300,0),FVector(0,0,400)},
-            {0,1,2},TArray<FVector>(),TArray<FVector2D>(),TArray<FColor>(),TArray<FProcMeshTangent>(),false);
+        Room->CellMesh->CreateMeshSection(0,{FVector(0,-300,0),FVector(0,300,0),FVector(0,300,400),FVector(0,-300,400)},
+            {0,1,2,0,2,3},TArray<FVector>(),TArray<FVector2D>(),TArray<FColor>(),TArray<FProcMeshTangent>(),false);
         Room->SetActorHiddenInGame(true);Room->CellMesh->SetVisibility(false);
         Room->CellMesh->SetMeshSectionVisible(0,false);
         FACEPluginSightQuery HiddenSight(*World,nullptr);
         TestFalse(TEXT("Culled room wall without cooked collision still blocks combat"),HiddenSight.Clear(Origin+FVector(0,0,120),Origin+FVector(-1000,0,120)));
+        Room->SetActorLocation(Origin+FVector(-500,305,0));
+        TestTrue(TEXT("Uncooked corner clears the center ray"),HiddenSight.Clear(Origin+FVector(0,0,120),Origin+FVector(-1000,0,120)));
+        TestFalse(TEXT("Hidden uncooked wall edges block the full firing corridor"),HiddenSight.Clear(Origin+FVector(0,0,120),Origin+FVector(-1000,0,120),15.f));
+        Room->SetActorScale3D(FVector(1,2,.5));Room->SetActorLocation(Origin+FVector(-500,605,0));
+        TestFalse(TEXT("Nonuniformly scaled room edges retain world-space clearance"),HiddenSight.Clear(Origin+FVector(0,0,120),Origin+FVector(-1000,0,120),15.f));
+        Room->SetActorLocation(Origin+FVector(-500,630,0));
+        TestTrue(TEXT("Cleared uncooked wall allows the full corridor"),HiddenSight.Clear(Origin+FVector(0,0,120),Origin+FVector(-1000,0,120),15.f));
+        TestTrue(TEXT("Low target corridor stays clear of its supporting floor"),HiddenSight.Clear(Origin+FVector(0,0,120),Origin+FVector(-1000,0,10),3.f));
         Room->Destroy();
     }
     // Exercise real snapshot -> Lua -> controller dispatch. The policy-only
@@ -1183,6 +1246,46 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
             P->NextAction=0;const int32 Before=CastCount();H->Execute(*P,AttackSpell);
             TestEqual(TEXT("Real hostile creatures still require line of sight"),CastCount(),Before);
             TestTrue(TEXT("Occluded monster rejection does not start a cast"),!H->PendingSpell&&P->Status.Contains(TEXT("obstruction")));
+            // A walking rat can turn a corner between sparse F748 positions.
+            // Keep the packet in the open while its actual body is behind the wall.
+            auto* Rat=World->SpawnActor<AACEWorldEntityActor>();
+            Rat->InitializeFromObject(Monster,100.f,false);
+            ON_SCOPE_EXIT {Rat->Destroy();};
+            Session.WorldObjects[Monster.Guid].Position=Session.PlayerPosition;
+            Session.WorldObjects[Monster.Guid].Position.Location.Y+=10;
+            const auto& Stale=Session.WorldObjects[Monster.Guid];
+            TestFalse(TEXT("Combat sight follows the rat behind the corner, not its stale network position"),H->HasClearCombatSight(Stale));
+            auto TargetSight=[&]()
+            {
+                auto Snapshot=H->Snapshot();
+                for(const auto& V:Snapshot->GetArrayField(TEXT("targets")))
+                    if(V->AsObject()->GetNumberField(TEXT("id"))==uint32(Monster.Guid))return V->AsObject()->GetBoolField(TEXT("line_of_sight"));
+                AddError(TEXT("Corner fixture target is missing"));return true;
+            };
+            TestFalse(TEXT("Policy snapshot excludes the rat that moved behind the corner"),TargetSight());
+            P->NextAction=0;H->Execute(*P,AttackSpell);
+            TestEqual(TEXT("Stale-position attack sends no spell packet"),CastCount(),Before);
+            if(H->PendingSpell) {Ack(0);H->PendingSpell=0;H->PendingSpellOwner.Empty();}
+            Rat->SetActorLocation(Stale.Position.ToUnrealLocation());
+            TestTrue(TEXT("Rat becomes eligible as soon as its live body clears the wall"),TargetSight());
+            // The target can move after the Lua decision, before dispatch.
+            Rat->SetActorLocation(Monster.Position.ToUnrealLocation());
+            const int32 BeforeDispatch=CastCount();P->NextAction=0;H->Execute(*P,AttackSpell);
+            TestEqual(TEXT("Final dispatch rechecks live obstruction"),CastCount(),BeforeDispatch);
+            if(H->PendingSpell) {Ack(0);H->PendingSpell=0;H->PendingSpellOwner.Empty();}
+            Wall->SetActorLocation((Here+There)*.5+FVector(0,305,200));
+            TestFalse(TEXT("Policy excludes a target with a grazing projectile path"),TargetSight());
+            for(int Attempt=0;Attempt<3;++Attempt)
+            {
+                P->NextAction=0;H->Execute(*P,AttackSpell);
+                TestEqual(TEXT("Repeated grazing-corner intents never send a spell"),CastCount(),BeforeDispatch);
+                TestEqual(TEXT("Blocked shots never start awaiting spell confirmation"),H->PendingSpell,0);
+            }
+            Wall->SetActorLocation((Here+There)*.5+FVector(0,340,200));
+            TestTrue(TEXT("Policy restores the target after adequate corner clearance"),TargetSight());
+            P->NextAction=0;H->Execute(*P,AttackSpell);
+            TestEqual(TEXT("Clear path sends exactly one cast"),CastCount(),BeforeDispatch+1);
+            Ack(0);H->PendingSpell=0;H->PendingSpellOwner.Empty();
         }
         struct FTapPacket {uint32 Command,Hold,Stance;TArray<uint8> PositionAndStamps;};
         auto MovementPackets=[&]()
@@ -1310,7 +1413,20 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
                 Session.OnObjectHealth.Broadcast(970,0);
                 TestEqual(TEXT("Repeated zero-health packets do not extend the wait"),H->LastCombatDeath->GetNumberField(TEXT("time")),DeathAt);
             }
-            H->Execute(*P,AttackIntent(971,Mode));TestEqual(TEXT("Next opponent attack is sent immediately after death"),AttackCount(),Before+1);
+            // Even after a kill wakes the policy, a replacement attack must
+            // still pass physical sight at dispatch time. This wall ignores
+            // camera traces just like doors; no missile or charge may escape.
+            auto* Wall=World->SpawnActor<AActor>();auto* Obstacle=NewObject<UBoxComponent>(Wall);
+            Wall->SetRootComponent(Obstacle);Obstacle->SetBoxExtent(FVector(20,300,300));
+            Obstacle->SetCollisionEnabled(ECollisionEnabled::QueryOnly);Obstacle->SetCollisionResponseToAllChannels(ECR_Block);
+            Obstacle->SetCollisionResponseToChannel(ECC_Camera,ECR_Ignore);Obstacle->RegisterComponent();
+            Wall->SetActorLocation((Session.PlayerPosition.ToUnrealLocation()+NextEnemy.Position.ToUnrealLocation())*.5+FVector(0,0,120));
+            TestFalse(TEXT("Next opponent is physically behind the wall"),H->HasClearCombatSight(NextEnemy));
+            H->Execute(*P,AttackIntent(971,Mode));
+            TestEqual(TEXT("Post-kill plugin attack cannot bypass a wall"),AttackCount(),Before);
+            Obstacle->SetCollisionEnabled(ECollisionEnabled::NoCollision);Wall->Destroy();
+            P->NextAction=0; // advance past the rejected action's normal decision throttle
+            H->Execute(*P,AttackIntent(971,Mode));TestEqual(TEXT("Visible next opponent attack is sent immediately after death"),AttackCount(),Before+1);
             auto State=H->Snapshot();bool DeadInSnapshot=false;for(const auto& V:State->GetArrayField(TEXT("targets")))DeadInSnapshot|=V->AsObject()->GetNumberField(TEXT("id"))==970;
             TestTrue(TEXT("Policy snapshot includes confirmed death for post-combat loot"),State->HasTypedField<EJson::Object>(TEXT("combat_death")));
             TestFalse(TEXT("Dead opponent stays excluded after selection moves to next opponent"),DeadInSnapshot);
@@ -1685,7 +1801,7 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
     if(FParse::Param(FCommandLine::Get(),TEXT("WaypointRender")))
     {
         auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
-        if(TestTrue(TEXT("Waypoint uses retail DAT geometry"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))))
+        if(TestTrue(TEXT("Waypoint uses retail DAT geometry"),Dat->LoadDatDirectory(ACETestDatDirectory())))
         {
             auto Waypoint=H->Find(TEXT("waypoint"));Waypoint->Enabled=true;Waypoint->Profile=MakeShared<FJsonObject>();
             Waypoint->Profile->SetNumberField(TEXT("east"),-99.);Waypoint->Profile->SetNumberField(TEXT("north"),-48.5);

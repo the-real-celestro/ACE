@@ -70,6 +70,8 @@ DECLARE_MULTICAST_DELEGATE_FourParams(FACEOnCombatFeedback, const FString&, int3
  */
 class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 {
+    friend class FACEPluginWorldPlateTest;
+    friend class FACEFoundryTest;
 	friend class FACERetailLogoutTest;
 	friend class FACECollisionSizingTest;
 	friend class FACEPvPCombatParityTest;
@@ -82,6 +84,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACEPluginEquipmentTest;
 	friend class FACEPluginRequestsTest;
 	friend class FACEAppraisalCommandContextTest;
+	friend class FACEVendorTransactionsTest;
 	friend class FACEUCMLootLatencyTest;
 	friend class FACEPluginLootIconsTest;
     friend class FACEPluginCompanionTest;
@@ -132,6 +135,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACERetailInteriorStreamingTest;
 	friend class FACERetailCombatProtocolTest;
 	friend class FACERetailNetworkTest;
+	friend class FACENetworkAnimationParityTest;
 	friend class FACEAttackHeightMotionTest;
 	friend class FACEGroundItemPlacementTest;
 	friend class FACECustomObjectReplicationTest;
@@ -415,6 +419,8 @@ public:
 
 	/** GameAction PutItemInContainer (0x0019) — drag & drop into a pack (Placement = slot index). */
 	void SendPutItemInContainer(int32 ItemGuid, int32 ContainerGuid, int32 Placement);
+	/** Retail auto-merge: first destination stack that can hold the entire selected amount. */
+	int32 FindContainerMergeTarget(int32 ItemGuid, int32 ContainerGuid, int32 Amount) const;
 
 	/** GameAction StackableMerge (0x0054) — combine stackables by guid (amount of From into To). */
 	void SendStackableMerge(int32 MergeFromGuid, int32 MergeToGuid, int32 Amount);
@@ -700,6 +706,7 @@ public:
 	void SetReportedContact(bool bContact) { bAutoPosContact = bContact; }
 
 private:
+    friend class FACEUCMProfileStorageTest;
 	void AdoptPlayerPhysicsTimestamps(const FACEWorldObject& Object);
 	struct FReceivedFragment
 	{
@@ -873,6 +880,8 @@ private:
 	void AdvanceEquipmentSwap();
 	void CancelEquipmentSwap();
     int32 FindEquipmentStowContainer(const TMap<int32, int32>& Reserved) const;
+	bool CanStowEquipmentInContainer(int32 Container, int32 Reserved = 0) const;
+	bool HasPlayerInventoryState(const FACEWorldObject& Object) const;
 	int32 PendingEquipmentGuid = 0;
 	TMap<int32,double> PendingInventoryTransfers;
 	uint32 PendingEquipmentCombatMode = 0;

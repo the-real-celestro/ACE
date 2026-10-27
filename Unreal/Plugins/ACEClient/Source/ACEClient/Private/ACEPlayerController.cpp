@@ -1,4 +1,5 @@
 #include "ACEPlayerController.h"
+#include "ACEOrbitCameraBoom.h"
 #include "ACEInventoryRules.h"
 #include "ACEProfiling.h"
 #include "ACERetailTurn.h"
@@ -876,7 +877,8 @@ bool AACEPlayerController::InputKey(const FInputKeyEventArgs& Params)
 
 void AACEPlayerController::UpdateFrameRateOverlay()
 {
-	const bool Enabled=ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f && !IsDesktopInterfaceHidden();
+	const bool Enabled=Client && Client->GetSessionState()==EACESessionState::InWorld
+		&& ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f && !IsDesktopInterfaceHidden();
 	if(!Enabled)
 	{
 		if(FrameRateWidget && FrameRateWidget->GetVisibility()!=ESlateVisibility::Collapsed)
@@ -1537,18 +1539,18 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				}
 			}
 			if (UseApproachPhase == EACEUseApproachPhase::Holding
-				&& !bInUseRange
-				&& ApproachStallSeconds < 0.2f)
+				&& !bInUseRange)
 			{
-				// Still not against the mesh and cylinder gap is outside UseRadius — keep closing.
+				// A delayed server MoveTo can tighten the radius after we started
+				// holding (ACE does this for magic stance). Resume toward the new
+				// distance even after a long wait; holding time is not failed walking.
 				// Give / MoveOnly approaches must stay MoveOnly: sending Use runs
 				// StopExistingMoveToChains on the server and cancels the pending give.
-				UseApproachPhase = EACEUseApproachPhase::Walking;
+				UseApproachPhase = bFacing ? EACEUseApproachPhase::Walking : EACEUseApproachPhase::Turning;
+				ApproachStallSeconds = 0.f;
+				ApproachStallLastLoc = SelfLoc;
+				ApproachTurnSeconds = 0.f;
 				bResendUseWhenInRange = !bApproachMoveOnly && ApproachUseSendCount == 0;
-			}
-			if (UseApproachPhase == EACEUseApproachPhase::Holding && !bInUseRange && !bFacing)
-			{
-				UseApproachPhase = EACEUseApproachPhase::Turning;
 			}
 
 			F = 0.f;
@@ -1607,7 +1609,11 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
         }
     }
 
-    // Retail: no air control of the arc — lock JumpWorldAceVelocity. A/D may still yaw the
+	if (!bVR && GetPawn())
+		if (auto* App=GetPawn()->FindComponentByClass<UACECharacterAppearanceComponent>(); App && App->IsMovementLockedByAction())
+		{ F=0.f; R=0.f; }
+
+	// Retail: no air control of the arc — lock JumpWorldAceVelocity. A/D may still yaw the
 	// mesh while airborne (visual only); charge keeps turn for aim.
 	const float RawF = F;
 	const float RawR = R;
@@ -1680,8 +1686,10 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		if (UACECharacterAppearanceComponent* App = PossessedPawn->FindComponentByClass<UACECharacterAppearanceComponent>())
 		{
 			App->SetWalkingTransitionsEnabled(!bVR && !bJumpAirborne && !bJumpCharging
-				&& !bServerMoveToActive && !bPluginDrivingMovement && !bPluginFastBuffMovement
-				&& !bChatFocused && !ACEInputBindings::Down(this, ACEInputBindings::Action(TEXT("Stop"))));
+				&& !bServerMoveToActive && !bPluginDrivingMovement && !bPluginFastBuffMovement);
+			// Retail StopObjectCompletely and ordinary key-up both return through
+			// the motion table. Stop/chat suppress input, not the unfinished step.
+			App->SetTurnInput(bVR || bJumpAirborne ? 0.f : ReportedTurn*((bMouseFacing||bRunning)?1.5f:1.f));
 			if (!bJumpAirborne && !FMath::IsNearlyZero(F) && FMath::Sign(F) != FMath::Sign(ForwardSent))
 				App->InterruptCastWithMovement();
 			App->UpdateCellLighting((bHavePredictedPose ? PredictedPose : Client->GetPlayerPosition()).CellId);
@@ -4246,6 +4254,7 @@ void AACEPlayerController::UpdateOrbitCamera(float DeltaTime)
 	}
 
 	Boom->CameraLagSpeed = ACECameraRetail::TranslationLagSpeed * ACERuntimeOptions::Get(TEXT("CameraStiffness"));
+	Boom->CameraRotationLagSpeed = Boom->CameraLagSpeed;
 	ApplyRetailCameraFov();
 	if (UCapsuleComponent* Cap = P ? P->FindComponentByClass<UCapsuleComponent>() : nullptr)
 	{
@@ -4307,6 +4316,46 @@ void AACEPlayerController::UpdateOrbitCamera(float DeltaTime)
 	bCameraMapWasDown = bMapDown;
 
 	UpdateCombatTargetCameraAssist(DeltaTime, Boom);
+	UpdateCameraSlope(Boom, DeltaTime);
+}
+
+void AACEPlayerController::UpdateCameraSlope(USpringArmComponent* Boom, float DeltaTime)
+{
+	auto* Orbit = Cast<UACEOrbitCameraBoom>(Boom);
+	APawn* CameraPawn = GetPawn();
+	if (!Orbit || !CameraPawn) return;
+	Orbit->SlopePitch = 0.f;
+	const FVector Position = CameraPawn->GetActorLocation();
+	const FVector Delta = Position - CameraSlopeLastPosition;
+	const bool Valid = bHaveCameraSlopePosition && DeltaTime > SMALL_NUMBER && Delta.SizeSquared() < FMath::Square(2000.);
+	CameraSlopeLastPosition = Position; bHaveCameraSlopePosition = true;
+	if (!Valid) CameraSlopeVelocities.Reset();
+	CameraSlopeVelocities.Add(Valid ? Delta / DeltaTime : FVector::ZeroVector);
+	if (CameraSlopeVelocities.Num()>5) CameraSlopeVelocities.RemoveAt(0,1,EAllowShrinking::No);
+	FVector Velocity = FVector::ZeroVector; for (const auto& V : CameraSlopeVelocities) Velocity += V;
+	Velocity /= CameraSlopeVelocities.Num();
+	// CameraSet's ordinary rear/in-head views align to the contact plane;
+	// overhead, front and side views retain their explicitly chosen orientation.
+	if (IsVRActive() || bCameraLookDown || bCameraMapMode || ACERuntimeOptions::Get(TEXT("CameraAlignToSlope"))<.5f
+		|| (!bCameraInHead && FMath::Abs(FMath::UnwindDegrees(Boom->GetRelativeRotation().Yaw-ACECameraRetail::BoomYawToFaceAcForward))>22.f)
+		|| Velocity.SizeSquared2D()<.01f || !GetWorld()->GetPhysicsScene()) return;
+	FVector Normal = FVector::UpVector;
+	if (bJumpAirborne)
+	{
+		Velocity.Z *= .1f;
+		Normal = FRotationMatrix::MakeFromX(Velocity).GetUnitAxis(EAxis::Z);
+	}
+	else if (const auto* Capsule=CameraPawn->FindComponentByClass<UCapsuleComponent>())
+	{
+		const FVector Feet = Position-FVector(0,0,Capsule->GetScaledCapsuleHalfHeight());
+		FCollisionQueryParams Query(SCENE_QUERY_STAT(ACECameraSlope),false,CameraPawn);
+		TArray<FHitResult> Hits;
+		if (ACEBodySweep::TraceGround(*GetWorld(),Hits,Feet+FVector(0,0,40),Feet-FVector(0,0,80),Query))
+			for (const auto& Hit : Hits) if (Hit.bBlockingHit && Hit.ImpactNormal.Z>.664f && !ACEBodySweep::IsCreatureBody(Hit))
+			{ Normal=Hit.ImpactNormal; break; }
+	}
+	// AC's forward axis is local +Y, rather than Unreal's +X.
+	Orbit->SlopePitch=FVector::VectorPlaneProject(CameraPawn->GetActorRightVector(),Normal).Rotation().Pitch;
 }
 
 void AACEPlayerController::SyncUserCameraArmLength(USpringArmComponent* Boom, float DeltaSeconds)
@@ -6993,6 +7042,11 @@ void AACEPlayerController::HandlePositionUpdate(int32 ObjectGuid, const FACEPosi
 			App->ClearJumpMotionIfAny();
 			App->SetSuppressLocoIdleBlend(false);
 		}
+		// SmartBox::HandleReceivedPosition acknowledges a force-position blip
+		// immediately, with the corrected XYZ and the player's retained heading.
+		// Waiting for input or the periodic report leaves the server correcting
+		// against an obsolete position. Airborne reports remain suppressed.
+		Client->FlushAutonomousPosition(Corrected.bIsGrounded);
 		return;
 	}
 
@@ -7138,6 +7192,8 @@ void AACEPlayerController::HandleCharacterList(const TArray<FACECharacterInfo>& 
 
 void AACEPlayerController::HandleSessionStateChanged(EACESessionState NewState)
 {
+	// A saved FPS preference belongs to the gameplay HUD, not the login/lobby.
+	if (NewState != EACESessionState::InWorld) UpdateFrameRateOverlay();
 	if (NewState == EACESessionState::Connecting) WorldEntryFailureReason.Reset();
 	if (NewState == EACESessionState::EnteringWorld && bUseEnterWorldLoadScreen)
 		bPendingEnterWorldTransition = true; // Outside the Play button's Slate callback.
@@ -8016,17 +8072,15 @@ void AACEPlayerController::HandleMotionUpdate(int32 ObjectGuid, const FACEObject
 				const uint32 Full = Act <= 0xFFFFu
 					? ACEMotion::ExpandPackedCommand(static_cast<uint16>(Act))
 					: Act;
-				const uint32 Hi = Full & 0xFF000000u;
 				// A held forward pose survives independent sidestep/turn commands.
-				const bool bHoldEmote = Hi == 0x13000000u || Hi == 0x43000000u || Hi == 0x42000000u;
+				const bool bHoldEmote = ACEMotion::IsHeldRestCommand(Full);
 				App->PlayActionMotion(Motion.ActionCommand, Motion.ActionSpeed, Motion.CurrentStyle, bHoldEmote, Motion.bNewAction);
 				if (!bHoldEmote || Motion.bNewAction)
 				{
 					for (int32 I=0;I<Motion.ActionFollowups.Num();++I)
 					{
 						const uint32 Next = ACEMotion::NormalizeCommand(static_cast<uint32>(Motion.ActionFollowups[I]));
-						const uint32 Family = Next & 0xFF000000u;
-						const bool Hold = Family == 0x13000000u || Family == 0x42000000u || Family == 0x43000000u || ACEMotion::IsHeldRestCommand(Next);
+						const bool Hold = ACEMotion::IsHeldRestCommand(Next);
 						App->QueueActionMotion(Motion.ActionFollowups[I], Motion.FollowupSpeed(I), Motion.CurrentStyle, Hold);
 					}
 				}

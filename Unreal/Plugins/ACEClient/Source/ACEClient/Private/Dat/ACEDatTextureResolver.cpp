@@ -897,7 +897,7 @@ bool FACEDatTextureResolver::ResolveSurfaceRenderFlags(uint32 SurfaceId, FACEDat
 		if (!ResolveSurface(SurfaceId, Decoded)) return false;
 		Surface = &Decoded;
 	}
-	if (!Surface->bHasPixels && !Surface->bIsSolid) return false;
+	if (!Surface->bHasPixels && !Surface->bIsSolid && Surface->Width<=0) return false;
 	Out.bFullyTransparent = Surface->bFullyTransparent;
 	Out.bUsesAlpha = Surface->bUsesAlpha;
 	Out.bClipMap = Surface->bClipMap;
@@ -906,10 +906,35 @@ bool FACEDatTextureResolver::ResolveSurfaceRenderFlags(uint32 SurfaceId, FACEDat
 	Out.bSurfaceTranslucent = Surface->bSurfaceTranslucent;
 	Out.Translucency = Surface->Translucency;
 	Out.SolidAlpha = Surface->SolidColor.A;
+	Out.SolidColor=Surface->SolidColor;Out.Luminosity=Surface->Luminosity;Out.Diffuse=Surface->Diffuse;
 	return true;
 }
 
-bool FACEDatTextureResolver::ResolveSurfaceWithAppearance(uint32 SurfaceId, int32 PartIndex, const FACEObjDesc* Appearance, FACEDatDecodedSurface& Out)
+uint32 FACEDatTextureResolver::GetOriginalPaletteId(uint32 SurfaceId) const
+{
+	if (const auto* Cached = OriginalPaletteCache.Find(SurfaceId)) return *Cached;
+	const uint32 Palette = [&]() -> uint32
+	{
+	TArray<uint8> Blob;
+	if (!ReadBlob(SurfaceId, Blob)) return 0;
+	FACEDatCursor Cursor(Blob); FACEDatSurface Surface;
+	if (!ACEDatUnpack::UnpackSurface(Cursor, Surface)) return 0;
+	if (Surface.OrigPaletteId) return Surface.OrigPaletteId;
+	if (!Surface.OrigTextureId || !ReadBlob(Surface.OrigTextureId, Blob)) return 0;
+	FACEDatCursor TextureCursor(Blob); FACEDatSurfaceTexture Texture;
+	if (!ACEDatUnpack::UnpackSurfaceTexture(TextureCursor, Texture)) return 0;
+	for (uint32 Id : Texture.Textures)
+	{
+		FACEDatTexture Image;
+		if (LoadTexture(Id, Image) && Image.DefaultPaletteId) return Image.DefaultPaletteId;
+	}
+	return 0;
+	}();
+	OriginalPaletteCache.Add(SurfaceId, Palette);
+	return Palette;
+}
+
+bool FACEDatTextureResolver::ResolveSurfaceWithAppearance(uint32 SurfaceId, int32 PartIndex, const FACEObjDesc* Appearance, FACEDatDecodedSurface& Out, uint32 PartPaletteId)
 {
 	++SurfaceResolveCount;
 	// Part/model replacements select geometry, not pixels. They must not force
@@ -1062,6 +1087,10 @@ bool FACEDatTextureResolver::ResolveSurfaceWithAppearance(uint32 SurfaceId, int3
             }
         }
         if (!OriginalPalette) OriginalPalette = Tex.DefaultPaletteId;
+        // CPhysicsPart::DetermineBasePal chooses the first nonzero palette for
+        // the whole part. SetPalette then applies it to ALL indexed surfaces
+        // on that part, including headgear with a different default palette.
+        if (PartPaletteId) OriginalPalette = PartPaletteId;
         if (OriginalPalette == static_cast<uint32>(Appearance->PaletteBaseId)
             && BuildWorkingPalette(*Appearance, OriginalPalette, WorkingPalette, true))
             PalettePtr = &WorkingPalette;

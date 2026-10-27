@@ -19,6 +19,14 @@ Retail commands such as `/fps` and `/saveui`, and server commands such as
 
 ## Users
 
+**[Dereth Foundry](Foundry.md)** is an optional Lua content workshop for server
+administrators. It is bundled but disabled by default. Its gold anvil / teal cube
+icon opens Items, Move, Land, Quests, Spawns, Files and Help tabs using the shared
+plugin theme. Create and position objects, import/export JSON or SQL, manage
+instances and encounters, and browse/edit local content files. Commands require
+the server's normal developer/admin permissions. Persistent changes show a review
+before sending; simply enabling or opening Foundry sends no commands.
+
 **Action Deck** is an optional bundled desktop hotbar. Enable it in Plugin
 Manager and open the gold tiles / teal spark icon. Drag inventory items or
 spellbook/spell-bar icons into its three rows of twelve slots. Click an icon
@@ -282,6 +290,14 @@ Meta for the next hunt. Edits save to the selected file. **New** and **Delete**
 are in each editing tab; new routes start empty. Deletion retains a backup in
 `Profiles/Deleted` and switches affected selections to Default. Default files
 cannot be deleted. Activity toggles remain independent of the selected files.
+
+On **Route**, choose **+ New route**, enter a file name, then **Create and select
+route** (or press Enter). This immediately creates the empty JSON file and makes
+it current. The editor shows its name, saved point count and auto-save status.
+Use **Add waypoint at my position**, walk to the next turn, and repeat. The point
+list is paged; adding a point opens its page. **Special steps** holds portal/use,
+jump, pause and recall actions; **Route behavior** holds loop, door and follow
+settings. Enable Route Navigation and press Start when ready.
 
 **Import** has separate **Import vTank Loot Profile (*.utl)** and
 **Import vTank Route (*.nav)** buttons, plus Meta and Character imports.
@@ -901,7 +917,7 @@ are not imported. More complex conditions or behavior can be authored in Lua.
 
 ## Runtime and references
 
-Each script has a separate Lua 5.4.9 VM with an 8 MiB allocator cap and 250,000 Lua
+Each script has a separate Lua 5.4.9 VM with a 32 MiB allocator cap and 250,000 Lua
 instructions per initialization/callback. Files are loaded as source, not bytecode.
 Available libraries: basic functions, table, math, utf8, and bounded string
 operations. No filesystem/process/network/native loading, debug, coroutine,

@@ -30,6 +30,7 @@ bool UACEUIGameplayBinder::CanMoveInventoryAmountToContainer(int32 Guid, int32 C
 	}
 	// A full move within the same pack simply reorders its existing slot.
 	if (Item.ContainerId == Container && Amount == FMath::Max(1, Item.StackSize)) return true;
+	if (const auto Session=Client->GetSession();Session && Session->FindContainerMergeTarget(Guid,Container,Amount)) return true;
 	const int32 Capacity = bPack ? Destination.ContainersCapacity : Destination.ItemsCapacity;
 	if (Capacity == -1) return true;
 	return Capacity > (bPack ? Client->GetPlayerPacks().Num() : Client->GetPackItems(Container).Num());
@@ -40,7 +41,17 @@ void UACEUIGameplayBinder::UpdateInventoryContainerDropFeedback(FVector2D Canvas
 	if (!Client || !Canvas || !Manager || !Canvas->WidgetTree) return;
 	const FVector2D Absolute = Canvas->GetCachedGeometry().LocalToAbsolute(CanvasLocalPos);
 	const int32 Amount = InvDragAmount > 0 ? InvDragAmount : GetSelectedItemAmount(InvDragGuid);
-	auto Mark = [&](UBorder* Cell, bool Accept, bool DropIn, const TCHAR* Owner)
+	const bool OrdinaryDrag = InvDragShortcutSlot == INDEX_NONE && !bInvDragFromVendorSell
+		&& !bInvDragFromSalvage && !bInvDragFromHouse;
+	if (const auto Overlay = Manager->FindElementByName(TEXT("BigBackpack_Icon_DragAccept")))
+	{
+		Overlay->bActivatable = false;
+		Overlay->bVisible = OrdinaryDrag && Canvas->IsElementExposedAt(
+			Manager->FindElementByName(TEXT("InventoryButton")), CanvasLocalPos);
+		Overlay->bUseExplicitState = true;
+		Overlay->DefaultState = 0x10000046; // gmToolbarUI::HandleInventoryButtonDragOver: DropIn.
+	}
+	auto Mark = [&](UBorder* Cell, bool Accept, bool DropIn, const TCHAR* Owner, UCanvasPanel* ClipPanel = nullptr)
 	{
 		const auto* CellSlot = Cell ? Cast<UCanvasPanelSlot>(Cell->Slot) : nullptr;
 		if (!CellSlot) return;
@@ -52,13 +63,15 @@ void UACEUIGameplayBinder::UpdateInventoryContainerDropFeedback(FVector2D Canvas
 		// ItemSlot_DragOver_DropIn / Accept / Reject, from retail layout 0x21000037.
 		SetIconDid(PaperDollDragTargetIcon, Accept ? (DropIn ? 0x060011F7 : 0x060011F9) : 0x060011F8);
 		PaperDollDragTargetIcon->SetVisibility(ESlateVisibility::HitTestInvisible);
-		if (PaperDollDragTargetIcon->GetParent() != Canvas->GetElementLayer())
-			Canvas->GetElementLayer()->AddChild(PaperDollDragTargetIcon);
+		UCanvasPanel* Layer = ClipPanel ? ClipPanel : Canvas->GetElementLayer();
+		if (PaperDollDragTargetIcon->GetParent() != Layer)
+			Layer->AddChild(PaperDollDragTargetIcon);
 		if (auto* Slot = Cast<UCanvasPanelSlot>(PaperDollDragTargetIcon->Slot))
 		{
 			Slot->SetAnchors(FAnchors(0,0)); Slot->SetAutoSize(false);
 			Slot->SetPosition(CellSlot->GetPosition()); Slot->SetSize(CellSlot->GetSize());
-			Canvas->SetOverlayOrder(PaperDollDragTargetIcon, Manager->FindElementByName(Owner), 120004);
+			if (ClipPanel) Slot->SetZOrder(5); // Above the shortcut icon, selection and cooldown.
+			else Canvas->SetOverlayOrder(PaperDollDragTargetIcon, Manager->FindElementByName(Owner), 120004);
 		}
 	};
 	if (OpenHouseLord && HitHouseItemList(CanvasLocalPos))
@@ -72,6 +85,16 @@ void UACEUIGameplayBinder::UpdateInventoryContainerDropFeedback(FVector2D Canvas
 			return;
 		}
 	}
+	if (const int32 Index = HitTestShortcutSlot(CanvasLocalPos);
+		Index != INDEX_NONE && ShortcutClipPanel && ShortcutSlotBgs.IsValidIndex(Index))
+	{
+		// gmToolbarUI::OnItemListDragOver sets ItemSlot_DragOver_Accept
+		// (0x10000040) for items and existing shortcuts. Keep its green ring
+		// inside the toolbar's clipping panel, including a partially revealed row.
+		if (!bInvDragFromVendorSell && !bInvDragFromSalvage && !bInvDragFromHouse)
+			Mark(ShortcutSlotBgs[Index], true, false, TEXT("ToolbarField"), ShortcutClipPanel);
+		return;
+	}
 	if (OpenSalvageToolGuid)
 	{
 		for (UBorder* Cell : SalvageItemBackgrounds)
@@ -82,6 +105,23 @@ void UACEUIGameplayBinder::UpdateInventoryContainerDropFeedback(FVector2D Canvas
 			Mark(Cell, CanAddItemToSalvageQueue(InvDragGuid), false, TEXT("SalvagePanel"));
 			return;
 		}
+	}
+	if (bTradeOpen && OrdinaryDrag)
+	{
+		// gmSecureTradeUI::OnItemListDragOver uses the same accept/reject art on
+		// either offer list. The item is always offered on the player's own side.
+		for (const auto* Cells : { &TradeSelfBackgrounds, &TradeOtherBackgrounds })
+			for (UBorder* Cell : *Cells)
+			{
+				if (!Cell || !Cell->IsVisible() || !Canvas->IsWidgetExposedAt(Cell, Absolute)) continue;
+				FACEWorldObject Item;
+				const bool Accept = TradePartnerGuid && Client->GetTradePartnerGuid() == TradePartnerGuid
+					&& !TradeStackSplit.SourceGuid && !VendorSellSplit.SourceGuid
+					&& Client->GetWorldObject(InvDragGuid, Item) && Client->IsOwnedInventoryItem(Item)
+					&& !Item.Attuned && !Client->GetTradeSelfItems().Contains(InvDragGuid);
+				Mark(Cell, Accept, false, TEXT("SecureTrade"));
+				return;
+			}
 	}
 	FACEWorldObject DragItem;const bool DragIsPack=Client->GetWorldObject(InvDragGuid,DragItem)
         && ((DragItem.ItemType & ACEItemType::Container) || (DragItem.ObjectDescriptionFlags & ACEObjectDescFlag::RequiresPackSlot));
@@ -208,25 +248,13 @@ void UACEUIGameplayBinder::MoveInventoryAmount(int32 Guid, int32 Container, int3
 		return;
 	}
 	Amount = FMath::Min(Amount, FMath::Max(1, Item.StackSize));
+	if(const auto Session=Client->GetSession())
+		if(const int32 Target=Session->FindContainerMergeTarget(Guid,Container,Amount))
+			if(MergeInventoryAmount(Guid,Target,Amount))return;
 	// UIElement_ItemList only removes the source's old position for a full move.
 	// A split inserts a NEW object; the remainder keeps its original slot.
 	if (Amount < Item.StackSize)
 	{
-		// Retail can merge a selected portion during pickup, but an intentional
-		// split of an already-owned stack must still create a separate object.
-		FACEWorldObject Destination;
-		const bool bOwnedDestination = Container == Client->GetPlayerGuid()
-			|| (Client->GetWorldObject(Container, Destination) && Client->IsOwnedInventoryItem(Destination));
-		if (bOwnedDestination && !Item.WielderId && !Client->IsOwnedInventoryItem(Item))
-		{
-			TArray<int32> Containers{Container};
-			if (Container == Client->GetPlayerGuid())
-				for (const auto& Pack : Client->GetPlayerPacks()) Containers.Add(Pack.Guid);
-			for (int32 SearchContainer : Containers)
-				for (const auto& Target : Client->GetPackItems(SearchContainer))
-					if (ACEInventoryRules::MergeAmount(Item, Target) >= Amount
-						&& MergeInventoryAmount(Guid, Target.Guid, Amount)) return;
-		}
 		TrackInventoryStackSplit(InventorySelectionSplit, Item, Amount);
 		InventorySelectionSplit.ContainerGuid = Container;
 		Client->SendStackableSplitToContainer(Guid, Container, Placement, Amount);

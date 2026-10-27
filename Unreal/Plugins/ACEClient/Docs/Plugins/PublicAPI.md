@@ -34,8 +34,26 @@ service request; mutating a snapshot does nothing to the game.
 Automation uses UCM's completion/vitals/target-death wakes and action gates, not a
 second timer that slows it down. Companion callbacks are limited to 2 Hz. There
 is no permission to override casting delays, teleport, bypass collision or send
-raw packets. Each VM has 8 MiB and 250,000 instructions per callback. Use
+raw packets. Each VM has a 32 MiB heap (including host-provided snapshots and profiles) and
+250,000 instructions per callback. Use
 `workavailable()` to split large jobs across callbacks.
+
+Companion manifests may set `"update_interval": 2.0` (seconds, 0.5–60;
+default 0.5). Due callbacks are scheduled round-robin, at most one companion
+per rendered frame. Input events may wake a callback earlier. Native snapshot
+data is shared with other readers in that host tick and invalidated by actions;
+each Lua VM still receives its own tables.
+
+API 2 companions may opt into `"snapshot_fields"`, an array of top-level field
+names. For example, `"snapshot_fields":["character_name","level","char_ints",
+"action_serial","health","max_health"]` avoids building inventory, spells,
+target scans, and vendor data. With no list, the existing full snapshot remains
+available. `api`, `time`, `unix_time`, `player`, `server`, `state`, `error`,
+`events`, and `capabilities` are always retained. Permissions still apply;
+listing a field never grants access. Character qualities, `character_name`,
+`level`, and action results require `data`. Inventory and other full automation
+fields currently build the shared full snapshot before filtering; use only
+the fields your observer needs to reduce native work and Lua allocations.
 
 ## Plugin title and toolbar icon
 
@@ -181,6 +199,105 @@ See the runnable [Chat Tools example](Examples/chat_tools/main.lua) and its
 on-demand server commands, readable responses, and no native Start/Stop or
 Settings and profiles section.
 
+## Target data and object-attached plates
+
+All companion snapshots (API 1 and 2) include `selection` (a target object, or
+nil), `tracked_targets` (objects keyed by the decimal string of their GUID),
+and `target_effects` (effect arrays keyed the same way). Tracked objects include
+the selection, active world-plate targets, and every still-known object with an
+unexpired confirmed timer, independently of the 512 nearby-object limit. Reading
+these fields alone does not send requests or require UCM or Action Deck.
+`objects` also includes the descriptor-derived `object_type`.
+
+Target fields:
+
+- `id`, `name`, `wcid`, `item_type`, `monster`, `dead`.
+- `object_type`: descriptor-derived `player`, `creature`, `vendor`, `portal`,
+  `container` (bags/chests), `lifestone`, `door`, `corpse`, or `item`.
+  The database's raw `weenie_type` is **only** included if an assessment supplies
+  property 9007. Standard ACE public object descriptions do not transmit that
+  database enum; `object_type` is the usable client classification.
+- `creature_type` and localized `creature_class` (for example, Banderling),
+  `title` (for example, Royal Guard), and `level`, when assessed and known.
+- `pk_status`: `NPK`, `PK`, or `PK Lite` for players, from the public descriptor.
+- `vitals.health`, `.stamina`, `.mana`: omitted when unknown. Each known pair
+  contains `current` and `max`; zero current is a known value. A newer health
+  update supplies `fraction` (0–1) and, if assessed, `max`, but omits `current`:
+  the health packet is a percentage, not an integer hit-point count. A new
+  assessment restores the exact pair. No values are copied from the player.
+  `assessment_age` on the target and `age` on a percentage health sample report
+  seconds since receipt; assessed stamina/mana are samples, not live estimates.
+
+Each `target_effects[string.format("%.0f", id)]` entry has `spell`, DAT `icon`, `remaining`
+(seconds), `duration`, and `source="own_confirmed_cast"`. These are the same
+records used by Action Deck: successful server cast confirmations start timers;
+resists, fizzles, and ambiguous same-name confirmations do not. They are duration
+estimates from local spell data, not authoritative target enchantments. Casts by
+other players, early dispels, and custom server durations cannot be inferred.
+Changing selection preserves other targets' timers. Expiry, death, loss of
+awareness, GUID reuse, and character/session changes clear them.
+
+With **both `ui` and `markers` permissions**, return `world_plates`:
+
+```lua
+local t = s.selection
+return {world_plates = t and {{
+    id = t.id, name = t.name, role = t.title or t.creature_class or t.object_type,
+    level = t.level, color = "yellow", selection_only = true,
+    opacity = 1, background_opacity = 1,
+    vr_opacity = 1, vr_background_opacity = 0.75,
+    vitals = t.vitals, effects = s.target_effects[string.format("%.0f", t.id)] or {}
+}} or {}}
+```
+
+The native renderer draws brackets around the rendered actor, a role/name/level
+heading, known health/stamina/mana bars, and DAT effect icons with countdowns.
+It updates the billboard transform after world movement every frame, with a
+stereo world-space surface in VR; Lua never needs camera coordinates. Countdown
+labels advance locally between callbacks. Hidden or unloaded actors, corpses,
+portal transitions and stopped plugins do not leave floating plates behind.
+Plates are visual only: they do not intercept clicks, controller rays or movement.
+
+`opacity` controls the entire composed plate (text, brackets, bars and icons).
+`background_opacity` controls the black backing behind labels, bars and icons.
+Both are finite numbers in [0,1], defaulting to 1: solid content and backing,
+with the unused canvas still transparent. Overall opacity is applied once after
+composition, so overlapping text and backing do not compound the fade.
+Optional `vr_opacity` and `vr_background_opacity` override the corresponding
+desktop value while VR is active; omitted overrides inherit it. These fields
+never change the selected creature's yellow mesh tint or selection settings.
+For solid text with a softer backing, keep `opacity=1` and lower
+`background_opacity`. Set both to 1 for an opaque nameplate.
+
+An omitted `world_plates` retains this plugin's list; `{}` clears it. A supplied
+list atomically replaces it. `selection_only` defaults to true, hiding the old
+target immediately when selection changes; set false for an additional tracked
+target. Stop, disable, reload, logout and character changes remove the plates.
+Plates automatically request background assessments, including after selection
+changes. `refresh=false` opts out. Requests share the global one-per-second
+appraisal budget, rotating among nearby living plate targets; with automation
+running, plates use at most alternate seconds. Successful targets are revisited
+no sooner than two seconds; failed or unanswered assessments wait 30 seconds.
+The normal server health feed is accepted for every known target. No health-query
+polling steals the server's selected target. On ordinary servers, off-target
+vitals therefore refresh at assessment cadence, not every damage event. Assessment
+skills and server restrictions still apply; unknown fields remain absent.
+
+At most 4 plates per plugin and 16 globally are rendered. Object IDs must be
+unique within a plugin. Names are at most 128 single-line characters, roles 80;
+long text is ellipsized. Optional `level` is a nonnegative integer. Colors are
+`yellow`, `red`, `blue`, `green`, `white`, `purple`. Missing vitals are hidden;
+each supplied vital needs a valid `current/max` pair or a `fraction` in [0,1].
+Effects are limited to 16 per plate, with a `0x06xxxxxx` DAT icon ID and
+`remaining` in [0,86400] seconds; optional `spell` identifies the spell. Zero
+remaining hides that icon. Plugins choose which effects to show. This surface
+accepts no custom meshes, shaders, file paths or native code.
+
+The runnable [Target Plate example](Examples/target_plate/main.lua) caps effects
+and passes only known fields. Copy its folder into `Saved/ClientPlugins/Installed`,
+refresh Manage Plugins and enable it. It is an API example, not an enabled-by-default
+HUD and does not modify another companion's configuration.
+
 ## Inventory-style icons
 
 Use `item_icon` for the same square background and composited artwork as the
@@ -268,12 +385,14 @@ manifest's permission set; adding permissions requires enabling it again.
   subscription, and responding to a current server confirmation respectively.
 - `chat`, `state`, `ui`, `markers`, `waypoint`, `messaging`, `commands`: the
   [companion capabilities](Companions.md). API 2 automation can use these too.
+- `admin_content`: explicit ACE content commands and local JSON/SQL workspace browsing; see [Dereth Foundry](Foundry.md). Server permissions still apply.
 - `profiles`: write your own configuration/profile library and import/export data.
 - `data`: opt a companion into the full gameplay snapshot. Ordinary automation
   already receives it. This is read access; it does not grant any game actions.
 
-Companions may request the observational permissions, profiles, data and say;
-they cannot request gameplay-driving permissions. Request a selection through a
+Companions may request observational permissions, profiles, data and say. The
+optional `admin_content` capability provides bounded content authoring operations;
+it does not grant general automation permissions or server privileges. Request a selection through a
 UI button to select an observed world object or, in API 2, an owned inventory item.
 
 Full snapshots include every field UCM receives: known spells and eligibility,
@@ -345,8 +464,12 @@ cover:
 - `open_corpse`, `close_corpse`, `loot`, `salvage`, `combine_salvage`, `read`,
   `sell`, `buy`, `split_note`, `sell_note`. `combine_salvage.items` is a comma
   separated list of 2-64 distinct salvage-bag GUIDs, with an owned `tool` Ust.
-- `it_give`, `it_buy`, `it_sell`, `it_split`, `it_open`, `it_key`,
+- `it_give`, `it_buy`, `it_sell`, `it_merge`, `it_split`, `it_open`, `it_key`,
   `it_refresh_chest`, `it_close`, `it_pickup`: the Item Tools transaction paths.
+  `it_merge` takes `item` (source GUID), `target` (receiving GUID), and `amount`;
+  both must be owned, unequipped, unoffered, non-retained stacks of the same WCID,
+  with enough source units and destination space. Wait for both stack updates
+  before issuing another merge; `UseDone` alone does not confirm it.
 - `say`, `fellowship`, `confirm` (current `type,context,accept`). Recall destinations
   are marketplace, lifestone, allegiance, house and mansion; spell recalls use cast.
 - `profile_load` for validated imported dependencies (`kind`: nav/utl/met/usd),
@@ -511,3 +634,88 @@ and the shipped policy module. Existing UCM/VM/companion regressions remain in u
 Source is shared with Windows/Linux/VR/Quest. Platform-specific live gameplay and
 server behavior still require testing; an editor automation pass does not prove
 all plugins or servers behave identically.
+
+
+## Optional terrain overlays (API 2)
+
+The bundled **Dereth Lens** companion is disabled by default. Its Lua script owns
+all settings and per-character persistence. It requests a native visual surface
+using the new `terrain` permission, without a gameplay snapshot, native DLLs,
+custom meshes, or shaders:
+
+```lua
+return {terrain_overlay={
+    slopes=true, water=true, radar=false, dungeon=false,
+    opacity=.45, range=120, brightness=.3,
+    slope_color={1,.08,.02}, water_color={.15,.25,1},
+    radar_color={.1,.15,.25}, light_color={1,1,1}
+}}
+```
+
+Booleans default to false; opacity accepts 0–0.8, terrain range 24–192 meters,
+brightness and each RGB channel 0–1. A supplied object replaces the configuration
+atomically; `{}` clears it and omission retains it. One active surface is rendered
+globally (first active provider in discovery order), avoiding compounded overlays.
+Stop, disable, reload, logout, world change and portal space remove the surface.
+
+Slope shading uses the loaded DAT terrain triangles and retail walking normal
+threshold 0.6641741. Walkable triangles remain clear; blocked slopes transition
+from yellow just beyond the limit toward the configured color as steepness grows.
+Only impassable EntirelyWater landblocks receive water shading. Wadeable coastal
+cells remain clear. This describes terrain, not reachability:
+bridges, buildings, doors, jumps and server restrictions can change travel.
+No terrain loads or collision scans are started by this overlay. Geometry refreshes
+at most twice per second from at most nine cached blocks, and only when settings,
+loaded terrain, indoor/outdoor state or nearby position change. Stationary
+callbacks reuse mesh sections. All surfaces depth-test,
+have no collision, and render in stereo. The radar wall follows the player each
+frame at the native 75 m outdoor / 25 m indoor radius. Dungeon light is a temporary
+world color-grading lift, with adjustable strength and tint; it does not overwrite
+saved video settings and is removed outdoors or when disabled.
+
+Third Eye provides name matching, alerts and world/map markers. Target plates
+belong to separate addons. Each plate addon supplies its own opacity sliders and
+saves its preferences using `state`; the host applies that addon's `world_plates`
+opacity values independently. The [Target Plate example](Examples/target_plate/main.lua)
+demonstrates separate desktop and VR controls. Updating Third Eye retains watch
+rules and removes its obsolete plate preferences.
+
+
+## Administrative content service (API 2)
+
+The optional `admin_content` permission exposes `service="content"` to companions
+and automation plugins. [Dereth Foundry](Foundry.md) is the bundled Lua example.
+Requests and asynchronous `result` events use the normal public service protocol.
+
+```lua
+requests = {
+    {id="files", service="content", operation="list", kind="weenies",
+     format="json", filter="chest", offset=0}
+}
+-- A separate user-triggered request, with the current non-player selection:
+-- {id="move",service="content",operation="command",text="/nudge n 0.1",target=s.selection.id}
+```
+
+`command` accepts only the content verbs listed in `ClientMods/api.json`, one
+single-line command of at most 500 characters, at most once per second. It requires
+the running plugin's active character/session. Targeted commands require an
+explicit matching current non-player selection. The host sends manual assessment
+before the command using the ordered game-action queue. The returned `command`
+means queued, not server success: read the normal chat response. ACE independently
+enforces access levels. This permission cannot execute arbitrary chat or SQL.
+
+`list` reads a nonrecursive `json/<kind>` or `sql/<kind>` folder under the selected
+local content root; kind is `weenies`, `landblocks`, `quests` or `recipes`.
+Results contain `root`, `total` and up to 128 relative filenames. Use `filter` and
+`offset` for searching/paging. `edit` accepts a relative JSON/SQL `name` in that
+root and opens a text editor (Notepad on Windows). Absolute paths, traversal,
+control characters and executable files are rejected. It does not import or
+execute the file. These file operations are user actions, not periodic scans.
+
+A button with `action="content_folder"` opens the Windows folder picker and
+produces `{type="content_root",root=...}`. The choice is saved in host settings;
+Lua cannot set an arbitrary root. Other platforms use the default
+`ClientMods/Content` directory and open it with the system file manager. External
+editor/file-manager availability depends on the platform. The local content root
+is separate from the server's `content_folder`; remote-server import/export still
+requires transferring files through the administrator's normal workflow.

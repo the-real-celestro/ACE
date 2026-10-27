@@ -268,6 +268,7 @@ void UACEUICanvasWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTi
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
 	UpdateCanvasLayout();
+    if (Manager) Manager->TickPointerInput(FPlatformTime::Seconds());
     if(CharGenBinder) CharGenBinder->Tick(InDeltaTime);
 	TickGameplayState();
 	if (CharSelectBinder)
@@ -988,6 +989,8 @@ FCursorReply UACEUICanvasWidget::NativeOnCursorQuery(const FGeometry& Geometry, 
 
 FReply UACEUICanvasWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
 {
+	if (InMouseEvent.GetEffectingButton() != EKeys::LeftMouseButton && InMouseEvent.IsMouseButtonDown(EKeys::LeftMouseButton))
+		return FReply::Handled();
 	if (PressedPointer != INDEX_NONE && (PressedPointer != InMouseEvent.GetPointerIndex() || PressedUser != InMouseEvent.GetUserIndex())) return FReply::Handled();
 	PressedPointer = InMouseEvent.GetPointerIndex(); PressedUser = InMouseEvent.GetUserIndex();
 	const bool bLeft = InMouseEvent.GetEffectingButton() == EKeys::LeftMouseButton;
@@ -1092,6 +1095,8 @@ FReply UACEUICanvasWidget::NativeOnMouseButtonDoubleClick(const FGeometry& InGeo
 
 FReply UACEUICanvasWidget::NativeOnMouseButtonUp(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
 {
+	if (InMouseEvent.GetEffectingButton() != EKeys::LeftMouseButton && InMouseEvent.IsMouseButtonDown(EKeys::LeftMouseButton))
+		return FReply::Handled();
 	if (PressedPointer != INDEX_NONE && (PressedPointer != InMouseEvent.GetPointerIndex() || PressedUser != InMouseEvent.GetUserIndex())) return FReply::Unhandled();
 	PressedPointer = PressedUser = INDEX_NONE;
 	if(auto* Appearance=GetAppearanceInputBinder()) Appearance->MouseUp();
@@ -1120,7 +1125,7 @@ FReply UACEUICanvasWidget::NativeOnMouseButtonUp(const FGeometry& InGeometry, co
 	const FVector2D ViewportSize = InGeometry.GetLocalSize();
 	if (Manager)
 	{
-		Manager->NotifyMouseUp(Local, ViewportSize, InMouseEvent.GetEffectingButton(), CharGenBinder != nullptr || CharSelectBinder != nullptr);
+		Manager->NotifyMouseUp(Local, ViewportSize, InMouseEvent.GetEffectingButton());
 		if (TakeWidget()->HasMouseCaptureByUser(InMouseEvent.GetUserIndex(), InMouseEvent.GetPointerIndex()))
 		{
 			return FReply::Handled().ReleaseMouseCapture();

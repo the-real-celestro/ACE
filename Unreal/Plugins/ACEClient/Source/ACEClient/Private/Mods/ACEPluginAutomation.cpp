@@ -33,11 +33,29 @@ namespace
         while(Name.RemoveFromStart(TEXT("+"))){}
         return Name;
     }
-    FVector SightPoint(UACEDatSubsystem* Dat,const FACEWorldObject& Obj)
+    float BodyHeight(UACEDatSubsystem* Dat,const FACEWorldObject& Obj)
     {
-        float Step=0,Height=Obj.IsCorpse()?.4f:1.8f,Radius=0;uint32 Anim=0;
-        Dat->TryGetSetupPhysics(Obj.SetupId,Step,Height,Radius,Anim);
-        return Obj.Position.ToUnrealLocation()+FVector(0,0,FMath::Max(15.f,Height*Obj.GetValidObjectScale()*60.f));
+        float Step=0,Height=0,Radius=0;uint32 Anim=0;
+        if(!Dat || !Dat->TryGetSetupPhysics(Obj.SetupId,Step,Height,Radius,Anim))Height=Obj.IsCorpse()?.4f:1.8f;
+        return FMath::Max(1.f,Height*Obj.GetValidObjectScale()*100.f);
+    }
+    FVector SightPoint(UACEDatSubsystem* Dat,const FACEWorldObject& Obj,const FACEPluginSightQuery& Sight)
+    {
+        return Sight.Location(Obj)+FVector(0,0,FMath::Max(15.f,BodyHeight(Dat,Obj)*.6f));
+    }
+    bool CombatSight(UACEClientSubsystem* Client,UACEDatSubsystem* Dat,const FACEPosition& Player,
+        const FACEWorldObject& Target,const FACEPluginSightQuery& Sight)
+    {
+        FACEWorldObject Caster;Client->GetWorldObject(Client->GetPlayerGuid(),Caster);
+        const float SourceHeight=BodyHeight(Dat,Caster),TargetHeight=BodyHeight(Dat,Target);
+        // ACE's targeted bolts aim at 2/3 of the scaled physics height. Do not
+        // aim from the camera, a fixed eye height, or a rat's stale packet pose.
+        const FVector Start=Player.ToUnrealLocation()+FVector(0,0,SourceHeight*2.f/3.f);
+        const FVector End=Sight.Location(Target)+FVector(0,0,TargetHeight*2.f/3.f);
+        // UCM safety margin, not a claim to know server-only projectile templates.
+        // Avoid grazing corners; keep the corridor above the floor for tiny bodies.
+        const float Clearance=FMath::Min3(15.f,SourceHeight/3.f,TargetHeight/3.f);
+        return Sight.Clear(Start,End,Clearance);
     }
     TSharedPtr<FJsonObject> Pos(const FACEPosition& P)
     {
@@ -198,6 +216,7 @@ TSharedPtr<FJsonValue> UACEPluginSubsystem::LootItemSnapshot(const FACEWorldObje
 
 void UACEPluginSubsystem::ObserveAppraisal(const FACEAppraisalInfo& Info)
 {
+    TargetAppraisalTimes.Add(Info.ObjectGuid,FPlatformTime::Seconds());
     Appraisals.Add(Info.ObjectGuid,Info);DirtyInventoryAppraisals.Add(Info.ObjectGuid);++DataRevision;
     for(const auto& P:Plugins)if(P->WaitAction==TEXT("identify")&&P->WaitItem==Info.ObjectGuid)
     {
@@ -276,7 +295,8 @@ void UACEPluginSubsystem::RecordCombatDeath(int32 Guid)
 }
 void UACEPluginSubsystem::ObserveTargetHealth(int32 Guid,float Fraction)
 {
-    if(!FMath::IsFinite(Fraction))return;
+    if(!FMath::IsFinite(Fraction)||Fraction<0||Fraction>1)return;
+    TargetHealthSamples.Add(Guid,{Fraction,FPlatformTime::Seconds()});
     FACEWorldObject Object;auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     if(Fraction>0)
     {
@@ -294,9 +314,22 @@ void UACEPluginSubsystem::ObserveTargetMotion(int32 Guid,const FACEObjectMotionS
         {RecordCombatDeath(Guid);ReleaseCombatTarget(Guid);}
 }
 void UACEPluginSubsystem::ObserveTargetDeleted(int32 Guid)
-{CorpseFirstSeen.Remove(Guid);DefeatedTargets.Remove(Guid);ReleaseCombatTarget(Guid);ForgetTargetEffects(Guid);}
+{
+    // PickupEvent also removes a held visual on every missile shot and on
+    // unequip. The retained owned stack/item has not been deleted or changed.
+    FACEWorldObject Item;
+    if(GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->GetWorldObject(Guid,Item)&&IsOwnedPluginItem(Item))return;
+    ClearPluginTarget(Guid);CorpseFirstSeen.Remove(Guid);DefeatedTargets.Remove(Guid);ReleaseCombatTarget(Guid);ForgetTargetEffects(Guid);
+}
 void UACEPluginSubsystem::ObserveTargetCreated(const FACEWorldObject& Object)
 {
+    // Wield/parent and appearance notifications reuse OnObjectCreated to refresh
+    // meshes. They do not replace an owned item's assessed qualities. Dropping
+    // those here made every weapon swap/reload require another appraisal.
+    if((Object.bAppearanceOnlyUpdate||Object.bAttachmentOnlyUpdate)&&IsOwnedPluginItem(Object))return;
+    ClearPluginTarget(Object.Guid);
+    AppraisalRequests.Remove(Object.Guid);
+    DirtyInventoryAppraisals.Add(Object.Guid);++DataRevision;
     ForgetTargetEffects(Object.Guid);
     DefeatedTargets.Remove(Object.Guid);
     if(LastCombatDeath&&int32(uint32(N(LastCombatDeath,TEXT("id"))))==Object.Guid)LastCombatDeath.Reset();
@@ -571,7 +604,7 @@ void UACEPluginSubsystem::RefreshAutomationData()
         SaveItemBuffTimers();
         CombatTarget=0;DefeatedTargets.Empty();LastCombatDeath.Reset();LastCombatVitals=FIntVector(-1,-1,-1);
         ConfirmedBuffAckAt=BuffRetryAt=0;ConfirmedBuffOwner.Empty();DeferredBuffIntent.Reset();DeferredBuffOwner.Empty();PendingBuffResultDriven=false;
-        DataPlayer=0;Appraisals.Empty();CorpseFirstSeen.Empty();LootedCorpses.Empty();OpenedCorpses.Empty();AppraisalRequests.Empty();ItemBuffs.Empty();CachedInventory.Empty();CachedInventoryIndices.Empty();DirtyInventoryAppraisals.Empty();ClearBuffRequests();
+        DataPlayer=0;Appraisals.Empty();TargetAppraisalTimes.Empty();TargetHealthSamples.Empty();CorpseFirstSeen.Empty();LootedCorpses.Empty();OpenedCorpses.Empty();AppraisalRequests.Empty();ItemBuffs.Empty();CachedInventory.Empty();CachedInventoryIndices.Empty();DirtyInventoryAppraisals.Empty();ClearBuffRequests();
         PendingSpell=0;PendingSpellOwner.Empty();FastCastOwner.Empty();PendingManaRefresh=false;PendingResourceRefresh.Empty();Debuffs.Empty();PendingDebuffCasts.Empty();OffensiveCasts.Empty();InventoryRevision=MAX_uint64;C->BackgroundAppraisals.Empty();return;
     }
     if(DataPlayer!=C->GetPlayerGuid()||DataServer!=C->GetServerName()||ObservedSession.Pin()!=Session)
@@ -592,7 +625,7 @@ void UACEPluginSubsystem::RefreshAutomationData()
         CombatVitalsHandle=Session->OnVitalsUpdated.AddUObject(this,&UACEPluginSubsystem::ObserveCombatVitals);
         PhysicalAttackTarget=0;PhysicalAttackOwner.Empty();CombatOutcomes.Empty();OffensiveCasts.Empty();
         TellHandle=Session->OnPlayerTell.AddUObject(this,&UACEPluginSubsystem::ObservePlayerTell);ClearBuffRequests();
-        DataPlayer=C->GetPlayerGuid();DataServer=C->GetServerName();NextAppraisalScan=0;Appraisals.Empty();CachedSpeciesNames.Reset();CorpseFirstSeen.Empty();LootedCorpses.Empty();OpenedCorpses.Empty();AppraisalRequests.Empty();ItemBuffs.Empty();
+        DataPlayer=C->GetPlayerGuid();DataServer=C->GetServerName();NextAppraisalScan=0;Appraisals.Empty();TargetAppraisalTimes.Empty();TargetHealthSamples.Empty();CachedSpeciesNames.Reset();CorpseFirstSeen.Empty();LootedCorpses.Empty();OpenedCorpses.Empty();AppraisalRequests.Empty();ItemBuffs.Empty();
         LoadItemBuffTimers();
         CachedInventory.Empty();CachedInventoryIndices.Empty();DirtyInventoryAppraisals.Empty();
         PendingSpell=0;PendingSpellOwner.Empty();FastCastOwner.Empty();PendingResourceRefresh.Empty();PendingManaRefresh=false;Debuffs.Empty();PendingDebuffCasts.Empty();InventoryRevision=MAX_uint64;++DataRevision;C->BackgroundAppraisals.Empty();
@@ -602,6 +635,7 @@ void UACEPluginSubsystem::RefreshAutomationData()
     Debuffs.RemoveAll([&](const auto& E){return N(E->AsObject(),TEXT("expires"))<=EffectNow
         ||!Session->GetWorldObjects().Contains(int32(uint32(N(E->AsObject(),TEXT("target")))));});
     PendingDebuffCasts.RemoveAll([EffectNow](const auto& E){return EffectNow-N(E->AsObject(),TEXT("sent"))>30;});
+    RefreshPlateAppraisals();
     auto UCM=PolicyPlugin();if(!UCM||!UCM->Enabled)return;
     if(auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController()))
     {
@@ -634,9 +668,21 @@ void UACEPluginSubsystem::RefreshAutomationData()
     // Identify the current opponent first, then look ahead while fighting.
     // Keep the existing one-request-per-second budget; a new opponent should
     // usually be assessed before the kill rather than stalling the handoff.
-    auto Need=[&](int32 Id){const auto* A=Appraisals.Find(Id);return Now-AppraisalRequests.FindRef(Id)>(!A||!A->bSuccess?30:120);};
+    auto Need=[&](int32 Id)
+    {
+        // An object with no prior request is immediately eligible. A missing entry is not a request
+        // at time zero (which delayed first assessments on Linux's startup clock).
+        const double* Last=AppraisalRequests.Find(Id);const auto* A=Appraisals.Find(Id);
+        return !Last||Now-*Last>(!A||!A->bSuccess?30:120);
+    };
     const auto Sel=C->GetSelectedObject();
-    if(UCM->Running && Sel.Guid && Need(Sel.Guid))Request=Sel.Guid;
+    // Selection alone is not a request to assess another player. In particular,
+    // fellowship recovery/buffing can select a deceptive player repeatedly.
+    FACEWorldObject Selected;
+    if(UCM->Running && Sel.Guid && C->GetWorldObject(Sel.Guid,Selected)
+        && Selected.IsAttackable() && (Selected.ItemType&ACEItemType::Creature)
+        && !Selected.bIsPlayer && !Selected.PetOwnerId && !Selected.bDying
+        && !DefeatedTargets.Contains(Sel.Guid) && Need(Sel.Guid))Request=Sel.Guid;
     if(!Request&&UCM->Running&&CombatTarget)
     {
         FACEPosition Player=C->GetPlayerPosition();
@@ -893,7 +939,12 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
         // rather than requiring appraisal or a known shield WCID.
         if(ACEVTObjectClass::Classify(Obj)==2)
         {if(Obj.WielderId)ArmoredParents.Add(Obj.WielderId);if(Obj.ParentGuid)ArmoredParents.Add(Obj.ParentGuid);}
-        if(Obj.PetOwnerId==C->GetPlayerGuid()&&Obj.bHasPosition&&!Obj.bDying&&!Obj.IsCorpse()&&!Obj.bPhysicsDescriptionPending)OwnedPet=true;
+        // Hidden/despawned pets can linger in awareness until the delete message.
+        // Only a live, present creature prevents another summon.
+        if(Obj.PetOwnerId==C->GetPlayerGuid() && Obj.IsSelectableWorldObject()
+            && (Obj.ItemType&ACEItemType::Creature) && !Obj.IsCorpse() && !Obj.bPhysicsDescriptionPending
+            && !DefeatedTargets.Contains(Obj.Guid)
+            && FVector::DistSquared(Obj.Position.ToUnrealLocation(),P.ToUnrealLocation())<=FMath::Square(24000.))OwnedPet=true;
         if(Obj.IsCorpse()&&!CorpseFirstSeen.Contains(Obj.Guid))CorpseFirstSeen.Add(Obj.Guid,Now);
         if(C->GetOpenExternalContainerGuid() && Obj.ContainerId==C->GetOpenExternalContainerGuid()){Contents.Add(ItemJson(Obj));continue;}
         if(!Obj.IsSelectableWorldObject() || FVector::DistSquared(Obj.Position.ToUnrealLocation(),P.ToUnrealLocation())>FMath::Square(24000.))continue;
@@ -999,13 +1050,14 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
             if(C->bPluginFellowshipUpdates && N(J,TEXT("vitals_age"))<10 && N(J,TEXT("id"))!=uint32(C->GetPlayerGuid()) && C->GetWorldObject(int32(uint32(N(J,TEXT("id")))),Obj) && Obj.IsSelectableWorldObject())
             {
                 J->SetNumberField(TEXT("distance"),FVector::Distance(P.ToUnrealLocation(),Obj.Position.ToUnrealLocation())/100.);
-                J->SetBoolField(TEXT("line_of_sight"),Sight.Clear(Eye,SightPoint(Dat,Obj)));
+                J->SetBoolField(TEXT("line_of_sight"),Sight.Clear(Eye,SightPoint(Dat,Obj,Sight)));
             }
         }
         for(auto* List:{&Targets,&Corpses})for(const auto& Value:*List)
         {
             auto J=Value->AsObject();FACEWorldObject Obj;
-            const bool Clear=C->GetWorldObject(int32(uint32(N(J,TEXT("id")))),Obj)&&Sight.Clear(Eye,SightPoint(Dat,Obj));
+            const bool Clear=C->GetWorldObject(int32(uint32(N(J,TEXT("id")))),Obj)
+                &&(Obj.IsCorpse()?Sight.Clear(Eye,SightPoint(Dat,Obj,Sight)):CombatSight(C,Dat,P,Obj,Sight));
             J->SetBoolField(TEXT("line_of_sight"),Clear);
         }
     }
@@ -1022,7 +1074,7 @@ bool UACEPluginSubsystem::HasClearCombatSight(const FACEWorldObject& Target) con
     auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController());
     FACEPosition P=C->GetPlayerPosition();if(PC)PC->TryGetLocallyPredictedPosition(P);
     FACEPluginSightQuery Sight(*World,PC?PC->GetPawn():nullptr);
-    return Sight.Clear(P.ToUnrealLocation()+FVector(0,0,120),SightPoint(GetGameInstance()->GetSubsystem<UACEDatSubsystem>(),Target));
+    return CombatSight(C,GetGameInstance()->GetSubsystem<UACEDatSubsystem>(),P,Target,Sight);
 }
 bool UACEPluginSubsystem::PrepareCombatAction(FACEClientPlugin& P,const TSharedPtr<FJsonObject>& I,int32 Mode)
 {
@@ -1047,6 +1099,7 @@ bool UACEPluginSubsystem::PrepareCombatAction(FACEClientPlugin& P,const TSharedP
 void UACEPluginSubsystem::UpdateCombatTransition(FACEClientPlugin& P)
 {
     if(!P.CombatTransitionIntent)return;
+    if(CompanionReadBatch)CompanionReadBatch->Reset();
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();auto Session=C->GetSession();
     auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController());
     const double Now=FPlatformTime::Seconds();
