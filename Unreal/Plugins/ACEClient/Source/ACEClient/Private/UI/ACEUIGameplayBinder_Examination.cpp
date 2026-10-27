@@ -15,6 +15,28 @@
 #include "ACEAppraisalFormatting.h"
 #include "ACEDatSubsystem.h"
 #include "Components/Border.h"
+#include "Components/NativeWidgetHost.h"
+#include "Mods/ACEPluginSubsystem.h"
+#include "Engine/GameInstance.h"
+
+void UACEUIGameplayBinder::RefreshExaminationWikiLink(bool bShow)
+{
+    auto* Host=Client&&Client->GetGameInstance()?Client->GetGameInstance()->GetSubsystem<UACEPluginSubsystem>():nullptr;
+    FACEWorldObject Subject;
+    const bool Player=Client&&Client->GetWorldObject(LastAppraisal.ObjectGuid,Subject)&&Subject.bIsPlayer;
+    bool Enabled=false;
+    if(Host)for(const auto& P:Host->Plugins)if(P->Id==TEXT("wiki"))Enabled=P->Enabled;
+    if(!bShow||!Enabled||Player||LastAppraisal.Name.IsEmpty()||!Canvas->WidgetTree)
+    {if(ExamWikiLink)ExamWikiLink->SetVisibility(ESlateVisibility::Collapsed);return;}
+    if(!ExamWikiLink)ExamWikiLink=Canvas->WidgetTree->ConstructWidget<UNativeWidgetHost>();
+    if(ExamWikiName!=LastAppraisal.Name)
+    {ExamWikiName=LastAppraisal.Name;ExamWikiLink->SetContent(Host->MakeWikiLink(ExamWikiName));}
+    if(!ExamWikiRegion)ExamWikiRegion=MakeShared<FACEUIElement>();
+    ExamWikiRegion->Parent=Manager->FindElementByName(TEXT("RootGameplay_FloatyExamination_Field"));
+    ExamWikiRegion->X=8;ExamWikiRegion->Y=4;ExamWikiRegion->Width=48;ExamWikiRegion->Height=16;
+    ExamWikiLink->SetVisibility(ESlateVisibility::Visible);
+    Canvas->PlaceWidgetAtElement(ExamWikiLink,ExamWikiRegion,100010);
+}
 
 bool UACEUIGameplayBinder::InspectSpellAt(FVector2D Point)
 {
