@@ -120,6 +120,7 @@ public:
 
 protected:
 	friend class FACEMissingDatLoginTest;
+    friend class FACEMobileTouchTest;
 	friend class FACELauncherWidgetTest;
 	friend class FACELauncherViewportTest;
 	friend class FACEVRRigTest;

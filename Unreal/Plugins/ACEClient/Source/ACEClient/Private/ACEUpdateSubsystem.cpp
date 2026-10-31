@@ -1,4 +1,5 @@
 #include "ACEUpdateSubsystem.h"
+#include "Mobile/ACEMobileSettings.h"
 #include "ACEClientBuild.h"
 #include "ACEClientSubsystem.h"
 #include "ACESession.h"
@@ -68,7 +69,7 @@ FString FACEUpdateRelease::DownloadURL() const
     return FString::Printf(TEXT("https://thwargle.com/downloads/ac/v%d/%s"), Number, *File);
 }
 
-bool ACEUpdates::ParseManifest(const FString& Json, bool bQuest, FACEUpdateRelease& Out, FString& Error, bool bLinux)
+bool ACEUpdates::ParseManifest(const FString& Json, bool bQuest, FACEUpdateRelease& Out, FString& Error, bool bLinux, bool bMobile)
 {
     Error = TEXT("The update information is invalid. Please try again later.");
     if (Json.Len() > 65536) return false;
@@ -80,17 +81,18 @@ bool ACEUpdates::ParseManifest(const FString& Json, bool bQuest, FACEUpdateRelea
     if (!Root->TryGetNumberField(TEXT("version"), Number) || !FMath::IsFinite(Number) || Number < 1 || Number > 100000 || Number != FMath::FloorToDouble(Number)) return false;
     if (!Root->TryGetObjectField(TEXT("updates"), Updates) || !(*Updates)->TryGetNumberField(TEXT("schema"), Schema) || Schema != 1)
     { Error = TEXT("This release does not offer in-game updates yet. Downloads are available on thwargle.com."); return false; }
-    if (bQuest && bLinux) return false;
-    if (!(*Updates)->TryGetObjectField(bQuest ? TEXT("quest") : bLinux ? TEXT("linux") : TEXT("windows"), Artifact))
-    { if (bLinux) Error = TEXT("No Linux release is listed yet. Downloads are available on thwargle.com."); return false; }
+    if (int32(bQuest)+int32(bLinux)+int32(bMobile)>1) return false;
+    if (!(*Updates)->TryGetObjectField(bMobile ? TEXT("android") : bQuest ? TEXT("quest") : bLinux ? TEXT("linux") : TEXT("windows"), Artifact))
+    { if (bMobile) Error=TEXT("No Android phone/tablet release is published yet. Install the latest mobile preview package to update.");
+      else if (bLinux) Error = TEXT("No Linux release is listed yet. Downloads are available on thwargle.com."); return false; }
     FACEUpdateRelease Parsed; Parsed.Number = int32(Number);
-    if (!Root->TryGetStringField(bQuest ? TEXT("questVersion") : bLinux ? TEXT("linuxVersion") : TEXT("windowsVersion"), Parsed.Version)
+    if (!Root->TryGetStringField(bMobile ? TEXT("androidVersion") : bQuest ? TEXT("questVersion") : bLinux ? TEXT("linuxVersion") : TEXT("windowsVersion"), Parsed.Version)
         || !(*Artifact)->TryGetStringField(TEXT("file"), Parsed.File)
         || !(*Artifact)->TryGetStringField(TEXT("sha256"), Parsed.Sha256)
         || !(*Artifact)->TryGetNumberField(TEXT("bytes"), Bytes)) return false;
     if (!FMath::IsFinite(Bytes) || Bytes < 1 || Bytes > 2147483648. || Bytes != FMath::FloorToDouble(Bytes)) return false;
     Parsed.Bytes = int64(Bytes);
-    const FString Expected = bQuest ? FString::Printf(TEXT("AC-VR-Quest-v%d.apk"), Parsed.Number)
+    const FString Expected = bMobile ? FString::Printf(TEXT("AC-Unreal-Android-v%d.apk"), Parsed.Number) : bQuest ? FString::Printf(TEXT("AC-VR-Quest-v%d.apk"), Parsed.Number)
         : bLinux ? FString::Printf(TEXT("AC-Unreal-Linux-v%d.tar.gz"), Parsed.Number) : FString::Printf(TEXT("AC-Unreal-Setup-v%d.exe"), Parsed.Number);
     if (Parsed.File != Expected || Parsed.Sha256.Len() != 64 || Parsed.Version.IsEmpty() || Parsed.Version.Len() > 48) return false;
     for (TCHAR C : Parsed.Sha256) if (!FChar::IsHexDigit(C)) return false;
@@ -119,8 +121,10 @@ bool ACEUpdates::VerifyFile(const FString& Path, const FACEUpdateRelease& Releas
     return Valid && BytesToHex(Digest, Length).Equals(Release.Sha256, ESearchCase::IgnoreCase);
 }
 
-const TCHAR* ACEUpdates::InstallationNotice(bool bQuest)
+const TCHAR* ACEUpdates::InstallationNotice(bool bQuest, bool bMobile)
 {
+    if (bMobile)
+        return TEXT("AC:Unreal Mobile will close while the update installs. Confirm the Android installation prompt, wait for installation to finish, then reopen AC:Unreal Mobile from your apps. Your saved data is kept.");
     return bQuest
         ? TEXT("AC:VR will close while the update installs. This is expected. Confirm the headset prompt, wait for installation to finish, then reopen AC:VR from your library. Your saved data is kept.")
         : TEXT("The game will close while the update installs, then reopen automatically in the same desktop or VR mode. Your saved data is kept.");
@@ -281,7 +285,8 @@ void UACEUpdateSubsystem::Check(bool bAutomatic)
         if (!Success || !Closed || !Response || Response->GetResponseCode() != 200 || Response->GetEffectiveURL() != ACEUpdates::ManifestURL)
         { Fail(TEXT("Could not check for updates. You can still log in; try again later.")); return; }
         FString Error;
-        if (!ACEUpdates::ParseManifest(Body->Text(), PLATFORM_ANDROID, Release, Error, PLATFORM_LINUX)) { Fail(Error); return; }
+        const bool Mobile=PLATFORM_ANDROID && UACEMobileSettings::IsEnabled();
+        if (!ACEUpdates::ParseManifest(Body->Text(), PLATFORM_ANDROID && !Mobile, Release, Error, PLATFORM_LINUX, Mobile)) { Fail(Error); return; }
         State = Release.Number > ACEClientBuild::ReleaseNumber ? EACEUpdateState::Available : EACEUpdateState::Current;
         Message = State == EACEUpdateState::Available ? FString::Printf(TEXT("Version %s is available (%.0f MB)."), *Release.Version, Release.Bytes / 1048576.) : TEXT("You have the latest version.");
     });
@@ -335,7 +340,7 @@ void UACEUpdateSubsystem::VerifyDownload(const FString& Path, bool bCached)
             if (!bCached && !IFileManager::Get().Move(*Self->PayloadPath(), *Path, true, true))
             { Self->Fail(TEXT("Could not save the update. Check storage and try again.")); return; }
             Self->State = EACEUpdateState::Ready;
-            Self->Message = FString(TEXT("Update ready. ")) + ACEUpdates::InstallationNotice(PLATFORM_ANDROID);
+            Self->Message = FString(TEXT("Update ready. ")) + ACEUpdates::InstallationNotice(PLATFORM_ANDROID, UACEMobileSettings::IsEnabled());
         });
     });
 }
@@ -355,7 +360,7 @@ bool UACEUpdateSubsystem::AdvanceInstallNotice(double Now)
 {
     if (State != EACEUpdateState::InstallNotice) return false;
     const int32 Seconds = FMath::Max(0, FMath::CeilToInt(InstallAt - Now));
-    Message = FString::Printf(TEXT("Update starting in %d seconds.\n%s"), Seconds, ACEUpdates::InstallationNotice(PLATFORM_ANDROID));
+    Message = FString::Printf(TEXT("Update starting in %d seconds.\n%s"), Seconds, ACEUpdates::InstallationNotice(PLATFORM_ANDROID, UACEMobileSettings::IsEnabled()));
     return Now >= InstallAt;
 }
 
@@ -370,9 +375,13 @@ void UACEUpdateSubsystem::LaunchInstaller()
         static jmethodID Method = FJavaWrapper::FindMethod(Env, FJavaWrapper::GameActivityClassID, "AndroidThunkJava_ACEInstallUpdate", "(Ljava/lang/String;I)Ljava/lang/String;", false);
         const auto Path = FJavaHelper::ToJavaString(Env, PayloadPath());
         const FString Result = FJavaHelper::FStringFromLocalRef(Env, static_cast<jstring>(FJavaWrapper::CallObjectMethod(Env, FJavaWrapper::GameActivityThis, Method, *Path, Release.Number)));
-        if (Result == TEXT("started")) { State = EACEUpdateState::Installing; Message = FString(TEXT("Installing update. ")) + ACEUpdates::InstallationNotice(true); }
-        else if (Result == TEXT("permission")) Message = TEXT("Allow AC:VR to install updates in the headset settings, return here, then choose Install again.");
-        else Message = TEXT("The headset could not open the installer. Try again, or use the USB updater from thwargle.com.");
+        if (Result == TEXT("started")) { State = EACEUpdateState::Installing; Message = FString(TEXT("Installing update. ")) + ACEUpdates::InstallationNotice(true, UACEMobileSettings::IsEnabled()); }
+        else if (Result == TEXT("permission")) Message = UACEMobileSettings::IsEnabled()
+            ? TEXT("Allow AC:Unreal Mobile to install updates in Android settings, return to the app, then choose Install again.")
+            : TEXT("Allow AC:VR to install updates in the headset settings, return here, then choose Install again.");
+        else Message = UACEMobileSettings::IsEnabled()
+            ? TEXT("Android could not open the installer. Try again, or download the Android phone/tablet APK from thwargle.com.")
+            : TEXT("The headset could not open the installer. Try again, or use the USB updater from thwargle.com.");
         return;
     }
 #elif PLATFORM_LINUX
@@ -434,7 +443,9 @@ void UACEUpdateSubsystem::PollInstall()
     {
         static jmethodID Method = FJavaWrapper::FindMethod(Env, FJavaWrapper::GameActivityClassID, "AndroidThunkJava_ACEUpdateStatus", "()Ljava/lang/String;", false);
         const FString Result = FJavaHelper::FStringFromLocalRef(Env, static_cast<jstring>(FJavaWrapper::CallObjectMethod(Env, FJavaWrapper::GameActivityThis, Method)));
-        if (Result == TEXT("confirm")) Message = FString(TEXT("Confirm the update in the headset's installation window. ")) + ACEUpdates::InstallationNotice(true);
+        if (Result == TEXT("confirm")) Message = FString(UACEMobileSettings::IsEnabled()
+            ? TEXT("Confirm the update in Android's installation window. ")
+            : TEXT("Confirm the update in the headset's installation window. ")) + ACEUpdates::InstallationNotice(true, UACEMobileSettings::IsEnabled());
         else if (Result.StartsWith(TEXT("failed"))) { State = EACEUpdateState::Ready; Message = TEXT("Installation was cancelled or failed. Your current version is unchanged. You can try Install again."); }
     }
 #endif

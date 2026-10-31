@@ -716,6 +716,21 @@ buffed melee/missile/property values, potential tinkered damage/defense/offense
 and combined ratings. Missing properties use the imported rule's zero semantics.
 Appraisal precedes decisions that require data not yet known.
 
+Weapon-skill rules retain VT's distinct integer properties: `EquipSkill`
+(`218103840`) comes from the weapon appraisal profile's `weapSkill`, while
+`WieldReqAttribute` (`159`) comes from item integer qualities. Verified against
+the supplied `utank2_decompiled/g6.cs` appraisal handler,
+`uTank2/LootPlugins/IntValueKey.cs`, `GameItemInfo.GetValueInt`, and Virindi's
+[Weapon Skill Ids reference](https://www.virindi.net/wiki/index.php/Weapon_Skill_Ids).
+The builder offers named IDs for Creature 31, Finesse 46, Heavy 44, Item 32,
+Life 33, Light 45, Mana Conversion 16, Missile 47, Summoning 54, Two-Handed 41,
+Void 43, and War 34, plus custom numeric IDs. These remain ordinary integer
+conditions; the picker does not substitute properties or infer an item skill
+from its name. Raw `WeaponSkill` (`48`) remains independently editable.
+`ACE.Plugins.WeaponSkillLoot` exercises the actual picker, saved profile reload,
+VT UTL conversion, native appraisal snapshots and shipped UCM loot decisions,
+including distinct attack/wield skills, unknown appraisal data and custom IDs.
+
 Regex matching uses ICU with .NET capture numbering and both named-capture
 spellings. It is case-sensitive unless the pattern specifies otherwise; VT's
 expression regex operator supplies its required case-insensitive flag. Patterns
@@ -1027,3 +1042,22 @@ for the timed buffs that remain after switching back to combat equipment.
 disappearing, normal and forced buff cycles, melee/dual-wield/missile restoration,
 continued attacks, and rebuffing after a real dispel. These are offline policy
 checks; they do not claim a live server reproduction.
+
+## Loot-rule chat notifications
+
+Reviewed the supplied `utank2_decompiled/uTank2/PluginCore.cs` TestItem callback
+(`a(int, bool)`) and `hv.cs` storage-change receipt handler. VT's TestItem names
+the first matched rule and its keep/salvage/no-loot action. Its loot receipt path
+waits for storage ownership to change. UCM uses those same distinctions: a local
+pickup message follows confirmed receipt, while a rule-match message describes
+the rule without claiming an item was acquired. Automatic selected/assessed-item
+notifications are an AC:Unreal extension of TestItem, independently switchable
+from pickup messages in Loot settings.
+
+Both paths use UCM's existing evaluator and item-property snapshot, including
+imported VT conditions and first-match Skip rules. The read-only notification
+service requests no assessments, yields expensive scans, bounds its event queue
+and duplicate history, and does no snapshot work on unchanged idle frames.
+`ACE.Plugins.LootNotifications` covers unknown appraisal fields, rule order,
+selected and unselected assessments, reselection, duplicate suppression, large
+profiles, disabled switches, confirmed pickups, timeouts, and local-only output.

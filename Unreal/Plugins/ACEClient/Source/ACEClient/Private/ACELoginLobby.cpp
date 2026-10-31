@@ -1,6 +1,8 @@
 #include "ACELoginWidget.h"
 #include "ACELobbyArt.h"
 #include "ACELobbyAccountList.h"
+#include "Mobile/ACEMobileSettings.h"
+#include "Components/SafeZone.h"
 #include "ACEDesktopDisplay.h"
 #include "ACEPlayerController.h"
 #include "UI/ACERetailTextBlock.h"
@@ -544,6 +546,8 @@ void UACELoginWidget::EnsureDefaultLayout()
 	SetIsFocusable(true); SetVisibility(ESlateVisibility::Visible);
 	ResponsiveScale=WidgetTree->ConstructWidget<UScaleBox>(); ResponsiveScale->SetStretch(EStretch::UserSpecified);
 	WidgetTree->RootWidget=ResponsiveScale;
+    if(UACEMobileSettings::IsEnabled())
+    {auto* Safe=WidgetTree->ConstructWidget<USafeZone>();Safe->SetContent(ResponsiveScale);WidgetTree->RootWidget=Safe;}
 	auto* Canvas = WidgetTree->ConstructWidget<UCanvasPanel>(); ResponsiveScale->SetContent(Canvas);
 	// UScaleBoxSlot defaults to Center, which would allocate only the canvas's
 	// tiny desired size instead of the viewport and clip all anchored controls.
@@ -2108,7 +2112,7 @@ bool UACELoginWidget::ValidateGameFiles()
 	FString Message=FString::Printf(TEXT("Game files are missing or empty: %s.\nSearched folder: %s\n"),
 		*FString::Join(Missing,TEXT(", ")),Dir.IsEmpty()?TEXT("No folder selected"):*Dir);
 #if PLATFORM_ANDROID
-	Message+=TEXT("Close the game, connect your Quest to your computer, and run Repair-Quest.cmd from the extracted Quest installer to install the DAT files. Then reopen the game.");
+	Message+=UACEMobileSettings::IsEnabled()?TEXT("Install the game data with Mobile/Install-Android.ps1 from your computer, then reopen the app. Your phone and Quest installations are separate."):TEXT("Close the game, connect your Quest to your computer, and run Repair-Quest.cmd from the extracted Quest installer to install the DAT files. Then reopen the game.");
 #else
 	Message+=TEXT("Select the folder containing your Asheron's Call DAT files below, then click Save location and return to Play. If you have not installed the game data yet, install it first.");
 #endif

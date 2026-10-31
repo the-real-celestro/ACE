@@ -2677,7 +2677,8 @@ void UACEUIGameplayBinder::ApplyCombatModeInternal(int32 Mode, bool bSendToServe
 	LastAppliedStanceKey = (CombatMode << 8) | ResolveEquippedCombatMode();
 	LastEquipModeSnapshot = ResolveEquippedCombatMode();
 	const bool bInCombat = CombatMode != static_cast<int32>(ACECombatMode::NonCombat);
-	SetFloatyVisible(TEXT("RootGameplay_FloatyCombatPanel_Field"), bInCombat);
+	SetFloatyVisible(TEXT("RootGameplay_FloatyCombatPanel_Field"), bInCombat
+		&& (CombatMode == int32(ACECombatMode::Magic) || !Client || !Client->IsCharacterOptionSet(0x0C)));
 	if (bInCombat)
 	{
 		if (CombatMode == static_cast<int32>(ACECombatMode::Melee)
@@ -2771,6 +2772,14 @@ void UACEUIGameplayBinder::RefreshCombatPanelOverlays()
 	}
 	const bool bMeleeOrMissile = CombatMode == static_cast<int32>(ACECombatMode::Melee)
 		|| CombatMode == static_cast<int32>(ACECombatMode::Missile);
+	const bool bAdvanced = Client && Client->IsCharacterOptionSet(0x0C);
+	if (bAdvanced != bCombatAdvancedUI)
+	{
+		bCombatAdvancedUI = bAdvanced;
+		bCombatPowerDrag = false;
+		if (bMeleeOrMissile) SetFloatyVisible(TEXT("RootGameplay_FloatyCombatPanel_Field"), !bAdvanced);
+	}
+	RefreshPowerbarOverlay();
 	auto HideCombatOverlays = [this]()
 	{
 		auto Collapse = [](UWidget* W)
@@ -2786,7 +2795,7 @@ void UACEUIGameplayBinder::RefreshCombatPanelOverlays()
 		for (UTextBlock* T : CombatAttackLabels) { Collapse(T); }
 		for (UTextBlock* T : CombatCheckboxLabels) { Collapse(T); }
 	};
-	if (!bMeleeOrMissile || !Manager || !Canvas || !Canvas->WidgetTree)
+	if (!bMeleeOrMissile || bAdvanced || !Manager || !Canvas || !Canvas->WidgetTree)
 	{
 		HideCombatOverlays();
 		return;
@@ -3294,7 +3303,7 @@ void UACEUIGameplayBinder::FireCombatAttack()
 	bCombatRepeatActive = bCombatAutoRepeat;
 }
 
-bool UACEUIGameplayBinder::TryBeginCombatPowerDrag(FVector2D CanvasLocalPos)
+bool UACEUIGameplayBinder::TryBeginCombatPowerDrag(FVector2D ViewportPos)
 {
 	if (!Manager || (CombatMode != static_cast<int32>(ACECombatMode::Melee)
 		&& CombatMode != static_cast<int32>(ACECombatMode::Missile)))
@@ -3304,22 +3313,32 @@ bool UACEUIGameplayBinder::TryBeginCombatPowerDrag(FVector2D CanvasLocalPos)
 	TSharedPtr<FACEUIElement> Slider = Manager->FindElementByName(TEXT("PowerSlider"));
 	TSharedPtr<FACEUIElement> CombatRoot = Manager->FindElementByName(TEXT("RootGameplay_FloatyCombatPanel_Field"));
 	if (!Slider.IsValid() || !CombatRoot.IsValid() || !CombatRoot->bVisible
-		|| !Canvas || !Canvas->IsElementExposedAt(Slider, CanvasLocalPos))
+		|| !Canvas || !Canvas->IsElementExposedAt(Slider, ViewportPos))
 	{
 		return false;
 	}
+	const FVector2D CanvasLocalPos = Canvas->ViewportToLayout(ViewportPos);
 	const FIntPoint O = Slider->GetScreenOrigin();
 	if (CanvasLocalPos.X < O.X || CanvasLocalPos.Y < O.Y
 		|| CanvasLocalPos.X >= O.X + Slider->Width || CanvasLocalPos.Y >= O.Y + Slider->Height)
 	{
 		return false;
 	}
+	// The authored slider is in layout units, while pointer events are in viewport
+	// units. Preserve a thumb grab, or center it at the clicked track position.
+	float ThumbWidth = 0.f;
+	for (const auto& Child : Slider->Children)
+		if (Child && Child->ElementId == 1) ThumbWidth = Child->Width;
+	const float ThumbX = RequestedAttackPower * FMath::Max(0.f, Slider->Width - ThumbWidth);
+	const float LocalX = CanvasLocalPos.X - O.X;
+	CombatPowerDragGrabOffset = LocalX >= ThumbX && LocalX < ThumbX + ThumbWidth
+		? LocalX - ThumbX : ThumbWidth * .5f;
 	bCombatPowerDrag = true;
-	UpdateCombatPowerDrag(CanvasLocalPos);
+	UpdateCombatPowerDrag(ViewportPos);
 	return true;
 }
 
-void UACEUIGameplayBinder::UpdateCombatPowerDrag(FVector2D CanvasLocalPos)
+void UACEUIGameplayBinder::UpdateCombatPowerDrag(FVector2D ViewportPos)
 {
 	if (!bCombatPowerDrag || !Manager)
 	{
@@ -3331,9 +3350,12 @@ void UACEUIGameplayBinder::UpdateCombatPowerDrag(FVector2D CanvasLocalPos)
 		return;
 	}
 	const FIntPoint O = Slider->GetScreenOrigin();
-	const float TrackW = static_cast<float>(FMath::Max(1, Slider->Width - 12));
-	CombatPowerOrAccuracy = FMath::Clamp((CanvasLocalPos.X - static_cast<float>(O.X)) / TrackW, 0.f, 1.f);
-	RequestedAttackPower = CombatPowerOrAccuracy;
+	const FVector2D CanvasLocalPos = Canvas ? Canvas->ViewportToLayout(ViewportPos) : ViewportPos;
+	float ThumbWidth = 0.f;
+	for (const auto& Child : Slider->Children)
+		if (Child && Child->ElementId == 1) ThumbWidth = Child->Width;
+	const float TrackW = FMath::Max(1.f, Slider->Width - ThumbWidth);
+	RequestedAttackPower = FMath::Clamp((CanvasLocalPos.X - O.X - CombatPowerDragGrabOffset) / TrackW, 0.f, 1.f);
 }
 
 bool UACEUIGameplayBinder::TryFinishCombatPowerDrag(FVector2D CanvasLocalPos)
@@ -3344,7 +3366,6 @@ bool UACEUIGameplayBinder::TryFinishCombatPowerDrag(FVector2D CanvasLocalPos)
 	}
 	UpdateCombatPowerDrag(CanvasLocalPos);
 	bCombatPowerDrag = false;
-	RequestedAttackPower = CombatPowerOrAccuracy;
 	return true;
 }
 
@@ -4817,9 +4838,39 @@ bool UACEUIGameplayBinder::TryBeginInventoryDrag(FVector2D CanvasLocalPos)
 		}
 	}
 
-	// Loot panel items → drag into inventory (double-click picks up).
+	// Retail's external container list supports the same drag as its item list.
+	// Keep the root icon as navigation; installed packs can be opened or removed.
 	if (OpenLootContainerGuid != 0)
 	{
+		for (int32 i = 1; i < ExtPackSlots.Num() && i < ExtPackGuids.Num(); ++i)
+		{
+			UBorder* Border = ExtPackSlots[i];
+			if (!Border || Border->GetVisibility() == ESlateVisibility::Collapsed
+				|| !Canvas->IsWidgetExposedAt(Border, Absolute)) continue;
+			FACEWorldObject Pack;
+			const int32 Guid = ExtPackGuids[i];
+			if (!Guid || !Client || !Client->GetWorldObject(Guid, Pack)) return false;
+			InvDragGuid = Guid;
+			InvDragIconDid = Pack.IconId;
+			InvDragSourcePack = OpenLootContainerGuid;
+			InvDragSourceSlot = i - 1 + ExtPackScrollOffset;
+			InvDragPackSlotIndex = INDEX_NONE;
+			InvDragStartLocal = CanvasLocalPos;
+			bInvDragPending = true;
+			bInvDragActive = false;
+			// Container-list clicks open the pack, including repeated clicks. They
+			// must not take the item-list double-click pickup path on release.
+			bInvDoubleClickPending = false;
+			SelectInventoryGuid(Guid);
+			if (!PendingUseWithSourceGuid && !(PlayerController && PlayerController->GetObjectCursorTargeting()))
+			{
+				OpenLootSelectedPackGuid = Guid;
+				ExtItemScrollOffset = 0;
+				RefreshExternalContainerOverlays();
+			}
+			return true;
+		}
+		// Ordinary loot items also support double-click pickup.
 		for (int32 i = 0; i < ExtItemSlots.Num() && i < ExtItemGuids.Num(); ++i)
 		{
 			UBorder* Border = ExtItemSlots[i];
@@ -6135,11 +6186,17 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 		}
 		if (Canvas->IsWidgetExposedAt(Border, Absolute))
 		{
-			if (!bRightClick && ExtPackGuids[i] != 0)
+			const int32 Guid = ExtPackGuids[i];
+			if (Guid != 0)
 			{
-				OpenLootSelectedPackGuid = ExtPackGuids[i];
-				ExtItemScrollOffset = 0;
-				RefreshExternalContainerOverlays();
+				SelectInventoryGuid(Guid);
+				if (bRightClick && Client) Client->SendIdentifyObject(Guid);
+				else if (!bRightClick)
+				{
+					OpenLootSelectedPackGuid = Guid;
+					ExtItemScrollOffset = 0;
+					RefreshExternalContainerOverlays();
+				}
 			}
 			return true;
 		}
@@ -6509,7 +6566,8 @@ void UACEUIGameplayBinder::HandleChatMessage(const FString& Text, const FString&
 	}
 
 	// Main window honours the quick filter cycle; retail floaty windows use their
-	// own 64-bit type filters and only receive lines while visible.
+	// own 64-bit type filters. Visibility only controls presentation: closed
+	// windows must retain matching messages for when the player opens them again.
 	const auto* Plugins = Client ? Client->GetGameInstance()->GetSubsystem<UACEPluginSubsystem>() : nullptr;
 	const uint8 PluginHidden = Plugins ? Plugins->FilterPluginChatWindows(Text, Sender, ChatType) : 0;
 	if (!(PluginHidden & 1) && PassesChatFilter(FilterType) && (MainChatTypeFilter & (1ull << (static_cast<uint32>(FilterType) & 63))) != 0)
@@ -6525,12 +6583,6 @@ void UACEUIGameplayBinder::HandleChatMessage(const FString& Text, const FString&
 		for (int32 W = 1; W <= NumFloatyChats; ++W)
 		{
 			if (PluginHidden & (1u << W)) continue;
-			TSharedPtr<FACEUIElement> Root = Manager->FindElementByName(
-				FString::Printf(TEXT("RootGameplay_FloatyChat%d_Field"), W));
-			if (!Root.IsValid() || !Root->bVisible)
-			{
-				continue;
-			}
 			if (FloatyChatFilters.IsValidIndex(W - 1)
 				&& (FloatyChatFilters[W - 1] & (1ull << (static_cast<uint32>(FilterType) & 63))) == 0)
 			{
@@ -6767,13 +6819,26 @@ void UACEUIGameplayBinder::SaveVitalDisplayPreference() const
 
 void UACEUIGameplayBinder::SetJumpChargeFraction(float Fraction)
 {
+	JumpChargeDisplayFraction = FMath::Clamp(Fraction, 0.f, 1.f);
+	RefreshPowerbarOverlay();
+}
+
+void UACEUIGameplayBinder::RefreshPowerbarOverlay()
+{
 	if (!Canvas || !Canvas->WidgetTree || !Canvas->GetElementLayer())
 	{
 		return;
 	}
 	EnsureOverlays();
-	const float Clamped = FMath::Clamp(Fraction, 0.f, 1.f);
-	const bool bShow = Clamped > 0.01f;
+	const bool bJump = JumpChargeDisplayFraction > .01f;
+	const bool bMelee = CombatMode == int32(ACECombatMode::Melee);
+	const bool bMissile = CombatMode == int32(ACECombatMode::Missile);
+	const bool bAttack = (bMelee || bMissile) && Client && Client->IsCharacterOptionSet(0x0C)
+		&& (bCombatPowerCharging || bCombatRequestSent || bCombatRepeatActive);
+	const bool bShow = bJump || bAttack;
+	const float Clamped = bJump ? JumpChargeDisplayFraction : FMath::Clamp(CombatPowerOrAccuracy, 0.f, 1.f);
+	const TCHAR* LabelText = bJump ? TEXT("Height") : bMissile ? TEXT("Accuracy") : TEXT("Power");
+	const uint32 PowerState = bJump ? 0x10000042 : bMissile ? 0x10000044 : 0x10000043;
 
 	// Prefer retail classic_floatypowerbar embedded as RootGameplay_PowerBar_Field
 	// (layout 0x21000072): Meter "Powerbar" track 0x06004D0B, yellow fill 0x06001354.
@@ -6794,8 +6859,9 @@ void UACEUIGameplayBinder::SetJumpChargeFraction(float Fraction)
 		if (PowerRoot.IsValid() && Meter.IsValid() && Meter->Type == ACEUI::ElementType::Meter)
 		{
 			bUsedLayoutMeter = true;
-			// gmPowerbarUI::RecvNotice_BeginPowerbar(PBM_JUMP): Height/yellow fill.
-			PowerRoot->DefaultState = 0x10000042;
+			// gmPowerbarUI: advanced attack uses the floating power/accuracy bar;
+			// jump temporarily replaces it with Height and the yellow fill.
+			PowerRoot->DefaultState = PowerState;
 			Manager->SetElementVisibleByName(PowerRootName, bShow);
 			Meter->MeterFillFraction = bShow ? Clamped : -1.f;
 			Meter->bVisible = bShow;
@@ -6808,7 +6874,8 @@ void UACEUIGameplayBinder::SetJumpChargeFraction(float Fraction)
 				if (Child->ElementName == TEXT("adv_recklessness_fill")
 					|| Child->ImageFileId == 0x0600715E)
 				{
-					Child->bVisible = false;
+					Child->bVisible = bShow && !bJump && bMelee && LastVitals.Skills.ContainsByPredicate(
+						[](const FACESkillInfo& Skill) { return Skill.SkillId == 50 && Skill.AdvancementClass >= 2; });
 				}
 				else if (Child->ImageFileId == 0x06001354)
 				{
@@ -6847,7 +6914,7 @@ void UACEUIGameplayBinder::SetJumpChargeFraction(float Fraction)
                 JumpChargeLabel=Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
             // JumpMode's UICore_Text_entry is language DAT 0x0529BD74: Height.
             auto Label=Manager->FindElementByName(TEXT("Powerbar_Text"));
-            PlaceTextOnElement(JumpChargeLabel,Label,TEXT("Height"),14,FLinearColor::White,9002,true);
+            PlaceTextOnElement(JumpChargeLabel,Label,LabelText,14,FLinearColor::White,9002,true);
         }
         else CollapseText(JumpChargeLabel);
 		return;
@@ -6866,7 +6933,7 @@ void UACEUIGameplayBinder::SetJumpChargeFraction(float Fraction)
 		SetIconDid(Border, IconDid);
 	};
 	EnsureBarBorder(JumpChargeFrame, 0x06004D0B);
-	EnsureBarBorder(JumpChargeFill, 0x06001354);
+	EnsureBarBorder(JumpChargeFill, bJump ? 0x06001354 : 0x06001200);
 	if (!JumpChargeLabel)
 	{
 		JumpChargeLabel = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
@@ -6878,6 +6945,7 @@ void UACEUIGameplayBinder::SetJumpChargeFraction(float Fraction)
 		JumpChargeLabel->SetText(FText::FromString(TEXT("Height")));
 		Canvas->GetElementLayer()->AddChild(JumpChargeLabel);
 	}
+	JumpChargeLabel->SetText(FText::FromString(LabelText));
 
 	if (!bShow)
 	{
@@ -8013,6 +8081,16 @@ bool UACEUIGameplayBinder::GetStatTooltipAt(FVector2D Absolute, FString& OutText
 		if (OutTemplateId) *OutTemplateId = UACEHoverTooltipWidget::MapTemplate;
 		return true;
 	}
+	if (Canvas && BuiltInSpellId && BuiltInSpellIconBorders.Num() > 0)
+	{
+		const auto* Icon = BuiltInSpellIconBorders[0].Get();
+		if (Icon && Icon->GetVisibility() != ESlateVisibility::Collapsed && Canvas->IsWidgetExposedAt(Icon, Absolute))
+		{
+			OutText = Icon->GetToolTipText().ToString();
+			if (OutTemplateId) *OutTemplateId = UACEHoverTooltipWidget::ObjectTemplate;
+			return !OutText.IsEmpty();
+		}
+	}
 	if (Canvas && CastSpellLabel && CastSpellLabel->GetVisibility() != ESlateVisibility::Collapsed
 		&& Canvas->IsWidgetExposedAt(CastSpellLabel, Absolute))
 	{
@@ -8137,6 +8215,7 @@ void UACEUIGameplayBinder::CastSelectedHotbarSpell()
 	{
 		return;
 	}
+	SyncSpellTabSelection();
 	int32 ToCast = 0;
 	if (SelectedCombatSpellSlot < 0)
 	{
@@ -9828,29 +9907,7 @@ void UACEUIGameplayBinder::RefreshSpellHotbarOverlays()
 	const float SY = Canvas->GetLastScaleY();
 	UCanvasPanel* ElementLayer = Canvas->GetElementLayer();
 
-	// Wand/orb innate (SpellDID) — BuiltInSpell leftmost slot.
-	BuiltInSpellId = 0;
-	BuiltInCasterGuid = 0;
-	const int32 PlayerGuid = Client->GetPlayerGuid();
-	if (PlayerGuid != 0)
-	{
-		for (const FACEWorldObject& Obj : Client->GetWorldObjects())
-		{
-			if (Obj.SpellDID == 0 || (Obj.ItemType & ACEItemType::Caster) == 0)
-			{
-				continue;
-			}
-			const bool bHeldByUs = Obj.WielderId == PlayerGuid || Obj.ParentGuid == PlayerGuid;
-			const bool bHeldLoc = (Obj.CurrentWieldedLocation & ACEEquipMask::Held) != 0
-				|| (Obj.ParentGuid == PlayerGuid && (Obj.ValidLocations & ACEEquipMask::Held) != 0);
-			if (bHeldByUs && bHeldLoc)
-			{
-				BuiltInSpellId = Obj.SpellDID;
-				BuiltInCasterGuid = Obj.Guid;
-				break;
-			}
-		}
-	}
+	// SyncSpellTabSelection has resolved the held caster before selecting a spell.
 	if (TSharedPtr<FACEUIElement> BuiltIn = Manager->FindElementByName(TEXT("BuiltInSpell")))
 	{
 		BuiltIn->bVisible = BuiltInSpellId != 0;
@@ -9864,6 +9921,10 @@ void UACEUIGameplayBinder::RefreshSpellHotbarOverlays()
 		{
 			Dat->TryGetSpellInfo(static_cast<uint32>(BuiltInSpellId), BuiltInName, BuiltInIconDid);
 		}
+		FACEWorldObject Caster;
+		const bool bPresent = BuiltInCasterGuid != 0 && Client->GetWorldObject(BuiltInCasterGuid, Caster);
+		const FText Tooltip = bPresent ? FText::FromString(ACERetailObjectNames::Name(Caster)
+			+ TEXT(" (") + BuiltInName + TEXT(")\nDouble-click to cast this spell")) : FText::GetEmpty();
 		EnsureIconBorder(BuiltInSpellIconBorders, 0);
 		if (UBorder* Icon = EnsureIconBorder(BuiltInSpellIconBorders, 0))
 		{
@@ -9878,7 +9939,7 @@ void UACEUIGameplayBinder::RefreshSpellHotbarOverlays()
 				SetSpellIcon(Icon, BuiltInSpellId);
 				if (!BuiltInName.IsEmpty())
 				{
-					SetRetailTooltip(Icon, FText::FromString(BuiltInName));
+					SetRetailTooltip(Icon, Tooltip);
 				}
 				if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Icon->Slot))
 				{
@@ -9893,34 +9954,38 @@ void UACEUIGameplayBinder::RefreshSpellHotbarOverlays()
 				Icon->SetVisibility(ESlateVisibility::Collapsed);
 			}
 		}
-        // gmSpellcastingUI::UpdateEndowmentIcon: spell underlay + caster drag icon.
-        if (UBorder* CasterIcon = EnsureIconBorder(BuiltInSpellIconBorders, 1))
-        {
-            FACEWorldObject Caster;
-            const bool Present = BuiltInCasterGuid != 0 && Client->GetWorldObject(BuiltInCasterGuid,Caster);
-            CasterIcon->SetVisibility(Present ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
-            if (Present)
-            {
-                SetItemSlotForeground(CasterIcon,&Caster);
-                Canvas->PlaceWidgetAtElement(CasterIcon,BuiltIn,581);
-            }
-        }
-
-		if (TSharedPtr<FACEUIElement> Sel = Manager->FindElementUnder(TEXT("BuiltInSpell"), TEXT("BuiltInSpell_Selected")))
+		// IconData::GetDragIcon excludes the inventory background/underlay and
+		// stack/trade decorations. Its alpha reveals the spell below the caster.
+		if (UBorder* CasterIcon = EnsureIconBorder(BuiltInSpellIconBorders, 1))
 		{
-			Sel->bVisible = (SelectedCombatSpellSlot < 0 && BuiltInSpellId != 0);
-		}
-		for (const TSharedPtr<FACEUIElement>& Child : BuiltIn->Children)
-		{
-			if (!Child.IsValid())
+			CasterIcon->SetVisibility(bPresent ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+			if (bPresent)
 			{
-				continue;
-			}
-			if (Child->ElementName == TEXT("BuiltInSpell_Selected"))
-			{
-				Child->bVisible = (SelectedCombatSpellSlot < 0 && BuiltInSpellId != 0);
+				FSlateBrush Brush;
+				Brush.DrawAs = ESlateBrushDrawType::Image;
+				Brush.SetResourceObject(Canvas->GetResourceResolver()->ResolveItemForeground(
+					Caster.IconId, Caster.IconOverlayId, Caster.UiEffects));
+				Brush.ImageSize = FVector2D(32, 32);
+				CasterIcon->SetBrush(Brush);
+				CasterIcon->SetBrushColor(FLinearColor::White);
+				SetRetailTooltip(CasterIcon, Tooltip);
+				Canvas->PlaceWidgetAtElement(CasterIcon, BuiltIn, 581);
 			}
 		}
+		// Native DAT children paint before runtime icon layers. Keep the selection
+		// frame above both, like the separate favorite-slot selection overlays.
+		if (UBorder* Selected = EnsureIconBorder(BuiltInSpellIconBorders, 2))
+		{
+			const bool bSelected = SelectedCombatSpellSlot < 0 && BuiltInSpellId != 0;
+			Selected->SetVisibility(bSelected ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+			if (bSelected)
+			{
+				SetIconDid(Selected, 0x06004D09);
+				Canvas->PlaceWidgetAtElement(Selected, BuiltIn, 583);
+			}
+		}
+		if (auto Sel = Manager->FindElementUnder(TEXT("BuiltInSpell"), TEXT("BuiltInSpell_Selected")))
+			Sel->bVisible = false;
 	}
 	int32 Filled = FilledEarly;
 	const int32 MaxOff = FMath::Max(0, Filled + 1 - VisibleSlots);
@@ -14428,6 +14493,21 @@ void UACEUIGameplayBinder::RebuildVendorVisibleFilters()
 	}
 }
 
+static void UpdateVendorFilterArrow(UACEUIElementManager* Manager, bool bOpen)
+{
+	if (!Manager) return;
+	if (auto Arrow = Manager->FindElementByName(TEXT("Menu_Vendor_SelectionWidget")))
+	{
+		// Retail's menu uses states 1/2 when closed and 6/7 when open.
+		// Select the state as well as the fallback image; state media wins at paint.
+		Arrow->bVisible = true;
+		Arrow->bUseExplicitState = true;
+		Arrow->DefaultState = bOpen ? 6 : 1;
+		Arrow->ImageFileId = bOpen ? 0x060012B2 : 0x060012B1;
+		Arrow->DrawMode = 3;
+	}
+}
+
 void UACEUIGameplayBinder::PlaceVendorFilterCaption()
 {
 	if (!Canvas || !Manager || OpenVendorGuid == 0)
@@ -14451,12 +14531,7 @@ void UACEUIGameplayBinder::PlaceVendorFilterCaption()
 		Display = Manager->FindElementByName(TEXT("Menu_Vendor_SelectionDisplay"));
 	}
 	PlaceTextOnElement(VendorFilterText, Display, VendorFilterLabel(), 9, TextGold, 200010);
-	if (auto Arrow = Manager->FindElementByName(TEXT("Menu_Vendor_SelectionWidget")))
-	{
-		Arrow->bVisible = true;
-		Arrow->ImageFileId = 0x060012B1;
-		Arrow->DrawMode = 3;
-	}
+	UpdateVendorFilterArrow(Manager, bVendorFilterDropdownOpen);
 }
 
 void UACEUIGameplayBinder::ToggleVendorFilterDropdown()
@@ -14475,6 +14550,7 @@ void UACEUIGameplayBinder::SetVendorItemTypeFilter(int32 FilterIndex)
 void UACEUIGameplayBinder::CloseVendorFilterDropdown()
 {
 	bVendorFilterDropdownOpen = false;
+	UpdateVendorFilterArrow(Manager, false);
 	if (VendorFilterDropdownBg)
 	{
 		VendorFilterDropdownBg->SetVisibility(ESlateVisibility::Collapsed);
@@ -14507,6 +14583,7 @@ void UACEUIGameplayBinder::RefreshVendorFilterDropdown()
 	}
 	EnsureOverlays();
 	RebuildVendorVisibleFilters();
+	UpdateVendorFilterArrow(Manager, true);
 	constexpr int32 RowH = 18;
 	constexpr int32 DropZ = 200000;
 	const int32 Rows = FMath::Max(1, VendorVisibleFilterIndices.Num());
@@ -14680,15 +14757,13 @@ void UACEUIGameplayBinder::AddSelectedVendorItemToBuyCart()
 		if (P.Value == VendorSelectedGuid)
 		{
 			P.Key = static_cast<int32>(FMath::Min<int64>(Limit,static_cast<int64>(P.Key)+Quantity));
-			ActiveVendorPage = 1;
-			SyncVendorPageVisibility();
 			RefreshVendorOverlays();
 			return;
 		}
 	}
 	VendorBuyCart.Emplace(Quantity, VendorSelectedGuid);
-	ActiveVendorPage = 1;
-	SyncVendorPageVisibility();
+	// Retail VendorItemsUI::AddToBuyList leaves the Items page and selection
+	// in place so another click adds the same quantity again.
 	RefreshVendorOverlays();
 }
 
@@ -15250,6 +15325,17 @@ void UACEUIGameplayBinder::RefreshExternalContainerOverlays()
 		return;
 	}
 	LastLootOverlayHash = LootHash;
+	TArray<int32> PackGuids;
+	if (const auto Session = Client->GetSession()) Session->GetContainerPackGuids(OpenLootContainerGuid, PackGuids);
+	// gmExternalContainerUI returns to the root when the server confirms that
+	// the pack being viewed has left this container. Do not show its stale contents.
+	if (OpenLootSelectedPackGuid != 0 && OpenLootSelectedPackGuid != OpenLootContainerGuid
+		&& !PackGuids.Contains(OpenLootSelectedPackGuid))
+	{
+		OpenLootSelectedPackGuid = OpenLootContainerGuid;
+		ExtItemScrollOffset = 0;
+		LastLootOverlayHash = HashLootOverlayState();
+	}
 	bLootOverlaysCollapsed = false;
 	SyncEnvPanelMode();
 	constexpr int32 OverlayZ = 120000;
@@ -15279,8 +15365,6 @@ void UACEUIGameplayBinder::RefreshExternalContainerOverlays()
 	TSharedPtr<FACEUIElement> PackList = Manager->FindElementUnder(TEXT("ExternalContainer"), TEXT("ContainerList"));
 	TSharedPtr<FACEUIElement> RootIconEl = Manager->FindElementUnder(TEXT("ExternalContainer"), TEXT("Container"));
 	TArray<FACEWorldObject> Nested;
-	TArray<int32> PackGuids;
-	if (const auto Session = Client->GetSession()) Session->GetContainerPackGuids(OpenLootContainerGuid, PackGuids);
 	for (int32 Guid : PackGuids)
 	{
 		FACEWorldObject Pack;

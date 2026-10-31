@@ -294,6 +294,11 @@ cannot be deleted. Activity toggles remain independent of the selected files.
 On **Route**, choose **+ New route**, enter a file name, then **Create and select
 route** (or press Enter). This immediately creates the empty JSON file and makes
 it current. The editor shows its name, saved point count and auto-save status.
+Names can contain spaces, such as `Academy Loop`, along with letters, numbers,
+underscores and hyphens (up to 64 characters). Saved routes appear in the Route
+tab and Overview's Routes dropdown, including after reloading the client.
+Creation errors appear beside the name field; a duplicate name or failed write
+leaves the active route and existing file unchanged.
 Use **Add waypoint at my position**, walk to the next turn, and repeat. The point
 list is paged; adding a point opens its page. **Special steps** holds portal/use,
 jump, pause and recall actions; **Route behavior** holds loop, door and follow
@@ -644,6 +649,20 @@ Skip or an already satisfied quantity cap. Unmatched items remain on the corpse.
 Use **Edit**, **Enable/Disable**, **Up/Down** and **Remove** on rule cards. Changing
 rules stops UCM; press Start to use the new set consistently.
 
+Configuration > Chat notifications and the Loot tab share two local chat
+notification switches, both on by default:
+**Announce looted rule matches** reports the item, quantity and matching rule
+after UCM confirms the item reached your inventory. **Announce item ID matches**
+reports the first matching rule and its Keep, Skip, Salvage,
+Sell or Read action when you select an item or receive a successful assessment.
+The latter also works while UCM is stopped, provided the plugin is enabled.
+Unknown properties wait for a normal assessment; notifications never request
+additional assessments. Repeated assessments of the same item/rule are suppressed;
+reselecting an item tests it again. Turning off item ID matches discards pending
+match notifications without disabling looting or pickup announcements. These
+messages are not sent to the server. Options > Chat > **Plugin chat** controls
+which chat windows display UCM announcements and other local plugin notices.
+
 For example, a Keep rule for Copper, workmanship 7–10, collects suitable copper
 items for later salvaging. A Skip rule for an exact item name above it protects
 that item from broader rules. A Keep rule with minimum value 10,000 and maximum
@@ -740,6 +759,23 @@ that the current server sends it. Decimal bonuses remain raw multipliers: +15%
 melee defense is 1.15 and +130% bow damage is 2.3. Keep counts explicitly choose
 display-name matching (Classic Keep #) or item-template matching. A condition
 draft must be accepted or cancelled before saving its containing rule.
+
+For weapon skills, open a rule's **Requirements**, choose **Weapon skill**, then
+select a skill by name and ID (for example, **Heavy Weapons (44)** or **Missile
+Weapons (47)**). This creates `EquipSkill = ID`, using the weapon's attack skill
+from appraisal. **Wield requirement skill** creates `WieldReqAttribute = ID`
+instead; it is the required skill, which may differ from the attack skill.
+Choose **Apply requirement**, then **Apply rule** to save to the active loot
+profile. Both the UCM editor and the separate Loot Profile Editor offer these
+controls. The picker includes all twelve IDs in Virindi's
+[Weapon Skill Ids reference](https://www.virindi.net/wiki/index.php/Weapon_Skill_Ids)
+and accepts custom IDs. Imported rules keep their original comparisons, numeric
+IDs, and missing-value policy.
+
+`WieldReqAttribute` can also describe a non-skill requirement. For skill-only
+wield rules, check `WieldReqType`: Skill = 1, Raw Skill = 2, or Training = 8.
+Add the relevant type as another integer requirement if needed. Use separate
+rules for alternatives: every requirement within one rule must match.
 
 **View / edit original Classic UTL copy** opens the source document separately
 from the active converted rules. The document editor exposes all 31 Classic

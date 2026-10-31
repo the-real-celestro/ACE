@@ -8,6 +8,35 @@ button exists, its opcode has a constant, or a focused regression test passes.
 This is the working acceptance record, most recently reviewed on 2026-10-13. The client
 is **not yet a feature-complete retail replacement**.
 
+## Removing packs from chests: 2026-10-29
+
+Retail `gmExternalContainerUI::PostInit` uses `UIElement_ItemList` for both the
+external item grid and its container list. `ItemList_BeginDrag` handles either
+list; `ListenToElementMessage` opens a nested pack on click and examines it on
+right-click, without interpreting repeated container-list clicks as pickup.
+`gmExternalContainerUI::RecvNotice_ServerSaysMoveItem` (`004CBB30`) returns to
+the root when the server moves the open nested pack out of the chest.
+
+Our external pack icons handled opening only; mouse-down never armed their
+inventory drag. They now use the existing authoritative PutItemInContainer
+path, including side-slot insertion, while ordinary clicks still browse the
+pack. Right-click examines it. After confirmed removal the external view returns
+to the chest, with the pack's own contents retained. Touch/VR loot also exposes
+side-slot packs, with separate open and take actions; previously those packs
+were omitted by the ordinary-item query.
+
+Validation: Windows Development Editor build passed. UIScreens, InventoryOrder,
+ClosedContainerLifetime, VR.RigAndMenus and Mobile.TouchAndMenus passed. The
+rendered input fixtures cover repeated clicks, examination, drag cancellation,
+occupied/empty destination pack slots at 1x/1.5x DPI with a desktop offset,
+server-confirmed removal, and retained nested contents. The broader UI suite's
+old hardcoded chat-filter group count was replaced with the current catalog
+size so it still checks the intended windows after the new chat filters.
+Evidence: `TestOutput/ChestPackRemoval/` (builds) and
+`TestOutput/CombatChatParity/ChestPackRemoval{,-final}/` (automation). This is
+checked against local retail source and encoded client/server event fixtures,
+not a live-server retail recording.
+
 ## Retired skill records and DAT stat definitions: 2026-10-26
 
 The reported skill page mixes modern Light Weapons with iconless Axe, Dagger,
@@ -156,6 +185,38 @@ nor resolution of the live hitch is established. Evidence and traces are under
 subcategories on a live recurrence before attributing that report to a specific
 particle operation. Material lifetime/terrain regression results remain valid
 independently of these aggregate measurements.
+
+## Local combat movement and plugin chat: 2026-10-29
+
+Retail `CMotionTable::GetObjectSequence` removes cyclic animation tails while
+retaining unfinished links/actions; `CSequence` applies their position frames
+before reaching the next walk/run cycle. `add_motion` supplies cycle physics,
+while `combine_motion` supplies independent sidestep/turn modifiers. The local
+Unreal controller previously predicted full forward/backward locomotion during
+casting gestures and scarab windups, even though those links were still playing.
+
+Desktop/mobile forward prediction now waits for the active combat link. This
+also covers missile aim/reload entries and their return to Ready. Raw forward
+intent still reaches the server immediately; sidestep/turn remain independent.
+A forward command reapplied during server-control handoff releases the eventual
+held cast tail even if the key was already down. Existing melee/stance-change
+translation locks and airborne movement rules remain in effect.
+
+The Editor build and nine suites passed: WalkingStep, RunSpeed, PvPCombat,
+ArcheryMotion, AttackHeightMotion, UIInteractions, ChatInputAndCommands,
+PublicAPI and LootNotifications. Added coverage runs actual DAT magic/bow/
+crossbow/atlatl/thrown sequences with walk/run and forward/backward input at
+30/144 Hz, checks movement resumes, and replays raw movement packets when casts
+arrive before or after held input. These are local DAT/controller/protocol
+tests; a live-server reproduction has not been recorded. Evidence is under
+`TestOutput/CombatChatParity/`.
+
+Plugin local notices now use a separate chat routing category, retain history,
+and preserve their existing colors. Saved routes migrate once from the previous
+System/Broadcast categories. Tests cover per-window opt-out persistence, normal
+server messages, and Lua notices reaching the routed HUD. UCM exposes its existing
+item-match switch on Configuration as well as Loot, independently of confirmed
+pickup announcements, with regression coverage for discarding queued matches.
 
 ## UCM custom-profile memory and hunt history: 2026-10-25
 
@@ -4173,3 +4234,67 @@ short/narrow panel renders), `Companions`, `PublicAPI`, `AppraisalCommandContext
 and `ResourceMaintenance` passed. Tracking is checked against encoded loopback
 IdentifyObject packets; no QueryHealth target changes. Artifacts are in
 `TestOutput/DerethLens/`. Quest source synchronization is checked separately.
+
+## Chat controls, vendor staging and button drags: 2026-10-30
+
+- Main-chat expand/restore and unread controls take precedence over the legacy
+  sender-click fallback. Their DAT rectangles overlap selectable chat rows;
+  receiving the Slate hit alone did not prevent the canvas from starting a tell
+  before dispatching the button. Buttons, scrollbars and window handles now
+  retain input priority without disabling ordinary sender clicks.
+- Vendor Add to List keeps the Items page and selection, matching
+  `gmVendorUI::HandleButtonClicks` (0x100000C3) and
+  `VendorItemsUI::AddToBuyList`. Repeated clicks accumulate the selected quantity
+  without navigating away or submitting a purchase.
+- `UIElement_Button::UpdateState_` only changes to a state present in its DAT
+  description. Preserve the previous valid state when rollover artwork is
+  absent, preventing combat/use/examine, minimize, close and logout buttons
+  from going blank during a captured drag. Radar lock uses the explicit
+  0x10000063/0x10000064 states from `gmRadarUI::UpdateLockedStatus`.
+
+Validation: Development Editor build and `UIScreens`, `UIInteractions`,
+`ChatInputAndCommands`, `ACE.VR.RigAndMenus` and `ACE.Mobile.TouchAndMenus`
+passed. Rendered chat checks cover center/corner hit surfaces at 100%/150% UI
+scale, locked/unlocked windows at the top/bottom of the viewport, native canvas
+clicks with a clickable sender underneath, and preservation of unsent drafts.
+Authored-button tests exercise drag out/back, release outside, capture cancel
+and release inside; vendor tests perform ten consecutive native Add clicks.
+The trade-note price fixture now explicitly opens Buying to inspect that page.
+Evidence: `TestOutput/UIGestures-2026-10-30/` (four other suites in `report`, final
+screen suite in `final-report`). These are offline DAT/Slate/loopback tests;
+no live server transaction or new packaged release was performed.
+
+## Innate caster spell and manual attack accuracy: 2026-10-30
+
+- `gmSpellcastingUI::UpdateEndowmentIcon` and `IconData::RenderIcons` draw the
+  equipped caster's spell, its transparent drag icon, then 0x06004D09 selection
+  artwork. The selection frame now paints above the runtime icons. Inventory
+  structure/sale decorations do not obscure the innate spell. The tooltip uses
+  the item name, spell name and retail double-click instruction.
+- Resolve the equipped caster before synchronizing a spell bank or casting.
+  Empty banks select the innate spell, equipment changes refresh its identity,
+  and unequipping falls back to an available favorite. Next/previous/first/last
+  selection includes the innate slot as in `gmSpellcastingUI`'s selection notices.
+  Read the session's object view without copying the entire nearby inventory.
+- The normal power/accuracy thumb uses its authored width and preserves the
+  pointer's grab offset. Track clicks center the thumb, pointer coordinates are
+  converted consistently, and changing the requested mark does not overwrite
+  the charge already being displayed.
+- `gmCombatUI::RecvNotice_SetCombatMode` hides the normal combat panel when
+  Advanced Combat UI is enabled. That mode now shows the floating red
+  Power/Accuracy charge meter from `gmPowerbarUI::RecvNotice_BeginPowerbar`.
+  Jump retains the yellow Height meter. The existing retail packet rules remain:
+  normal attacks build to at least the selected mark; advanced attacks use the
+  held charge at release. A visible normal slider in advanced mode previously
+  suggested that quick clicks would use its mark when they did not.
+
+Validation: Development Editor build; `UIScreens`, `UIInteractions`, `PvPCombat`,
+`ACE.VR.RigAndMenus` and `ACE.Mobile.TouchAndMenus`. Native pointer drag and
+attack-button tests check exactly one missile packet with 0%, 50% and 100%
+accuracy at 75%, 100%, 150% and 200% Slate UI scale. Rendered checks cover innate
+selection layering, empty banks, spell changes, unequipping, tooltip text and
+advanced/jump meter transitions. PvPCombat separately checks normal/advanced
+melee and missile release/repeat packet values. Evidence is under
+`TestOutput/WandArchery-2026-10-30/`; final tooltip/selection validation is in
+`final-report`. Quest and mobile share the updated source. No live-server hit
+rate or user-specific wand was available for reproduction.

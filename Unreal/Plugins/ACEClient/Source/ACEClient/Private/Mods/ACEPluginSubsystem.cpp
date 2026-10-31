@@ -741,8 +741,8 @@ bool UACEPluginSubsystem::SelectUCMSection(const FString& Section, const FString
 bool UACEPluginSubsystem::SaveUCMSectionAs(const FString& Section, const FString& Name)
 {
     auto P = Find(TEXT("ucm")); if (!P || !ValidUCMProfile(P->Profile)) return false;
-    if (!SafeName(Name) || !ACEUCMProfiles::Sections().Contains(Section))
-    { Notice = TEXT("Use a profile name of letters, numbers, _ or - (maximum 64)."); return false; }
+    if (!ACEUCMProfiles::SafeName(Name) || !ACEUCMProfiles::Sections().Contains(Section))
+    { Notice = TEXT("Use up to 64 letters, numbers, spaces, _ or -. Avoid reserved filenames such as CON."); return false; }
     if (IFileManager::Get().FileExists(*(UserDirectory()/TEXT("Profiles")/Section/(Name+TEXT(".json")))))
     { Notice = TEXT("That profile already exists. Choose it from the list to edit it, or use a new name for a copy."); return false; }
     if (!SaveProfile(P->Id, P->ProfileName, ProfileJson(P->Id))) return false;
@@ -1431,6 +1431,7 @@ bool UACEPluginSubsystem::Tick(float)
     {
         NextMaintenanceAt=FPlatformTime::Seconds()+.5;
         UpdateLedgers();UpdateDesktopDock();RefreshAutomationData();DrawRoute();
+        TickLootNotifications();
     }
     auto* C = GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     UpdateItemToolsCharacter();
@@ -1640,6 +1641,13 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
             }
     }
     LogUCMIntent(P,I);
+    bool NotifyPickup=true;
+    P.Profile->TryGetBoolField(TEXT("loot_notify_pickup"),NotifyPickup);
+    if(P.IsPolicy()&&P.Permissions.Contains(TEXT("loot"))&&NotifyPickup)
+    {
+        const FString LootNotice=String(I,TEXT("loot_notification"));
+        if(!LootNotice.IsEmpty())ShowLootNotification(LootNotice);
+    }
     if(!MetaState.IsEmpty())P.MetaState=MetaState;
     if(I->HasTypedField<EJson::String>(TEXT("meta_status")))P.MetaStatus=String(I,TEXT("meta_status")).Left(1600);
     const FString Status = String(I, TEXT("status")); if (!Status.IsEmpty()) P.Status = Status;

@@ -433,11 +433,21 @@ void UACEUIGameplayBinder::LoadFloatyChatSettings()
 	{
 		GlobalChatTypeFilter = FCString::Strtoui64(*Value, nullptr, 10);
 	}
+	int32 FilterVersion = 0;
+	GConfig->GetInt(Section,TEXT("ChatFilterVersion"),FilterVersion,GGameUserSettingsIni);
+	if (FilterVersion < 1)
+	{
+		MainChatTypeFilter = ACERetailChat::UpgradeLegacyPluginFilter(MainChatTypeFilter);
+		GlobalChatTypeFilter = ACERetailChat::UpgradeLegacyPluginFilter(GlobalChatTypeFilter);
+		for (auto& Mask : FloatyChatFilters) Mask = ACERetailChat::UpgradeLegacyPluginFilter(Mask);
+		SaveFloatyChatSettings();
+	}
 }
 
 void UACEUIGameplayBinder::SaveFloatyChatSettings()
 {
 	const TCHAR* Section = TEXT("ACEClient.DatHUD");
+	GConfig->SetInt(Section,TEXT("ChatFilterVersion"),1,GGameUserSettingsIni);
 	GConfig->SetFloat(Section,TEXT("ChatInactiveOpacity"),ChatInactiveOpacity,GGameUserSettingsIni);
 	GConfig->SetFloat(Section,TEXT("ChatActiveOpacity"),ChatActiveOpacity,GGameUserSettingsIni);
 	for (int32 W = 0; W < NumFloatyChats; ++W)
@@ -859,6 +869,19 @@ void UACEUIGameplayBinder::PlaceFloatyChatOverlays()
 
 bool UACEUIGameplayBinder::TryHandleChatNameClick(FVector2D Absolute)
 {
+	if (!Canvas) return false;
+	if (Manager)
+	{
+		const FVector2D Point = Canvas->ViewportToLayout(Canvas->GetCachedGeometry().AbsoluteToLocal(Absolute));
+		const auto Hit = Manager->HitTestCanvas(FMath::FloorToInt(Point.X), FMath::FloorToInt(Point.Y));
+		// The expand/unread controls overlap the log in retail. Slate delivers
+		// their click to the canvas, but the legacy sender fallback runs before
+		// DAT activation. Do not turn that control click into a tell underneath.
+		if (Hit && (Hit->Type == ACEUI::ElementType::Button || Hit->bBooleanButton
+			|| Hit->ElementName.EndsWith(TEXT("Button")) || Hit->ElementName.EndsWith(TEXT("Indicator"))
+			|| Hit->Type == ACEUI::ElementType::Scrollbar
+			|| UACEUIElementManager::IsFloatyDragHandle(Hit) || UACEUIElementManager::IsFloatyResizeHandle(Hit))) return false;
+	}
 	for (int32 i = ChatRowSenders.Num() - 1; i >= 0; --i)
 	{
 		const FChatRowSender& E = ChatRowSenders[i];

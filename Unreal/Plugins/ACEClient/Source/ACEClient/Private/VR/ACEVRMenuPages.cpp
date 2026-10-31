@@ -155,13 +155,27 @@ void UACEVRMenu::BuildCharacter()
 }
 void UACEVRMenu::BuildLoot()
 {
-    const int32 Container=Client->GetOpenExternalContainerGuid();
-    if(!Container){Body->AddSlot().AutoHeight()[PageText(TEXT("Open a corpse or container to see its contents."))];return;}
+    const int32 Root=Client->GetOpenExternalContainerGuid();
+    if(!Root){Body->AddSlot().AutoHeight()[PageText(TEXT("Open a corpse or container to see its contents."))];return;}
+    TArray<int32> Packs;
+    if(const auto Session=Client->GetSession())Session->GetContainerPackGuids(Root,Packs);
+    const int32 Container=Packs.Contains(Binder->OpenLootSelectedPackGuid)?Binder->OpenLootSelectedPackGuid:Root;
+    Binder->OpenLootSelectedPackGuid=Container;
+    if(Container!=Root)Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Back to container"),[this,Root]()
+        {Binder->OpenLootSelectedPackGuid=Root;ClearItemSelection();bDirty=true;})];
+    auto Items=Client->GetPackItems(Container);
+    // Side-slot packs are deliberately omitted from the ordinary item grid.
+    // Expose them here too, so touch/VR can open or take an installed chest pack.
+    if(Container==Root)for(int32 Guid:Packs)
+    {FACEWorldObject PackItem;if(Client->GetWorldObject(Guid,PackItem))Items.Add(PackItem);}
     auto Grid=SNew(SUniformGridPanel).SlotPadding(FMargin(4));int32 I=0;
-    for(const auto& Item:Client->GetPackItems(Container)){Grid->AddSlot(I%6,I/6)[ItemButton(Item)];++I;}
+    for(const auto& Item:Items){Grid->AddSlot(I%6,I/6)[ItemButton(Item)];++I;}
     Body->AddSlot().AutoHeight()[Grid];
-    FACEWorldObject Item;const bool Valid=Client->GetWorldObject(Selected,Item) && Item.ContainerId==Container;
+    FACEWorldObject Item;const bool Valid=Client->GetWorldObject(Selected,Item)
+        && Items.ContainsByPredicate([this](const auto& Entry){return Entry.Guid==Selected;});
     if(Valid){Body->AddSlot().AutoHeight()[PageText(ACERetailObjectNames::Name(Item),28)];AddQuantity(Item.StackSize);}
+    if(Valid && Packs.Contains(Selected))Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Open selected pack"),[this]()
+        {Binder->OpenLootSelectedPackGuid=Selected;ClearItemSelection();bDirty=true;})];
     Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Take selected"),[this](){Binder->PickupInventoryAmount(Selected,Binder->GetSelectedItemAmount(Selected));bDirty=true;},Valid)];
 }
 void UACEVRMenu::BuildVendor()
@@ -261,7 +275,7 @@ void UACEVRMenu::BuildTrade()
 void UACEVRMenu::BuildMore()
 {
     Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Manage Plugins"),[this](){OpenPage("Plugins");})];
-    Body->AddSlot().AutoHeight()[Button(TEXT("VR settings"),[this](){Rig->ToggleSettings();})];
+    if(Rig)Body->AddSlot().AutoHeight()[Button(TEXT("VR settings"),[this](){Rig->ToggleSettings();})];
     Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Allegiance"),[this](){OpenPage("Allegiance");})];
     Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Character and chat options"),[this](){OpenPage("Options");})];
     Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Item hotbars"),[this](){OpenPage("Hotbars");})];
@@ -269,12 +283,15 @@ void UACEVRMenu::BuildMore()
     // controller. The desktop surface is rendered only when explicitly opened.
     const TPair<const TCHAR*,const TCHAR*> Pages[]={{TEXT("Chess / Game Center"),TEXT("MiniGamePanel_Field")},{TEXT("Journal"),TEXT("QuestManagementPanel_Field")},
         {TEXT("Map"),TEXT("WorldPanel_Field")},{TEXT("Options"),TEXT("OptionsPanel_Field")},{TEXT("All classic panels"),TEXT("InventoryPanel_Field")}};
-    for(const auto& P:Pages)Body->AddSlot().AutoHeight().Padding(4)[Button(P.Key,[this,Panel=FName(P.Value)](){Rig->bUseDesktopMenu=true;Rig->OpenRetailPanel(Panel);})];
+    if(Rig)for(const auto& P:Pages)Body->AddSlot().AutoHeight().Padding(4)[Button(P.Key,[this,Panel=FName(P.Value)](){Rig->bUseDesktopMenu=true;Rig->OpenRetailPanel(Panel);})];
 }
 void UACEVRMenu::BuildShortcuts()
 {
     Body->AddSlot().AutoHeight().Padding(4)[PageText(TEXT("Choose an inventory item, then assign it to a shortcut below."))];
-    Body->AddSlot().AutoHeight()[PackGrid(Pack?Pack:Client->GetPlayerGuid())];
+    if(bTouchMode)Body->AddSlot().AutoHeight()[SNew(SHorizontalBox)
+        +SHorizontalBox::Slot().FillWidth(1)[PackGrid(Pack?Pack:Client->GetPlayerGuid())]
+        +SHorizontalBox::Slot().AutoWidth().Padding(8,0)[SNew(SBox).WidthOverride(100).HeightOverride(210)[SNew(SScrollBox)+SScrollBox::Slot()[PackIcons()]]]];
+    else Body->AddSlot().AutoHeight()[PackGrid(Pack?Pack:Client->GetPlayerGuid())];
     FACEWorldObject Item;const bool Owned=Client->GetWorldObject(Selected,Item) && Client->IsOwnedInventoryItem(Item);
     Body->AddSlot().AutoHeight().Padding(4)[Button(bAssignShortcut?TEXT("Cancel assignment"):TEXT("Assign selected inventory item"),[this](){bAssignShortcut=!bAssignShortcut;bDirty=true;},Owned)];
     if(bAssignShortcut)Body->AddSlot().AutoHeight()[PageText(TEXT("Choose a slot for ")+ACERetailObjectNames::Name(Item),28)];
