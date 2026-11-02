@@ -192,7 +192,7 @@ bool FACEPluginLootIconsTest::RunTest(const FString&)
     Client->SelectInventoryObject(ClickItem.Guid);Host->TickLootInspection();
     TestEqual(TEXT("Duplicate selection callbacks do not print a second line"),Client->ChatHistory.Num(),Before+1);
     TestTrue(TEXT("Matched item is explicitly flagged"),Client->ChatHistory.Last().Text.StartsWith(TEXT("[MATCH]")));
-    TestTrue(TEXT("Matched item carries an explicit green color"),Client->ChatHistory.Last().LocalColor.IsSet()&&Client->ChatHistory.Last().LocalColor.GetValue().G>.9f);
+    TestTrue(TEXT("Matched item carries an explicit green color"),Client->ChatHistory.Last().Color.IsSet()&&Client->ChatHistory.Last().Color.GetValue().G>.9f);
 
     // Appraisal names can differ from the public name used by both the inventory
     // and the basic editor. Name (1) must refer to the same public identity.
@@ -213,7 +213,7 @@ bool FACEPluginLootIconsTest::RunTest(const FString&)
     TestEqual(TEXT("Disabled rule still prints a basic stat line"),Client->ChatHistory.Num(),Before+2);
     TestTrue(TEXT("Nonmatched stat line is plain text"),Client->ChatHistory.Last().BoldText.IsEmpty());
     TestFalse(TEXT("Disabled rule never reports a loot match"),Client->ChatHistory.Last().Text.Contains(TEXT("Matches")));
-    TestTrue(TEXT("Nonmatching stat line is explicitly white"),Client->ChatHistory.Last().LocalColor.IsSet()&&Client->ChatHistory.Last().LocalColor.GetValue()==FLinearColor::White);
+    TestTrue(TEXT("Nonmatching stat line is explicitly white"),Client->ChatHistory.Last().Color.IsSet()&&Client->ChatHistory.Last().Color.GetValue()==FLinearColor::White);
     Host->LastInspectedAt=0;ClickRule->SetBoolField(TEXT("enabled"),true);Client->SelectInventoryObject(ClickItem.Guid);Client->SelectInventoryObject(0);Host->TickLootInspection();
     TestEqual(TEXT("Changing selection does not print a provisional duplicate"),Client->ChatHistory.Num(),Before+2);
 

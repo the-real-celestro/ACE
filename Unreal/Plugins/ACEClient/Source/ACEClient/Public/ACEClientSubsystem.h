@@ -14,8 +14,9 @@ struct FACEBufferedChatMessage
 	FString Text, Sender;
 	int32 Type = 0;
 	int32 FilterType = INDEX_NONE;
+	uint8 ForcedWindows = 0;
+	TOptional<FLinearColor> Color;
 	FString BoldText;
-    TOptional<FLinearColor> LocalColor;
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FACESessionStateChangedDyn, EACESessionState, NewState);
@@ -158,9 +159,10 @@ public:
 
 	// Retain server messages received before the gameplay HUD exists (world entry).
 	const TArray<FACEBufferedChatMessage>& GetChatHistory() const { return ChatHistory; }
-	void ReceiveChatMessage(const FString& Text, const FString& Sender, int32 Type, int32 FilterType = INDEX_NONE, const FString& BoldText = FString(), TOptional<FLinearColor> LocalColor = {});
+	void ReceiveChatMessage(const FString& Text, const FString& Sender, int32 Type, int32 FilterType = INDEX_NONE, uint8 ForcedWindows = 0, TOptional<FLinearColor> Color = {}, const FString& BoldText = FString());
+	uint8 CurrentChatWindows = 0;
+	TOptional<FLinearColor> CurrentChatColor;
 	FString ActiveChatBoldText;
-    TOptional<FLinearColor> ActiveChatLocalColor;
 	TArray<FACEBufferedChatMessage> ChatHistory;
 
 

@@ -25,6 +25,17 @@ namespace
         lua_pushboolean(L,std::string_view(Hay,HayLength).find(std::string_view(Needle,NeedleLength))!=std::string_view::npos);
         return 1;
     }
+    int PlainFind(lua_State* L)
+    {
+        size_t HayLength=0,NeedleLength=0;
+        const char* Hay=luaL_checklstring(L,1,&HayLength);const char* Needle=luaL_checklstring(L,2,&NeedleLength);
+        if(HayLength>16384||NeedleLength>8192)return luaL_error(L,"findplain text exceeds 16384/8192 bytes");
+        const lua_Integer Start=luaL_optinteger(L,3,1);
+        const size_t Offset=Start<=1?0:size_t(FMath::Min<lua_Integer>(Start-1,lua_Integer(HayLength)+1));
+        const size_t Found=std::string_view(Hay,HayLength).find(std::string_view(Needle,NeedleLength),Offset);
+        if(Found==std::string_view::npos)lua_pushnil(L);else lua_pushinteger(L,lua_Integer(Found)+1);
+        return 1;
+    }
     FString LuaError(lua_State* L)
     { return lua_type(L,-1)==LUA_TSTRING ? FString(UTF8_TO_TCHAR(lua_tostring(L,-1))) : TEXT("Plugin raised a non-text error"); }
     int StoreTick(lua_State* L)
@@ -226,6 +237,7 @@ namespace
         for (const char* Key : {"find", "match", "gmatch", "gsub", "dump"})
         { lua_pushnil(L); lua_setfield(L, -2, Key); }
         lua_pushcfunction(L,PlainContains);lua_setfield(L,-2,"contains");
+        lua_pushcfunction(L,PlainFind);lua_setfield(L,-2,"findplain");
         lua_pop(L, 1);
         lua_pushcfunction(L,RegexMatch);lua_setglobal(L,"regexmatch");
         lua_pushcfunction(L,RegexTest);lua_setglobal(L,"regextest");
@@ -390,7 +402,7 @@ bool FACEPluginVM::Step(const TSharedPtr<FJsonObject>& Snapshot, const TSharedPt
             Intent->SetNumberField(Key, Value);
         }
         else if (lua_isboolean(State, -1)) Intent->SetBoolField(Key, lua_toboolean(State, -1) != 0);
-        else if((Key==TEXT("detected_objects")||Key==TEXT("presentation")||Key==TEXT("state")||Key==TEXT("ui")||Key==TEXT("chat_filters")||Key==TEXT("markers")||Key==TEXT("world_plates")||Key==TEXT("terrain_overlay")||Key==TEXT("messages")||Key==TEXT("requests")||Key==TEXT("profile_patch"))&&lua_istable(State,-1))
+        else if((Key==TEXT("detected_objects")||Key==TEXT("presentation")||Key==TEXT("state")||Key==TEXT("ui")||Key==TEXT("chat_filters")||Key==TEXT("chat_subscriptions")||Key==TEXT("markers")||Key==TEXT("world_plates")||Key==TEXT("terrain_overlay")||Key==TEXT("messages")||Key==TEXT("requests")||Key==TEXT("profile_patch"))&&lua_istable(State,-1))
         {
             int Nodes=0,OutputBytes=0;auto Value=ReadOutput(State,-1,0,Nodes,OutputBytes,Error,Key==TEXT("detected_objects")||Key==TEXT("profile_patch")||Key==TEXT("requests"));
             if(!Value){lua_settop(State,0);return false;}

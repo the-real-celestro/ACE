@@ -6,6 +6,9 @@
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SComboButton.h"
 #include "Widgets/Input/SSlider.h"
+#include "Widgets/Input/SEditableTextBox.h"
+#include "Widgets/Input/SMultiLineEditableTextBox.h"
+#include "Widgets/Input/SSpinBox.h"
 #include "Dat/ACEDatFileTypes.h"
 #include "Dat/ACEDatTextLayout.h"
 
@@ -33,6 +36,8 @@ public:
     // Native panels share authored 16/20/24px body and heading sizes.
     // Lua's explicit font sizes continue to use their requested values.
     static FSlateFontInfo NativeFont(FName Typeface,int32 Size=15);
+    static FSlateFontInfo ScaleFont(FSlateFontInfo Font);
+    static TAttribute<FSlateFontInfo> ScaledFont(TAttribute<FSlateFontInfo> Font);
     static constexpr float ButtonPadding=6.f, CompactButtonPadding=4.f, IconButtonPadding=2.f, ChromeButtonPadding=1.f;
     /** Plugin UI theme: "codex" (default) or "original" (the retail red/brown look). */
     static void SetTheme(const FString& Name);
@@ -172,4 +177,40 @@ private:
     bool CanDrawNative() const;
     float BitmapScale() const;
     void Layout(float Available) const;
+};
+
+/** Keep existing controls, focus and unsaved values when the user changes text scale. */
+class SACEPluginEditableTextBox : public SEditableTextBox
+{
+public:
+    using FArguments=SEditableTextBox::FArguments;
+    void Construct(const FArguments& Args)
+    {
+        FArguments Scaled=Args;
+        Scaled.Font(FACEPluginStyle::ScaledFont(Args._Font.IsSet()?Args._Font:TAttribute<FSlateFontInfo>(Args._Style->TextStyle.Font)));
+        SEditableTextBox::Construct(Scaled);
+    }
+};
+template<typename NumericType>
+class SACEPluginSpinBox : public SSpinBox<NumericType>
+{
+public:
+    using FArguments=typename SSpinBox<NumericType>::FArguments;
+    void Construct(const FArguments& Args)
+    {
+        FArguments Scaled=Args;
+        Scaled.Font(FACEPluginStyle::ScaledFont(Args._Font.IsSet()?Args._Font:TAttribute<FSlateFontInfo>(FACEPluginStyle::NativeFont("Regular",15))));
+        SSpinBox<NumericType>::Construct(Scaled);
+    }
+};
+class SACEPluginMultiLineEditableTextBox : public SMultiLineEditableTextBox
+{
+public:
+    using FArguments=SMultiLineEditableTextBox::FArguments;
+    void Construct(const FArguments& Args)
+    {
+        FArguments Scaled=Args;
+        Scaled.Font(FACEPluginStyle::ScaledFont(Args._Font.IsSet()?Args._Font:TAttribute<FSlateFontInfo>(Args._Style->TextStyle.Font)));
+        SMultiLineEditableTextBox::Construct(Scaled);
+    }
 };

@@ -1,4 +1,5 @@
 #include "Mods/ACEPluginStyle.h"
+#include "ACERuntimeOptions.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "ACEClientSubsystem.h"
 #include "ACEDatSubsystem.h"

@@ -834,6 +834,13 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
     }
     auto* Face=Video?Cast<UComboBoxString>(Video->WidgetTree->FindWidget(TEXT("ChatFontFace"))):nullptr;
     auto* FontSize=Video?Cast<UComboBoxString>(Video->WidgetTree->FindWidget(TEXT("ChatFontSize"))):nullptr;
+    auto* PluginScale=Video?Cast<UComboBoxString>(Video->WidgetTree->FindWidget(TEXT("PluginTextScale"))):nullptr;
+    if(TestNotNull(TEXT("Independent Lua text scale control"),PluginScale))
+    {
+        PluginScale->SetSelectedIndex(5);Video->ApplyInterfaceOptions();Video->ResetVideo();
+        TestEqual(TEXT("Plugin text scale applies and reloads"),ACERuntimeOptions::PluginTextScale(),2.f);
+        TestEqual(TEXT("Saved 200% selection retained"),PluginScale->GetSelectedIndex(),5);
+    }
     if(TestNotNull(TEXT("Retail chat font face control"),Face) && TestNotNull(TEXT("Retail chat font size control"),FontSize))
     {
         TestEqual(TEXT("All five retail font faces"),Face->GetOptionCount(),5);TestEqual(TEXT("All five retail font sizes"),FontSize->GetOptionCount(),5);
@@ -845,13 +852,95 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
             const auto* Font=Row->GetBitmapFont();
             TestTrue(TEXT("Every chosen face/size resolves a real retail atlas"),Font && Font->Id==ACERuntimeOptions::ChatFontId());
             TestTrue(TEXT("Changing fonts preserves selectable chat"),Row->IsSelectable());
+            for(int32 W=0;W<=4;++W)
+            {
+                const FString RootName=W==0?TEXT("RootGameplay_FloatyMainChat_Field"):FString::Printf(TEXT("RootGameplay_FloatyChat%d_Field"),W);
+                const auto Root=Manager->FindElementByName(RootName);
+                const auto Entry=Manager->FindElementUnder(RootName,TEXT("ChatPanelTextEntry"));
+                const auto Send=Manager->FindElementUnder(RootName,TEXT("SendButton"));
+                const auto ChatLog=Manager->FindElementUnder(RootName,TEXT("ChatLog"));
+                auto* Input=Binder->GetChatEntryWidget(W);
+                if(!TestTrue(TEXT("All chat windows retain their input and send control"),Root&&Entry&&Send&&ChatLog&&Input))continue;
+                TestTrue(TEXT("Typing font follows selected chat font and canvas scale"),FMath::IsNearlyEqual(float(Input->GetWidgetStyle().TextStyle.Font.Size),Font->MaxCharHeight*.75f*float(Canvas->GetLastScale2D().Y)));
+                TestTrue(*FString::Printf(TEXT("Chat %d font %08X typing height %d fits %d plus padding"),W,Font->Id,Entry->Height,Font->MaxCharHeight),Entry->Height>=int32(Font->MaxCharHeight)+4);
+                TestTrue(TEXT("Chat log stays above entry"),ChatLog->GetScreenOrigin().Y+ChatLog->Height<=Entry->GetScreenOrigin().Y);
+                TestTrue(TEXT("Send button stays beside entry"),Entry->GetScreenOrigin().X+Entry->Width<=Send->GetScreenOrigin().X);
+                const auto Before=Entry->GetScreenOrigin();const int32 Height=Entry->Height,Width=Entry->Width;
+                for(int32 Pass=0;Pass<3;++Pass)UACEUIElementManager::ApplyFloatyResizeLayout(Root);
+                TestEqual(TEXT("Reflow does not accumulate input offsets"),Entry->GetScreenOrigin(),Before);
+                TestEqual(TEXT("Reflow does not accumulate input height"),Entry->Height,Height);
+                TestEqual(TEXT("Reflow does not accumulate input width"),Entry->Width,Width);
+            }
+            ++GFrameCounter;Canvas->NativeTick(Canvas->GetCachedGeometry(),0.f);
+            for(const TCHAR* Name:{TEXT("ChatTarget"),TEXT("SendButton")})
+            {
+                const auto Button=Manager->FindElementUnder(TEXT("RootGameplay_FloatyMainChat_Field"),Name);
+                const auto* Paint=Button?Canvas->PaintStates.Find(Button->InstanceId):nullptr;
+                TestTrue(*FString::Printf(TEXT("Font %08X %s paints one complete button face"),Font->Id,Name),
+                    Paint&&Paint->Texture.IsValid()&&Paint->Tiling==uint8(ESlateBrushTileType::NoTile));
+            }
+            if(F==0&&Size==0)Draw(TEXT("ChatFontSmallButtons"));
+            if(F==0&&Size==2)Draw(TEXT("ChatFontMediumButtons"));
         }
         Face->SetSelectedIndex(3);FontSize->SetSelectedIndex(4);Video->ApplyInterfaceOptions();
         Video->ResetVideo();TestEqual(TEXT("Reset retains applied Tahoma"),Face->GetSelectedIndex(),3);
         TestEqual(TEXT("Reset retains applied extra large size"),FontSize->GetSelectedIndex(),4);
+        Binder->GetChatEntryWidget(0)->SetText(FText::FromString(TEXT("Larger chat entry text stays clear of Send.")));
+        const auto MainChat=Manager->FindElementByName(TEXT("RootGameplay_FloatyMainChat_Field"));
+        const int32 SavedW=MainChat->UserResizeW,SavedH=MainChat->UserResizeH;
+        MainChat->UserResizeW+=420;MainChat->UserResizeH+=260;
+        UACEUIElementManager::ApplyFloatyResizeLayout(MainChat);
+        for(int32 Pass=0;Pass<3;++Pass)
+        {
+            Binder->RefreshChatRowLayout(0);
+            const auto LogEl=Manager->FindElementUnder(MainChat->ElementName,TEXT("ChatLog"));
+            const auto Send=Manager->FindElementUnder(MainChat->ElementName,TEXT("SendButton"));
+            const auto Entry=Manager->FindElementUnder(MainChat->ElementName,TEXT("ChatPanelTextEntry"));
+            TestTrue(TEXT("Resized chat log uses the enlarged window width"),LogEl->Width>MainChat->Width-70);
+            TestTrue(TEXT("Resized chat log uses the enlarged window height"),LogEl->Height>MainChat->Height-100);
+            TestTrue(TEXT("Send stays at the resized right edge"),FMath::Abs(Send->GetScreenOrigin().X+Send->Width-(MainChat->GetScreenOrigin().X+MainChat->Width))<20);
+            TestTrue(TEXT("Entry grows with the resized frame"),Entry->Width>MainChat->Width-300);
+            UACEUIElementManager::ApplyFloatyResizeLayout(MainChat);
+        }
+        Draw(TEXT("ChatFontExtraLargeResized"));
+        // Exercise actual brush state for every chat window and DAT button state,
+        // including pressed/disabled textures after the input row has grown.
+        for(int32 W=0;W<=4;++W)
+        {
+            const FString RootName=W==0?TEXT("RootGameplay_FloatyMainChat_Field"):FString::Printf(TEXT("RootGameplay_FloatyChat%d_Field"),W);
+            const auto Root=Manager->FindElementByName(RootName);
+            const bool WasVisible=Root->bVisible;Root->bVisible=true;
+            for(const TCHAR* Name:{TEXT("ChatTarget"),TEXT("SendButton")})
+            {
+                const auto Button=Manager->FindElementUnder(RootName,Name);
+                if(!Button)continue; // The auxiliary chats have Send but no target selector.
+                TGuardValue<bool> Explicit(Button->bUseExplicitState,true);
+                TGuardValue<uint32> State(Button->DefaultState,Button->DefaultState);
+                for(uint32 Id:{1u,3u,13u})if(Button->States.Contains(Id))
+                {
+                    Button->DefaultState=Id;
+                    ++GFrameCounter;Canvas->NativeTick(Canvas->GetCachedGeometry(),0.f);
+                    const auto* Paint=Canvas->PaintStates.Find(Button->InstanceId);
+                    const auto& Media=Button->States.FindChecked(Id);
+                    if(Media.bHasMedia&&Media.ImageFileId==0)
+                        TestTrue(TEXT("Text-only auxiliary Send states do not invent a button background"),!Paint||Paint->Visibility==ESlateVisibility::Collapsed);
+                    else
+                        TestTrue(*FString::Printf(TEXT("Chat %d %s state %u never duplicates button artwork"),W,Name,Id),
+                            Paint&&Paint->Texture.IsValid()&&Paint->Tiling==uint8(ESlateBrushTileType::NoTile));
+                }
+            }
+            const auto EntryRow=Manager->FindElementUnder(RootName,W==0?TEXT("ChatEntryField"):TEXT("ChatPanelTextEntryField"));
+            const auto* Paint=EntryRow?Canvas->PaintStates.Find(EntryRow->InstanceId):nullptr;
+            TestTrue(TEXT("Scaled entry background tiles only along its width"),Paint&&Paint->Tiling==uint8(ESlateBrushTileType::Horizontal));
+            Root->bVisible=WasVisible;
+        }
+        MainChat->UserResizeW=SavedW;MainChat->UserResizeH=SavedH;
+        UACEUIElementManager::ApplyFloatyResizeLayout(MainChat);
+        TestEqual(TEXT("Chat sizing does not change plugin sizing"),ACERuntimeOptions::PluginTextScale(),2.f);
         Draw(TEXT("ChatFontExtraLarge"));
         Video->DefaultsVideo();Video->ApplyInterfaceOptions();Binder->RefreshChatRowLayout(0);
         TestEqual(TEXT("Defaults restore original retail chat font"),Row->GetBitmapFont()->Id,0x40000000u);
+        TestEqual(TEXT("Defaults restore plugin scale independently"),ACERuntimeOptions::PluginTextScale(),1.f);
     }
 
     // Retail separates skill-credit training from XP advancement, including the

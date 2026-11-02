@@ -153,7 +153,7 @@ void LootPanel()
     const auto Outer=Body,OuterSection=SectionBody;SectionBody.Reset();
     auto RuleList=SNew(SVerticalBox).Tag(TEXT("LootRuleList"));Body=RuleList;
     Add(Text(TEXT("Loot rules"),18));
-    Add(SNew(SEditableTextBox).Style(&LootEditStyle).HintText(FText::FromString(TEXT("Find a rule..."))).Text(FText::FromString(LootSearch))
+    Add(SNew(SACEPluginEditableTextBox).Style(&LootEditStyle).HintText(FText::FromString(TEXT("Find a rule..."))).Text(FText::FromString(LootSearch))
         .OnTextCommitted_Lambda([this](const FText& T,ETextCommit::Type){LootSearch=T.ToString();LootPage=0;Rebuild();}));
     TArray<int32> Visible;for(int I=0;I<Rules.Num();++I)if(LootSearch.IsEmpty()||Str(Rules[I]->AsObject(),TEXT("label")).Contains(LootSearch))Visible.Add(I);
     LootPage=FMath::Clamp(LootPage,0,FMath::Max(0,(Visible.Num()-1)/50));
@@ -242,12 +242,12 @@ TSharedRef<SWidget> LootPropertyPicker(const FString& Field,int32 Current,TFunct
             };
             Populate(FString());
             return SNew(SBox).WidthOverride(310).MaxDesiredHeight(330)[SNew(SVerticalBox)
-                +SVerticalBox::Slot().AutoHeight()[SNew(SEditableTextBox).Style(&LootEditStyle).HintText(FText::FromString(Field==TEXT("weapon_skill")?TEXT("Search skill name or ID"):TEXT("Search property name or ID"))).OnTextChanged_Lambda([Populate](const FText& T){Populate(T.ToString());})]
+                +SVerticalBox::Slot().AutoHeight()[SNew(SACEPluginEditableTextBox).Style(&LootEditStyle).HintText(FText::FromString(Field==TEXT("weapon_skill")?TEXT("Search skill name or ID"):TEXT("Search property name or ID"))).OnTextChanged_Lambda([Populate](const FText& T){Populate(T.ToString());})]
                 +SVerticalBox::Slot().FillHeight(1)[SNew(SScrollBox)+SScrollBox::Slot()[List]]];
         })];
     Row->AddSlot().AutoHeight().Padding(0,4)[SNew(SHorizontalBox)
         +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[Text(TEXT("ID: "),14,Muted)]
-        +SHorizontalBox::Slot().FillWidth(1)[SNew(SSpinBox<int32>).Tag(FName(*(TEXT("UCMLootID.")+Field))).Style(&LootSpinStyle).MinValue(0).MaxValue(MAX_int32).Value(Current)
+        +SHorizontalBox::Slot().FillWidth(1)[SNew(SACEPluginSpinBox<int32>).Tag(FName(*(TEXT("UCMLootID.")+Field))).Style(&LootSpinStyle).MinValue(0).MaxValue(MAX_int32).Value(Current)
             .OnValueCommitted_Lambda([Changed](int32 V,ETextCommit::Type){Changed(V);})]];
     return Row;
 }
@@ -256,7 +256,7 @@ void LootText(const TCHAR* Key,const FString& Caption)
 {
     Add(SNew(SHorizontalBox)
         +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(SBox).WidthOverride(85)[Text(Caption,14,Muted)]]
-        +SHorizontalBox::Slot().FillWidth(1)[SNew(SEditableTextBox).Tag(FName(*(FString(TEXT("LootField."))+Key))).Style(&LootEditStyle).Font(FACEPluginStyle::NativeFont("Regular",14))
+        +SHorizontalBox::Slot().FillWidth(1)[SNew(SACEPluginEditableTextBox).Tag(FName(*(FString(TEXT("LootField."))+Key))).Style(&LootEditStyle).Font(FACEPluginStyle::NativeFont("Regular",14))
             .Text(FText::FromString(Str(LootDraft,Key)))
             .OnTextChanged_Lambda([this,Key](const FText& V){LootDraft->SetStringField(Key,V.ToString());})]);
 }
@@ -270,11 +270,11 @@ void LootChoice(const TCHAR* Key,const FString& Caption,const TArray<TPair<FStri
     })];
     Add(SNew(SHorizontalBox)
         +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(SBox).WidthOverride(85)[Text(Caption,14,Muted)]]
-        +SHorizontalBox::Slot().AutoWidth()[SNew(SBox).MaxDesiredWidth(230)[SNew(SACEPluginComboButton).Tag(FName(*(FString(TEXT("LootChoice."))+Key))).ComboButtonStyle(&FACEPluginStyle::Current()->Combo)
+        +SHorizontalBox::Slot().AutoWidth()[SNew(SBox).MaxDesiredWidth(230)[SNew(SACEPluginComboButton).Tag(FName(*(FString(TEXT("UCMLootChoice."))+Key))).ComboButtonStyle(&FACEPluginStyle::Current()->Combo)
         .ButtonContent()[SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",14)).ColorAndOpacity(Ink)
             .Text_Lambda([this,Key,Options,Numeric]()
             {
-                const FString Value=Numeric?FString::Printf(TEXT("%.0f"),Num(LootDraft,Key)):Str(LootDraft,Key,FString(Key)==TEXT("name_mode")?TEXT("prefix"):TEXT(""));
+                const FString Value=Numeric?FString::Printf(TEXT("%.0f"),Num(LootDraft,Key)):Str(LootDraft,Key,FString(Key)==TEXT("name_mode")?TEXT("prefix"):FString(Key)==TEXT("conditions_mode")?TEXT("all"):TEXT(""));
                 for(const auto& O:Options)if(O.Key==Value)return FText::FromString(O.Value);
                 return FText::FromString(Value.IsEmpty()?TEXT("Choose"):Value);
             })]
@@ -287,7 +287,7 @@ void LootRange(const FString& Field,const FString& Caption,double Maximum)
     for(const FString Prefix:{TEXT("min_"),TEXT("max_")})
     {
         const FString Key=Prefix+Field;
-        Row->AddSlot().FillWidth(1).Padding(0,0,8,0)[SNew(SSpinBox<double>).Style(&LootSpinStyle).MinValue(0).MaxValue(Maximum)
+        Row->AddSlot().FillWidth(1).Padding(0,0,8,0)[SNew(SACEPluginSpinBox<double>).Style(&LootSpinStyle).MinValue(0).MaxValue(Maximum)
             .Font(FACEPluginStyle::NativeFont("Regular",16)).Value(Num(LootDraft,*Key))
             .OnValueChanged_Lambda([this,Key](double V){LootDraft->SetNumberField(Key,V);})];
     }
@@ -357,7 +357,7 @@ void LootDetails()
         LootRange(TEXT("burden"),TEXT("Item / stack burden"),MAX_int32);
         LootRange(TEXT("rating"),TEXT("Damage rating (requires appraisal)"),10000);
         Add(Text(TEXT("Keep up to, including equipped items (0 = unlimited)"),15,Muted));
-        Add(SNew(SSpinBox<double>).Style(&LootSpinStyle).MinValue(0).MaxValue(double(MAX_uint32)).Delta(1).Value(Num(LootDraft,TEXT("keep_up_to")))
+        Add(SNew(SACEPluginSpinBox<double>).Style(&LootSpinStyle).MinValue(0).MaxValue(double(MAX_uint32)).Delta(1).Value(Num(LootDraft,TEXT("keep_up_to")))
             .OnValueChanged_Lambda([this](double V){LootDraft->SetNumberField(TEXT("keep_up_to"),V);}));
         Add(SNew(SCheckBox).Style(&FACEPluginStyle::Current()->Check).IsChecked(Bool(LootDraft,TEXT("count_by_name"))?ECheckBoxState::Checked:ECheckBoxState::Unchecked)
             .OnCheckStateChanged_Lambda([this](ECheckBoxState S){LootDraft->SetBoolField(TEXT("count_by_name"),S==ECheckBoxState::Checked);})
@@ -380,11 +380,10 @@ void MatchSelectedLootItem()
 void LootNotificationSettings()
 {
     Add(Toggle(TEXT("loot_notify_pickup"),TEXT("Announce looted rule matches"),TEXT("Print the item, amount and matching rule in local chat after UCM confirms the pickup."),true));
-    Add(Toggle(TEXT("loot_notify_match"),TEXT("Announce item ID matches"),TEXT("Print matching loot rules when an item is selected or successfully assessed, even while UCM is stopped. Turn off to silence these messages without changing looting or pickup announcements."),true));
+    Add(Toggle(TEXT("loot_notify_match"),TEXT("Announce item ID matches"),TEXT("Print matching loot rules when an item is selected or successfully assessed, even while UCM is stopped. Automatic inventory and salvage scans stay silent. Turn off to silence these messages without changing looting or pickup announcements."),true));
 }
 void LootSettings()
 {
-    Add(Toggle(TEXT("looting"),TEXT("Loot corpses"),TEXT("Uses normal corpse permissions and inventory transfers.")));
     LootNotificationSettings();
     const FString Original=Str(P(),TEXT("utl_source"));
     if(!Original.IsEmpty())Add(Button(TEXT("View / edit original Classic UTL copy"),[this,Original](){PreviewLegacy(Original);if(LegacyDocument){LegacyName=TEXT("Loot_edited");LegacyRule.Reset();Page=TEXT("Legacy loot");Rebuild();}}));
@@ -404,7 +403,7 @@ void LootSettings()
 void LootProfileFiles()
 {
     Heading(TEXT("Save / load loot rules"),TEXT("Reuse rules between hunts without changing buffs, combat or routes. Loading stops UCM; press Start when ready. Saved files are in Saved/ClientPlugins/Profiles/Loot. Edits save to the selected shared file."));
-    Add(SNew(SEditableTextBox).Style(&LootEditStyle).Font(FACEPluginStyle::NativeFont("Regular",16)).HintText(FText::FromString(TEXT("Profile name, e.g. Copper_W7")))
+    Add(SNew(SACEPluginEditableTextBox).Style(&LootEditStyle).Font(FACEPluginStyle::NativeFont("Regular",16)).HintText(FText::FromString(TEXT("Profile name, e.g. Copper_W7")))
         .Text(FText::FromString(LootProfileName)).OnTextChanged_Lambda([this](const FText& V){LootProfileName=V.ToString();}));
     Add(Button(TEXT("Save loot profile"),[this](){if(Host->SaveLootProfile(LootProfileName))Rebuild();}));
     TArray<FString> Files=Host->UCMSectionProfiles(TEXT("Loot"));
@@ -416,7 +415,8 @@ void LootProfileFiles()
 void LootConditions()
 {
     const auto& Calculated=ACEUCMLootPresentation::Calculated();
-    Heading(TEXT("Requirements"),TEXT("Every requirement below must match (AND)."));
+    Heading(TEXT("Requirements"),TEXT("Choose how to combine requirements. Basic item filters above always apply."));
+    LootChoice(TEXT("conditions_mode"),TEXT("Combine requirements"),{{TEXT("all"),TEXT("AND - all requirements")},{TEXT("any"),TEXT("OR - any requirement")}});
     const TArray<TSharedPtr<FJsonValue>>* Stored=nullptr;TArray<TSharedPtr<FJsonValue>> Conditions;
     if(LootDraft->TryGetArrayField(TEXT("conditions"),Stored))Conditions=*Stored;
     auto List=SNew(SVerticalBox);
@@ -431,7 +431,7 @@ void LootConditions()
     if(Conditions.IsEmpty())List->AddSlot().AutoHeight()[Text(TEXT("No requirements. Add one below, or set basic item filters."),14,Muted)];
     Add(SNew(SBox).MaxDesiredHeight(90)[SNew(SScrollBox)+SScrollBox::Slot()[List]]);
     auto Tools=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4,4));
-    Tools->AddSlot()[LootTool(TEXT("New"),[this](){if(!CanLeaveLootRequirement())return;ConditionDraft=MakeShared<FJsonObject>();ConditionDraft->SetStringField(TEXT("field"),TEXT("int"));ConditionDraft->SetStringField(TEXT("op"),TEXT("ge"));ConditionDraft->SetNumberField(TEXT("key"),19);ConditionIndex=INDEX_NONE;Rebuild();})];
+    Tools->AddSlot()[LootTool(TEXT("New requirement"),[this](){if(!CanLeaveLootRequirement())return;ConditionDraft=MakeShared<FJsonObject>();ConditionDraft->SetStringField(TEXT("field"),TEXT("int"));ConditionDraft->SetStringField(TEXT("op"),TEXT("ge"));ConditionDraft->SetNumberField(TEXT("key"),19);ConditionIndex=INDEX_NONE;Rebuild();})];
     for(const auto& SkillProperty:TArray<TPair<int32,FString>>{{218103840,TEXT("Weapon skill")},{159,TEXT("Wield requirement skill")}})
         Tools->AddSlot()[LootTool(SkillProperty.Value,[this,Key=SkillProperty.Key]()
         {
@@ -440,6 +440,13 @@ void LootConditions()
             ConditionDraft->SetStringField(TEXT("op"),TEXT("eq"));ConditionDraft->SetNumberField(TEXT("key"),Key);
             ConditionDraft->SetNumberField(TEXT("value"),44);ConditionIndex=INDEX_NONE;Rebuild();
         })];
+    Tools->AddSlot()[LootTool(TEXT("Weapon type"),[this]()
+    {
+        if(!CanLeaveLootRequirement())return;ConditionDraft=MakeShared<FJsonObject>();
+        ConditionDraft->SetStringField(TEXT("field"),TEXT("int"));ConditionDraft->SetStringField(TEXT("op"),TEXT("in"));
+        ConditionDraft->SetNumberField(TEXT("key"),353);ConditionDraft->SetArrayField(TEXT("values"),{MakeShared<FJsonValueNumber>(2)});
+        ConditionIndex=INDEX_NONE;Rebuild();
+    })];
     Tools->AddSlot()[SNew(SBox).IsEnabled(Conditions.IsValidIndex(ConditionIndex))[LootTool(TEXT("Clone"),[this,Conditions](){if(!Conditions.IsValidIndex(ConditionIndex))return;if(!CanLeaveLootRequirement())return;ConditionDraft=ACEUCMLootPresentation::Clone(Conditions[ConditionIndex]->AsObject());ConditionIndex=INDEX_NONE;Rebuild();})]];
     Tools->AddSlot()[SNew(SBox).IsEnabled(Conditions.IsValidIndex(ConditionIndex))[LootTool(TEXT("Delete"),[this,Conditions]()mutable{if(!CanLeaveLootRequirement())return;ConditionDraft.Reset();Conditions.RemoveAt(ConditionIndex);LootDraft->SetArrayField(TEXT("conditions"),Conditions);ConditionIndex=INDEX_NONE;Rebuild();})]];
     for(int Direction:{-1,1})Tools->AddSlot()[SNew(SBox).IsEnabled(Conditions.IsValidIndex(ConditionIndex)&&Conditions.IsValidIndex(ConditionIndex+Direction))
@@ -459,13 +466,15 @@ void LootConditions()
             ConditionDraft=MakeShared<FJsonObject>();ConditionDraft->SetStringField(TEXT("field"),Field);ConditionDraft->SetStringField(TEXT("op"),TEXT("ge"));
             ConditionDraft->SetNumberField(TEXT("key"),Field==TEXT("string")?1:Field==TEXT("legacy")?1002:19);
             ConditionDraft->SetNumberField(TEXT("value"),Field==TEXT("spells")?1:0);
+            if(Field==TEXT("string")){ConditionDraft->SetStringField(TEXT("match_mode"),TEXT("contains"));ConditionDraft->SetBoolField(TEXT("ignore_case"),true);}
             if(Field==TEXT("legacy"))ConditionDraft->SetArrayField(TEXT("args"),{MakeShared<FJsonValueNumber>(1)});Rebuild();
         })];
     }
-    Add(SNew(SACEPluginComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo).ButtonContent()[Text(CurrentType,15)].MenuContent()[TypeMenu]);
+    Add(SNew(SACEPluginComboButton).Tag(TEXT("UCMLootType")).ComboButtonStyle(&FACEPluginStyle::Current()->Combo).ButtonContent()[Text(CurrentType,15)].MenuContent()[TypeMenu]);
     const FString Field=Str(ConditionDraft,TEXT("field"));
     const int32 PropertyKey=int32(Num(ConditionDraft,TEXT("key")));
     const bool WeaponSkill=ACEUCMLootPresentation::IsWeaponSkillProperty(Field,PropertyKey);
+    const FString ValueKind=ACEUCMLootPresentation::ValueKind(Field,PropertyKey);
     if(Field==TEXT("legacy"))
     {
         const int Key=int(Num(ConditionDraft,TEXT("key")));const auto* Definition=Calculated.Find(Key);
@@ -482,8 +491,21 @@ void LootConditions()
                 {auto Values=ConditionDraft->GetArrayField(TEXT("args"));while(Values.Num()<=Index)Values.Add(MakeShared<FJsonValueNumber>(0));Values[Index]=MakeShared<FJsonValueNumber>(V);ConditionDraft->SetArrayField(TEXT("args"),Values);Rebuild();}));
                 continue;
             }
-            Add(SNew(SSpinBox<double>).Style(&LootSpinStyle).MaxFractionalDigits(12).MinValue(TOptional<double>()).MaxValue(TOptional<double>()).MinSliderValue(TOptional<double>()).MaxSliderValue(TOptional<double>()).Value(Args.IsValidIndex(Index)?Args[Index]->AsNumber():0)
+            Add(SNew(SACEPluginSpinBox<double>).Style(&LootSpinStyle).MaxFractionalDigits(12).MinValue(TOptional<double>()).MaxValue(TOptional<double>()).MinSliderValue(TOptional<double>()).MaxSliderValue(TOptional<double>()).Value(Args.IsValidIndex(Index)?Args[Index]->AsNumber():0)
                 .OnValueChanged_Lambda([this,Index](double V){auto Values=ConditionDraft->GetArrayField(TEXT("args"));while(Values.Num()<=Index)Values.Add(MakeShared<FJsonValueNumber>(0));Values[Index]=MakeShared<FJsonValueNumber>(V);ConditionDraft->SetArrayField(TEXT("args"),Values);}));
+        }
+        if(Key==15)
+        {
+            Add(Text(TEXT("Armor palette group"),14,Muted));auto Groups=SNew(SVerticalBox);
+            TArray<FString> Names;ACEUCMLootPresentation::ColorGroups().GetKeys(Names);Names.Sort();
+            for(const auto& Name:Names)Groups->AddSlot().AutoHeight()[MenuButton(Name,[this,Name]()
+            {
+                ConditionDraft->SetStringField(TEXT("group"),Name);TArray<TSharedPtr<FJsonValue>> Slots;
+                for(int32 Slot:ACEUCMLootPresentation::ColorGroups()[Name])Slots.Add(MakeShared<FJsonValueNumber>(Slot));
+                ConditionDraft->SetArrayField(TEXT("slots"),Slots);FSlateApplication::Get().DismissAllMenus();Rebuild();
+            })];
+            Add(SNew(SACEPluginComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo).ButtonContent()[Text(Str(ConditionDraft,TEXT("group"),TEXT("Choose armor group")),15)]
+                .MenuContent()[SNew(SBox).MaxDesiredHeight(320)[SNew(SScrollBox)+SScrollBox::Slot()[Groups]]]);
         }
     }
     else if(Field!=TEXT("spells"))
@@ -498,21 +520,38 @@ void LootConditions()
     }
     if(Field==TEXT("string")||Field==TEXT("spells"))
     {
+        if(Field==TEXT("string"))
+        {
+            Add(Text(TEXT("Text comparison"),14,Muted));auto Modes=SNew(SVerticalBox);
+            const TArray<TPair<FString,FString>> Choices={{TEXT("contains"),TEXT("Contains text")},{TEXT("exact"),TEXT("Exact text")},{TEXT("prefix"),TEXT("Starts with text")},
+                {TEXT("any"),TEXT("OR - any text separated by |")},{TEXT("all"),TEXT("AND - all text separated by |")},{TEXT("regex"),TEXT("Regular expression (VT)")}};
+            FString Current;
+            for(const auto& Choice:Choices)
+            {
+                if(Str(ConditionDraft,TEXT("match_mode"),TEXT("regex"))==Choice.Key)Current=Choice.Value;
+                Modes->AddSlot().AutoHeight()[MenuButton(Choice.Value,[this,Choice](){ConditionDraft->SetStringField(TEXT("match_mode"),Choice.Key);FSlateApplication::Get().DismissAllMenus();Rebuild();})];
+            }
+            Add(SNew(SACEPluginComboButton).Tag(TEXT("UCMLootTextMode")).ComboButtonStyle(&FACEPluginStyle::Current()->Combo).ButtonContent()[Text(Current,15)].MenuContent()[Modes]);
+            Add(SNew(SCheckBox).Tag(TEXT("UCMLootIgnoreCase")).Style(&FACEPluginStyle::Current()->Check)
+                .IsChecked(Bool(ConditionDraft,TEXT("ignore_case"),Str(ConditionDraft,TEXT("match_mode"),TEXT("regex"))!=TEXT("regex"))?ECheckBoxState::Checked:ECheckBoxState::Unchecked)
+                .OnCheckStateChanged_Lambda([this](ECheckBoxState State){ConditionDraft->SetBoolField(TEXT("ignore_case"),State==ECheckBoxState::Checked);})[Text(TEXT("Ignore letter case"),14)]);
+            Add(Text(TEXT("Example: sword|unarmed with OR matches either word. Weapon classifications use Integer property: WeaponMasteryCategory (353), not a string property."),13,Muted));
+        }
         Add(Text(TEXT("Match text / alternatives"),15));
-        Add(SNew(SEditableTextBox).Style(&LootEditStyle).Text(FText::FromString(Str(ConditionDraft,TEXT("pattern")))).OnTextChanged_Lambda([this](const FText& V){ConditionDraft->SetStringField(TEXT("pattern"),V.ToString());}));
+        Add(SNew(SACEPluginEditableTextBox).Tag(TEXT("UCMLootPattern")).Style(&LootEditStyle).Text(FText::FromString(Str(ConditionDraft,TEXT("pattern")))).OnTextChanged_Lambda([this](const FText& V){ConditionDraft->SetStringField(TEXT("pattern"),V.ToString());}));
         if(Field==TEXT("spells"))
         {
             Add(Text(TEXT("Exclude matching spell names (blank = none)"),15));
-            Add(SNew(SEditableTextBox).Style(&LootEditStyle).Text(FText::FromString(Str(ConditionDraft,TEXT("exclude")))).OnTextChanged_Lambda([this](const FText& V){ConditionDraft->SetStringField(TEXT("exclude"),V.ToString());}));
+            Add(SNew(SACEPluginEditableTextBox).Style(&LootEditStyle).Text(FText::FromString(Str(ConditionDraft,TEXT("exclude")))).OnTextChanged_Lambda([this](const FText& V){ConditionDraft->SetStringField(TEXT("exclude"),V.ToString());}));
             Add(Text(TEXT("Minimum matching spells"),15));
-            Add(SNew(SSpinBox<int32>).Style(&LootSpinStyle).MinValue(0).MaxValue(1024).Value(int(Num(ConditionDraft,TEXT("value"),1))).OnValueChanged_Lambda([this](int V){ConditionDraft->SetNumberField(TEXT("value"),V);}));
+            Add(SNew(SACEPluginSpinBox<int32>).Style(&LootSpinStyle).MinValue(0).MaxValue(1024).Value(int(Num(ConditionDraft,TEXT("value"),1))).OnValueChanged_Lambda([this](int V){ConditionDraft->SetNumberField(TEXT("value"),V);}));
             if(!ConditionDraft->HasField(TEXT("value")))ConditionDraft->SetNumberField(TEXT("value"),1);
         }
     }
     else if(Field!=TEXT("legacy"))
     {
         Add(Text(TEXT("Comparison"),14,Muted));
-        const TArray<TPair<FString,FString>> Comparisons={{TEXT("ge"),TEXT(">= At least")},{TEXT("le"),TEXT("<= At most")},{TEXT("eq"),TEXT("= Equal to")},{TEXT("ne"),TEXT("!= Not equal to")},{TEXT("bits"),TEXT("Has any matching flag")}};
+        const TArray<TPair<FString,FString>> Comparisons={{TEXT("ge"),TEXT(">= At least")},{TEXT("le"),TEXT("<= At most")},{TEXT("eq"),TEXT("= Equal to")},{TEXT("ne"),TEXT("!= Not equal to")},{TEXT("bits"),TEXT("Has any matching flag")},{TEXT("in"),TEXT("OR - any of these values")}};
         auto Ops=SNew(SVerticalBox);FString CurrentOp;
         for(const auto& Op:Comparisons)
         {
@@ -521,22 +560,44 @@ void LootConditions()
         }
         Add(SNew(SACEPluginComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo).ButtonContent()[Text(CurrentOp,15)].MenuContent()[Ops]);
         const double Value=Num(ConditionDraft,TEXT("value"));
-        if(WeaponSkill&&Value>=0&&Value<=MAX_int32&&Value==FMath::FloorToDouble(Value))
+        if(Str(ConditionDraft,TEXT("op"))==TEXT("in"))
         {
-            Add(Text(TEXT("Skill name / ID (custom server IDs are accepted)"),14,Muted));
-            Add(LootPropertyPicker(TEXT("weapon_skill"),int32(Value),[this](int32 V){ConditionDraft->SetNumberField(TEXT("value"),V);Rebuild();}));
+            if(!ConditionDraft->HasField(TEXT("values")))ConditionDraft->SetArrayField(TEXT("values"),{MakeShared<FJsonValueNumber>(Value)});
+            if(!ValueKind.IsEmpty())for(const auto& Entry:ACEUCMLootPresentation::Properties(ValueKind))
+            {
+                const bool Selected=ConditionDraft->GetArrayField(TEXT("values")).ContainsByPredicate([&](const auto& V){return V->AsNumber()==Entry.Id;});
+                Add(SNew(SCheckBox).Tag(FName(*FString::Printf(TEXT("UCMLootValue.%d"),Entry.Id))).Style(&FACEPluginStyle::Current()->Check).IsChecked(Selected?ECheckBoxState::Checked:ECheckBoxState::Unchecked)
+                    .OnCheckStateChanged_Lambda([this,Id=Entry.Id](ECheckBoxState State){auto Values=ConditionDraft->GetArrayField(TEXT("values"));Values.RemoveAll([Id](const auto& V){return V->AsNumber()==Id;});if(State==ECheckBoxState::Checked)Values.Add(MakeShared<FJsonValueNumber>(Id));ConditionDraft->SetArrayField(TEXT("values"),Values);ConditionDraft->RemoveField(TEXT("invalid_values"));Rebuild();})[Text(Entry.Name,14)]);
+            }
+            FString Values;for(const auto& V:ConditionDraft->GetArrayField(TEXT("values"))){if(!Values.IsEmpty())Values+=TEXT("|");Values+=FString::Printf(TEXT("%.15g"),V->AsNumber());}
+            if(ConditionDraft->HasField(TEXT("invalid_values")))Values=Str(ConditionDraft,TEXT("invalid_values"));
+            Add(Text(TEXT("Values / custom IDs separated by |"),14,Muted));
+            Add(SNew(SACEPluginEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Text(FText::FromString(Values)).OnTextChanged_Lambda([this](const FText& Text)
+            {
+                TArray<FString> Parts;Text.ToString().ParseIntoArray(Parts,TEXT("|"),false);TArray<TSharedPtr<FJsonValue>> Values;
+                for(FString Part:Parts){Part.TrimStartAndEndInline();double V=0;if(!LexTryParseString(V,*Part)||!FMath::IsFinite(V)){ConditionDraft->SetStringField(TEXT("invalid_values"),Text.ToString());return;}Values.Add(MakeShared<FJsonValueNumber>(V));}
+                ConditionDraft->RemoveField(TEXT("invalid_values"));ConditionDraft->SetArrayField(TEXT("values"),Values);
+            }));
+        }
+        else if(!ValueKind.IsEmpty()&&Value>=0&&Value<=MAX_int32&&Value==FMath::FloorToDouble(Value))
+        {
+            Add(Text(ValueKind==TEXT("weapon_type")?TEXT("Weapon type / ID (custom server IDs are accepted)"):TEXT("Skill name / ID (custom server IDs are accepted)"),14,Muted));
+            Add(LootPropertyPicker(ValueKind,int32(Value),[this](int32 V){ConditionDraft->SetNumberField(TEXT("value"),V);Rebuild();}));
         }
         else
         {
             Add(Text(TEXT("Value"),14,Muted));
-            Add(SNew(SSpinBox<double>).Style(&LootSpinStyle).MaxFractionalDigits(12).MinValue(TOptional<double>()).MaxValue(TOptional<double>()).MinSliderValue(TOptional<double>()).MaxSliderValue(TOptional<double>()).Value(Value).OnValueChanged_Lambda([this](double V){ConditionDraft->SetNumberField(TEXT("value"),V);}));
+            Add(SNew(SACEPluginSpinBox<double>).Style(&LootSpinStyle).MaxFractionalDigits(12).MinValue(TOptional<double>()).MaxValue(TOptional<double>()).MinSliderValue(TOptional<double>()).MaxSliderValue(TOptional<double>()).Value(Value).OnValueChanged_Lambda([this](double V){ConditionDraft->SetNumberField(TEXT("value"),V);}));
         }
         Add(Button(Bool(ConditionDraft,TEXT("missing_zero"))?TEXT("Missing value: use 0 (VT)"):TEXT("Missing value: does not match"),[this](){ConditionDraft->SetBoolField(TEXT("missing_zero"),!Bool(ConditionDraft,TEXT("missing_zero")));Rebuild();}));
     }
     auto RequirementActions=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(6,2));
     RequirementActions->AddSlot()[LootTool(TEXT("Apply requirement"),[this,Conditions]()mutable
     {
-        if(!ACEVTProfile::IsSupportedPattern(Str(ConditionDraft,TEXT("pattern")))||!ACEVTProfile::IsSupportedPattern(Str(ConditionDraft,TEXT("exclude")))){Host->Notice=TEXT("Invalid or unsupported regular expression (maximum 2,048 characters and 32 capture groups).");return;}
+        if(!ACEUCMLootPresentation::ValidTextMatch(ConditionDraft)){Host->Notice=TEXT("Invalid text match or regular expression (maximum 2,048 characters and 32 capture groups).");return;}
+        if(ConditionDraft->HasField(TEXT("invalid_values"))||(Str(ConditionDraft,TEXT("op"))==TEXT("in")&&ConditionDraft->GetArrayField(TEXT("values")).IsEmpty())){Host->Notice=TEXT("Enter at least one valid value, separated by |.");return;}
+        const int Key=int(Num(ConditionDraft,TEXT("key")));
+        if(Str(ConditionDraft,TEXT("field"))==TEXT("legacy")&&Key>=14&&Key<=16&&!ACEUCMLootPresentation::ValidColorMatch(ConditionDraft)){Host->Notice=TEXT("Use RGB values 0-255, hue tolerance 0-360, saturation/value tolerance 0-2, and select an armor group or palette slot.");return;}
         if(ConditionIndex==INDEX_NONE){if(Conditions.Num()>=ACEVTProfile::MaxLootConditions){Host->Notice=FString::Printf(TEXT("Maximum %d conditions per rule."),ACEVTProfile::MaxLootConditions);return;}ConditionIndex=Conditions.Num();Conditions.Add(MakeShared<FJsonValueObject>(ConditionDraft));}
         else if(Conditions.IsValidIndex(ConditionIndex))Conditions[ConditionIndex]=MakeShared<FJsonValueObject>(ConditionDraft);
         LootDraft->SetArrayField(TEXT("conditions"),Conditions);ConditionDraft.Reset();Rebuild();
@@ -571,7 +632,7 @@ void SalvagePanel()
     for(int32 Index=0;Index<Ranges.Num();++Index)
     {
         auto Row=SNew(SHorizontalBox);auto Range=Ranges[Index]->AsObject();
-        for(const FString Key:{TEXT("min"),TEXT("max")})Row->AddSlot().FillWidth(1).Padding(0,0,8,0)[SNew(SSpinBox<double>).Style(&LootSpinStyle).Font(FACEPluginStyle::NativeFont("Regular",16)).MinValue(0).MaxValue(1000).Value(Num(Range,*Key))
+        for(const FString Key:{TEXT("min"),TEXT("max")})Row->AddSlot().FillWidth(1).Padding(0,0,8,0)[SNew(SACEPluginSpinBox<double>).Style(&LootSpinStyle).Font(FACEPluginStyle::NativeFont("Regular",16)).MinValue(0).MaxValue(1000).Value(Num(Range,*Key))
             .OnValueChanged_Lambda([Range,Key](double V){Range->SetNumberField(Key,V);})];
         Row->AddSlot().AutoWidth()[Button(TEXT("Remove"),[this,Index](){auto R=SalvageDraft->GetArrayField(TEXT("ranges"));R.RemoveAt(Index);SalvageDraft->SetArrayField(TEXT("ranges"),R);Rebuild();})];Add(Row);
     }
@@ -579,7 +640,7 @@ void SalvagePanel()
     if(SalvageMaterial)
     {
         Add(Text(TEXT("Minimum combined value for a full bag (pyreals; 0 = disabled)"),15,Muted));
-        Add(SNew(SSpinBox<int32>).Style(&LootSpinStyle).Font(FACEPluginStyle::NativeFont("Regular",16)).MinValue(0).MaxValue(MAX_int32).Value(int32(Num(SalvageDraft,TEXT("target"))))
+        Add(SNew(SACEPluginSpinBox<int32>).Style(&LootSpinStyle).Font(FACEPluginStyle::NativeFont("Regular",16)).MinValue(0).MaxValue(MAX_int32).Value(int32(Num(SalvageDraft,TEXT("target"))))
             .OnValueChanged_Lambda([this](int32 V){SalvageDraft->SetNumberField(TEXT("target"),V);}));
     }
     auto Save=[this,Policy](bool Remove)

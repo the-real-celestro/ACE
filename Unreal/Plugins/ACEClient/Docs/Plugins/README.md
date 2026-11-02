@@ -243,6 +243,11 @@ scale. Third-party plugins can supply a PNG icon and a display title through
 [plugin presentation metadata](PublicAPI.md#plugin-title-and-toolbar-icon); an
 extension sigil is used when no valid custom icon is available.
 
+**Options → User Interface Options → Lua Plugin Text Scale** sets plugin text
+from 75% to 200%, independently of the chat font and overall UI scale. Apply saves
+the preference and updates open bundled and third-party Lua panels, including
+labels, buttons, menus and editable fields, without clearing unsaved input.
+
 Waypoint map zoom is saved separately for indoor and outdoor views, both in the
 pinned minimap and the full map window. Closing a map or relogging restores its
 zoom along with saved plugin positions, sizes, visibility, opacity and pin preferences.
@@ -281,7 +286,7 @@ Reusable files live under `Saved/ClientPlugins/Profiles`:
 - `Character`: combat equipment, targeting defaults, buffs, summons and recovery.
 - `Routes`: waypoints, following, looping and route movement settings.
 - `Loot`: loot rules, salvage groups and looting settings.
-- `Monsters`: per-monster rules and the imported monster catalog.
+- **Mobs**: per-mob rules and the imported mob catalog (stored under `Monsters` for compatibility).
 - `Metas`: state programs, imported metas and dependency references.
 - `Vendors`: vendor supply lists.
 
@@ -302,7 +307,7 @@ leaves the active route and existing file unchanged.
 Use **Add waypoint at my position**, walk to the next turn, and repeat. The point
 list is paged; adding a point opens its page. **Special steps** holds portal/use,
 jump, pause and recall actions; **Route behavior** holds loop, door and follow
-settings. Enable Route Navigation and press Start when ready.
+settings. Enable Route Navigation in Overview or UCM Micro and press Start when ready.
 
 **Import** has separate **Import vTank Loot Profile (*.utl)** and
 **Import vTank Route (*.nav)** buttons, plus Meta and Character imports.
@@ -315,11 +320,45 @@ Editing a dependency or exported route updates subsequent use of that profile.
 Embedded routes are refreshed from their named files when the meta is loaded
 or UCM starts. Stop/Start retains meta progress when the configuration is unchanged.
 
-Protections and Banes are in **Buffs**, saved in Character. **Monsters** offers
-name search and collapsible panels. New rules inherit the Character profile's
-**Combat** defaults for Priority and Attack Range. Both use whole-number sliders;
-uncheck **use Combat default** to override a monster. Explicit zero priority is
-valid. A global attack range of zero uses the weapon-mode attack range.
+Protections and Banes are in **Buffs**, saved in Character. **Mobs** has a
+compact list with an always-visible Default row, name search, **Add selected
+mob**, and an **Add** field for name prefixes. The profile selector shows the
+selected file's name without a category prefix; the built-in profile is **Default**.
+Custom profile names are preserved. Click a switch to save it
+immediately. **A** controls ordinary weapon/bolt/arc attacks, **R** rings, and
+**S** streaks. All debuff and curse columns are available directly, including
+Imperil, Vulnerability, Yield, Fester, Broadside, Gravity Well and the five Void
+switches. Hover a heading or switch for its full name and purpose; switch help
+also shows on/off and inherited state. The Name column stays visible while
+scrolling horizontally through Mode, Damage, Pet and Details; the scrollbar
+disappears when the columns fit. Long names show their full text on hover;
+longer profiles show 25 mobs per page.
+
+New rows inherit the live Default until a field is changed. **Details** edits
+the complete per-mob attack profile: mode, attack families, all debuffs, damage
+type, pet type, weapon/offhand, secondary vulnerability, priority, range and
+native exact-name/prefix matching. Its controls share the table's values and
+save immediately. Restore individual inherited switches with **Default**, or
+reset the row with **Use default settings**. Existing/imported rows retain their
+independent choices. Priority and range fall back to the Character profile's
+**Combat** defaults; explicit zero priority is valid. Range zero uses the
+weapon-mode attack range. Imported matching expressions are preserved.
+
+The chart is the quick editor; Details exposes the same saved rule with full
+labels and additional settings. Combat contains shared equipment defaults,
+power, spell selection, ranges and spell timing. Existing Character fallbacks
+and imported overrides are preserved.
+
+Activity switches live in **Overview**, with quick access in **UCM Micro**;
+the configuration tabs do not repeat them. Editing the chart never silently
+enables a paused activity. For essence summoning without automatic attacks,
+enable **Summoning**, add an eligible essence in **Combat / Equipment Pool**,
+and set Default Mode to **No attacks** with Pet **Auto** in the chart. Leave
+Combat enabled to allow attack overrides for specific monsters, or pause Combat
+in Overview / Micro to suppress all automatic attacks.
+Disabling all attack families also leaves monsters eligible for pets. **Ignore**,
+negative priority, and Pet **None** exclude them from summoning. Charges,
+cooldowns, requirements, visibility and existing-pet checks still apply.
 
 Selecting a profile manually stops the run. Start reloads shared files from disk;
 conflicting stale edits are rejected. Older setups migrate automatically while
@@ -362,7 +401,7 @@ hide with the desktop interface (Alt+Z by default) and are removed on logout.
 Disabled plugins are removed from the bar. In VR, use More → Manage Plugins.
 
 UCM is **Unattended Combat Manager**. The 0.7 interface has Overview, Buffs, Buff others,
-Combat, Recovery, Route, Loot, Vendors, Monsters, Metas, Import and Log pages. Desktop plugin
+Combat, Recovery, Route, Loot, Vendors, Mobs, Metas, Import and Log pages. Desktop plugin
 windows can be resized using the lower-right grip; position and size are saved.
 In VR, More → Manage Plugins opens UCM directly, with a separate management button.
 
@@ -396,17 +435,20 @@ the option off or stop UCM to restore the view. Logout also restores it. This
 does not disable the engine or apply in VR; simulation and UI still use resources.
 
 In **Combat**, select **Automatic attack spell** or a specific learned direct
-attack, including Void bolts, streaks and rings. The **Void curses** controls
-enable Corruption, Destructive Curse, Corrosion, Weakening Curse, and Festering
-Curse. UCM uses eligible learned tiers and waits for effect confirmation before
-moving on to direct attacks. Per-monster rules can override these settings.
+attack, including Void bolts, streaks and rings. In the **Mobs** table,
+use Cp, DC, Cs, W and FC for Corruption, Destructive Curse, Corrosion, Weakening
+Curse and Festering Curse. UCM uses eligible learned tiers and waits for effect
+confirmation before moving on to direct attacks. Configure the Default row and
+override individual monsters as needed. All attack and debuff columns are always
+available, with hover help for each abbreviation. Monster names stay fixed while
+scrolling; the horizontal scrollbar only appears when the columns do not fit.
 
 ### UCM Micro, combat and route recovery
 
 **UCM Micro** is a compact companion window on the plugin bar and in plugin
 management. A full-width **Start UCM / Stop UCM** button controls the run.
 Its checkboxes control the current activities:
-buffing, combat, looting, navigation, vital recovery, buff requests, vendor
+buffing, combat, summoning, looting, navigation, vital recovery, buff requests, vendor
 restocking, metas, and peace while idle. Closing Micro does not stop UCM.
 UCM still needs its normal permissions; Micro grants no additional capabilities.
 
@@ -434,10 +476,10 @@ or controller button. It is unbound initially to avoid replacing an existing
 control. The binding is saved in local input settings. It is not exported to
 retail keymaps, which have no equivalent action.
 
-Combat automatically prefers the highest usable trained combat skill, then
-ranks eligible equipment, ammunition and spells for that skill against the
-target's resistances. If that loadout is unavailable, it can use the next usable
-skill. Explicit imported monster-rule weapon/mode overrides are preserved.
+Combat selects eligible loadouts using VT's slayer, elemental rend/cleave,
+confirmed vulnerability and monster-element priorities. Usable skill and estimated
+damage break otherwise equivalent choices. Explicit imported monster-rule
+weapon/mode overrides are preserved, subject to a requested damage element.
 Attack height uses the target's DAT selection origin, server scale and elevation.
 Advanced file profiles may retain `manual_combat` or `manual_attack_height`
 overrides; the normal interface does not require either choice.
@@ -530,14 +572,22 @@ removed; if no matching loadout is available, UCM reports the failure instead
 of attacking with the wrong element. Door navigation uses the server's current
 collision state, including doors that automatically close after being used.
 
-Known attack spells and equipment are scored against resistances **when the
-server sends them**. This is a heuristic, not an exact DPS simulation: it does not
-model every proc, imbue, critical, armor part or projectile trajectory. Many
-servers do not expose base monster resistances. UCM uses neutral values in that
-case; Rules lets the player specify an element, combat mode, ignore flag and
-priority per monster-name prefix. First matching rule wins. It does not bundle or
-copy VT's monster database. Acquisition range, approach distance, attack range,
-power/accuracy and attack height have separate controls.
+When the server supplies monster resistances, those values override the bundled
+VT-derived monster-element preferences. Unknown creatures without either source
+retain neutral values. Matching slayers take priority, followed by weapons with
+armor/critical bonuses against a confirmed vulnerability, elemental rends/cleaves,
+other bonus weapons and base-element matches. This is selection policy, not an
+exact DPS simulation. Raw damage and usable skill break remaining ties.
+
+Wand elements come from their appraisal qualities. The chosen wand, attack spell
+and vulnerability share one element; launcher selection retains its corresponding
+ammunition. Prismatic ammunition inherits the launcher's actual damage type.
+Retail cold is `8`, fire is `16`; old native combat/monster profiles migrate their
+previously displayed Fire/Cold choices once. Loot-rule property IDs and values
+are unchanged. Rules lets players specify an element, combat mode, ignore flag
+and priority per monster-name prefix. First matching rule wins. Acquisition
+range, approach distance, attack range, power/accuracy and attack height have
+separate controls.
 
 ### Navigation, loot and states
 
@@ -622,7 +672,7 @@ Corpse opening uses the same approach and server Use sequence as manual
 interaction. UCM waits for opening, complete contents and transfer confirmation
 before resuming combat or navigation. Navigation priority does not suppress
 nearby looting, and obstructed corpses are skipped until the route reaches them.
-Enable Loot corpses and load or create matching rules; empty rules intentionally
+Enable Looting in Overview / Micro and load or create matching rules; empty rules intentionally
 take nothing.
 
 After a confirmed combat kill, UCM holds ordinary route movement while the
@@ -655,6 +705,9 @@ notification switches, both on by default:
 after UCM confirms the item reached your inventory. **Announce item ID matches**
 reports the first matching rule and its Keep, Skip, Salvage,
 Sell or Read action when you select an item or receive a successful assessment.
+Automatic appraisals of your own inventory, including UCM salvage scans and
+items in side bags, do not produce match messages. Manual selection/inspection
+and confirmed pickup announcements still work.
 The latter also works while UCM is stopped, provided the plugin is enabled.
 Unknown properties wait for a normal assessment; notifications never request
 additional assessments. Repeated assessments of the same item/rule are suppressed;
@@ -774,8 +827,29 @@ IDs, and missing-value policy.
 
 `WieldReqAttribute` can also describe a non-skill requirement. For skill-only
 wield rules, check `WieldReqType`: Skill = 1, Raw Skill = 2, or Training = 8.
-Add the relevant type as another integer requirement if needed. Use separate
-rules for alternatives: every requirement within one rule must match.
+Add the relevant type as another integer requirement if needed. **Combine
+requirements** chooses **AND - all requirements** or **OR - any requirement**.
+Basic name, material, type and value filters always apply. Existing rules retain
+AND unless changed.
+
+**Weapon type** creates a named multi-select requirement for
+`WeaponMasteryCategory (353)`: select **Sword** and **Unarmed** to accept either.
+This is separate from Light/Heavy/Finesse attack skills. Numeric properties also
+offer **OR - any of these values**, with pipe-separated custom IDs.
+
+**Text / name** supports Contains, Exact, Starts with, OR/AND pipe-separated
+literal terms, and **Regular expression (VT)**. For example, `sword|unarmed` in
+OR mode matches either word. **Ignore letter case** is explicit; new literal
+requirements default to ignoring case, while existing/imported VT regexes keep
+their original case sensitivity and syntax. Numeric classifications do not
+become text: use Weapon type for an item's class, or Name/FullDescription to
+match the actual server text. SecondaryName is the server's plural name.
+
+All standard Classic requirement kinds are available, including palette color
+matching by any palette, slot, or one of the 63 default armor groups. Color
+matching samples the DAT palette exactly as VT does; it does not compare lit
+screen pixels. Imported custom armor-group definitions and custom expression
+scripts still need an adapter; unsupported imports remain inactive.
 
 **View / edit original Classic UTL copy** opens the source document separately
 from the active converted rules. The document editor exposes all 31 Classic
@@ -961,6 +1035,10 @@ dynamic load, pcall/xpcall, or metatable APIs are exposed. Lua string pattern
 functions are omitted because their C execution is outside the instruction hook.
 Install plugins from authors you trust; these limits are not an OS process sandbox.
 
+`string.findplain(text, value, start=1)` returns the first literal match's
+one-based byte position, or nil. It never interprets patterns and caps text at
+16,384 bytes and the search value at 8,192 bytes. `start` is clamped to at least 1.
+
 `workavailable()` lets a plugin cooperatively save its cursor and return before
 exhausting the callback's work allowance. It becomes false after 200,000 Lua
 instructions or 5 ms of regex work. Calling it never resets or extends the hard
@@ -1066,8 +1144,8 @@ successful unattended hunt or complete VT replacement.
 
 ## Tell buff requests and route overlay
 
-In **Buff others**, turn on **Accept buff requests**, enable **Buff**, and start
-UCM. The default exact tell keywords are `mage`, `heavy`, `missile`, `light`,
+In **Overview**, turn on **Accept buff requests**, enable **Buffs**, and start
+UCM. Configure roles in **Buff others**. The default exact tell keywords are `mage`, `heavy`, `missile`, `light`,
 `finesse`, `twohanded`, `unarmed`, and `melee`. Edit keywords or add aliases in this tab. Case and surrounding spaces
 are ignored. Public chat and NPC dialogue never start a request. Up to eight
 players can queue; a player cannot reset an active request by repeating a tell.

@@ -518,8 +518,9 @@ void UACEUIGameplayBinder::Initialize(UACEClientSubsystem* InClient, UACEUIEleme
 	RefreshStatusIndicators();
 	if (Client) for (const auto& Message : Client->GetChatHistory())
 	{
+		TGuardValue<uint8> WindowsScope(Client->CurrentChatWindows, Message.ForcedWindows);
+		TGuardValue<TOptional<FLinearColor>> ColorScope(Client->CurrentChatColor, Message.Color);
 		TGuardValue<FString> BoldGuard(Client->ActiveChatBoldText,Message.BoldText);
-        TGuardValue<TOptional<FLinearColor>> ColorGuard(Client->ActiveChatLocalColor,Message.LocalColor);
 		HandleChatMessage(Message.Text, Message.Sender, Message.Type, Message.FilterType);
 	}
 }
@@ -4771,6 +4772,38 @@ bool UACEUIGameplayBinder::IsPointerOverInventoryPanel(FVector2D CanvasLocalPos)
 		&& CanvasLocalPos.X < O.X + Page->Width && CanvasLocalPos.Y < O.Y + Page->Height;
 }
 
+bool UACEUIGameplayBinder::TryBeginWorldInventoryDrag(FVector2D CanvasLocalPos)
+{
+	if (!Canvas || !PlayerController || PlayerController->IsVRActive() || PlayerController->IsMobileActive()
+		|| CombatMode != int32(ACECombatMode::NonCombat) || PendingUseWithSourceGuid
+		|| PlayerController->GetObjectCursorTargeting() || PlayerController->IsInputKeyDown(EKeys::RightMouseButton)
+		|| !PlayerController->bShowMouseCursor || bInvDragPending) return false;
+	FVector2D Pixels, WidgetPosition;
+	USlateBlueprintLibrary::AbsoluteToViewport(PlayerController,
+		Canvas->GetCachedGeometry().LocalToAbsolute(CanvasLocalPos), Pixels, WidgetPosition);
+	const auto* Entity = PlayerController->PickWorldEntityAtScreenPosition(Pixels.X, Pixels.Y);
+	return Entity && BeginWorldItemDrag(Entity->GetACEGuid(), CanvasLocalPos);
+}
+
+bool UACEUIGameplayBinder::BeginWorldItemDrag(int32 Guid, FVector2D CanvasLocalPos)
+{
+	// UIElement_SmartBoxWrapper: peace mode, movable non-creature, not wielded.
+	// Opening a ground pack is still Use; moving it requires an actual drag.
+	FACEWorldObject Item;
+	if (!Client || !Canvas || Client->IsUseBusy() || CombatMode != int32(ACECombatMode::NonCombat)
+		|| !Client->GetWorldObject(Guid, Item) || !Item.IsWorldLootable()) return false;
+	CancelInventoryDrag();
+	ClearChatEntryFocus();
+	InvDragGuid = Guid;
+	InvDragIconDid = Item.IconId;
+	InvDragStartLocal = CanvasLocalPos;
+	bInvDragPending = true;
+	bInvDoubleClickPending = Guid == LastInvClickGuid && FPlatformTime::Seconds() - LastInvClickTime < InventoryDoubleClickSeconds();
+	SelectInventoryGuid(Guid);
+	InvDragAmount = GetSelectedItemAmount(Guid);
+	return true;
+}
+
 bool UACEUIGameplayBinder::TryBeginInventoryDrag(FVector2D CanvasLocalPos)
 {
 	if (!Canvas || !Canvas->GetElementLayer())
@@ -4839,10 +4872,11 @@ bool UACEUIGameplayBinder::TryBeginInventoryDrag(FVector2D CanvasLocalPos)
 	}
 
 	// Retail's external container list supports the same drag as its item list.
-	// Keep the root icon as navigation; installed packs can be opened or removed.
+	// The root is also an ItemList in retail: portable ground packs can be
+	// dragged from it, while fixed chests/corpses retain their navigation click.
 	if (OpenLootContainerGuid != 0)
 	{
-		for (int32 i = 1; i < ExtPackSlots.Num() && i < ExtPackGuids.Num(); ++i)
+		for (int32 i = 0; i < ExtPackSlots.Num() && i < ExtPackGuids.Num(); ++i)
 		{
 			UBorder* Border = ExtPackSlots[i];
 			if (!Border || Border->GetVisibility() == ESlateVisibility::Collapsed
@@ -4850,10 +4884,11 @@ bool UACEUIGameplayBinder::TryBeginInventoryDrag(FVector2D CanvasLocalPos)
 			FACEWorldObject Pack;
 			const int32 Guid = ExtPackGuids[i];
 			if (!Guid || !Client || !Client->GetWorldObject(Guid, Pack)) return false;
+			if (i == 0 && !Pack.IsWorldLootable() && !Pack.ContainerId) return false;
 			InvDragGuid = Guid;
 			InvDragIconDid = Pack.IconId;
 			InvDragSourcePack = OpenLootContainerGuid;
-			InvDragSourceSlot = i - 1 + ExtPackScrollOffset;
+			InvDragSourceSlot = i == 0 ? INDEX_NONE : i - 1 + ExtPackScrollOffset;
 			InvDragPackSlotIndex = INDEX_NONE;
 			InvDragStartLocal = CanvasLocalPos;
 			bInvDragPending = true;
@@ -5488,7 +5523,7 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 			}
             if (HaveSourceBag && SourceBag.ContainerId == Client->GetPlayerGuid() && SourceBag.PlacementPosition >= 0
                 && SourceBag.PlacementPosition < DestPlacement) --DestPlacement;
-            Client->SendPutItemInContainer(Guid, Client->GetPlayerGuid(), FMath::Max(0, DestPlacement));
+            if (PackGuid != Guid) MoveInventoryAmount(Guid, Client->GetPlayerGuid(), FMath::Max(0, DestPlacement), Amount);
 			return true;
 		}
 		if (PackGuid != 0)
@@ -5507,6 +5542,14 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 	int32 DestSlot = INDEX_NONE;
 	if (HitTestInventorySlot(Absolute, DestGuid, DestSlot))
 	{
+		// UIElement_ItemList::PlaceItem rejects containers in the ordinary grid.
+		// Use the backpack button or the separate pack row for portable packs.
+		if (ACEInventoryRules::IsContainer(DraggedItem) || (DraggedItem.ItemType & ACEItemType::Container)
+			|| (DraggedItem.ObjectDescriptionFlags & ACEObjectDescFlag::RequiresPackSlot))
+		{
+			PostInventorySystemMessage(TEXT("Cannot place container in item list."));
+			return true;
+		}
 		// Returning a drag to its source cell cancels it; it cannot arm a double-click.
 		if (DestGuid == Guid)
 		{
@@ -5689,7 +5732,7 @@ bool UACEUIGameplayBinder::DropInventoryInWorld(int32 Guid, int32 Amount, const 
 		}
 	}
 
-	if (Guid == Client->GetPlayerGuid()) return true;
+	if (Guid == Client->GetPlayerGuid() || !Client->IsOwnedInventoryItem(Obj)) return true;
 
 	// Releasing a tracked inventory drag over empty world uses the same
 	// server-authoritative drop/split action as the desktop client.
@@ -6550,7 +6593,7 @@ void UACEUIGameplayBinder::HandleChatMessage(const FString& Text, const FString&
 			FILEWRITE_Append);
 	}
 
-	const FLinearColor Color = Client&&Client->ActiveChatLocalColor.IsSet()?Client->ActiveChatLocalColor.GetValue():ACERetailChat::Color(ChatType);
+	const FLinearColor Color = Client&&Client->CurrentChatColor.IsSet()?Client->CurrentChatColor.GetValue():ACERetailChat::Color(ChatType);
 	// Player-attributed rows become click-to-tell targets (retail <Tell:IIDString>).
 	FString ClickSender;
 	if (!Sender.IsEmpty() && !Sender.Equals(TEXT("You"), ESearchCase::IgnoreCase)
@@ -6569,10 +6612,11 @@ void UACEUIGameplayBinder::HandleChatMessage(const FString& Text, const FString&
 	// own 64-bit type filters. Visibility only controls presentation: closed
 	// windows must retain matching messages for when the player opens them again.
 	const auto* Plugins = Client ? Client->GetGameInstance()->GetSubsystem<UACEPluginSubsystem>() : nullptr;
-	const uint8 PluginHidden = Plugins ? Plugins->FilterPluginChatWindows(Text, Sender, ChatType) : 0;
-	if (!(PluginHidden & 1) && PassesChatFilter(FilterType) && (MainChatTypeFilter & (1ull << (static_cast<uint32>(FilterType) & 63))) != 0)
+	const auto Presentation = Plugins ? Plugins->PresentPluginChat(Text, Sender, ChatType) : FACEPluginChatPresentation();
+	const uint8 PluginHidden = Presentation.Hidden;
+	if (!(PluginHidden & 1) && ((Presentation.Forced&1) || (PassesChatFilter(FilterType) && (MainChatTypeFilter & (1ull << (static_cast<uint32>(FilterType) & 63))) != 0)))
 	{
-		AppendChatLineToLog(0, Line, Color, ClickSender);
+		AppendChatLineToLog(0, Line, Presentation.Colors.Contains(0)?Presentation.Colors[0]:Color, ClickSender);
 	}
 	else if (!bChatStickToBottom)
 	{
@@ -6583,12 +6627,12 @@ void UACEUIGameplayBinder::HandleChatMessage(const FString& Text, const FString&
 		for (int32 W = 1; W <= NumFloatyChats; ++W)
 		{
 			if (PluginHidden & (1u << W)) continue;
-			if (FloatyChatFilters.IsValidIndex(W - 1)
+			if (!(Presentation.Forced&(1u<<W)) && FloatyChatFilters.IsValidIndex(W - 1)
 				&& (FloatyChatFilters[W - 1] & (1ull << (static_cast<uint32>(FilterType) & 63))) == 0)
 			{
 				continue;
 			}
-			AppendChatLineToLog(W, Line, Color, ClickSender);
+			AppendChatLineToLog(W, Line, Presentation.Colors.Contains(W)?Presentation.Colors[W]:Color, ClickSender);
 		}
 	}
 }
@@ -8239,6 +8283,7 @@ void UACEUIGameplayBinder::CastSelectedHotbarSpell()
 
 void UACEUIGameplayBinder::RefreshChatChromeOverlays()
 {
+	RefreshChatEntryLayouts();
 	RefreshChatOpacity();
 	if (!Canvas || !Canvas->WidgetTree || !Manager)
 	{
@@ -8250,7 +8295,8 @@ void UACEUIGameplayBinder::RefreshChatChromeOverlays()
 		// Retail changes this button's explicit maximized/minimized state. Normal
 		// button rollover states have no artwork and otherwise hide the control.
 		Maximize->bUseExplicitState = true;
-		Maximize->DefaultState = bMainChatExpanded ? 0x10000047 : 0x10000048;
+		const auto MainChat = Manager->FindElementByName(TEXT("RootGameplay_FloatyMainChat_Field"));
+		Maximize->DefaultState = MainChat && MainChat->ChatPeekRestore.IsSet() ? 0x10000047 : 0x10000048;
 	}
 	if (!ChatTargetLabel)
 	{

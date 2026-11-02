@@ -2,7 +2,6 @@
         {
             SectionSelector(TEXT("Vendors"));
             Heading(TEXT("Vendor restocking"),TEXT("Open a vendor, add stock below, and set the total quantity to keep in inventory. Saved lists match this server, vendor and item across logins. With UCM running, visiting that vendor buys only the missing quantity. Route Use points can visit vendors automatically."));
-            Add(Toggle(TEXT("vendor_restock"),TEXT("Enable Vendor Restocking"),TEXT("Redeems available trade notes when pyreals are short, splitting stacks as needed. Retained notes and notes in trade are excluded. Stops if funds, space or stock are insufficient.")));
             const TArray<TSharedPtr<FJsonValue>>* Saved=nullptr;
             if(P()->TryGetArrayField(TEXT("vendor_rules"),Saved))for(int32 Index=0;Index<Saved->Num();++Index)
             {
@@ -11,7 +10,7 @@
                 Row->AddSlot().AutoHeight()[Text(Str(Rule,TEXT("vendor_name"))+TEXT(" / ")+Str(Rule,TEXT("server")),14,Muted)];
                 Row->AddSlot().AutoHeight()[SNew(SHorizontalBox)
                     +SHorizontalBox::Slot().FillWidth(1)[Text(TEXT("Keep in inventory"))]
-                    +SHorizontalBox::Slot().AutoWidth()[SNew(SSpinBox<int32>).Style(&FACEPluginStyle::Current()->Spin).MinValue(1).MaxValue(100000).Value(int32(Num(Rule,TEXT("quantity"),1)))
+                    +SHorizontalBox::Slot().AutoWidth()[SNew(SACEPluginSpinBox<int32>).Style(&FACEPluginStyle::Current()->Spin).MinValue(1).MaxValue(100000).Value(int32(Num(Rule,TEXT("quantity"),1)))
                         .OnValueCommitted_Lambda([this,Index](int32 N,ETextCommit::Type){const TArray<TSharedPtr<FJsonValue>>* Rules=nullptr;if(P()->TryGetArrayField(TEXT("vendor_rules"),Rules)&&Rules->IsValidIndex(Index)){(*Rules)[Index]->AsObject()->SetNumberField(TEXT("quantity"),N);Save();}})]
                     +SHorizontalBox::Slot().AutoWidth().Padding(8,0)[Button(TEXT("Remove"),[this,Index](){auto Rules=P()->GetArrayField(TEXT("vendor_rules"));if(Rules.IsValidIndex(Index))Rules.RemoveAt(Index);P()->SetArrayField(TEXT("vendor_rules"),Rules);Save();Rebuild();})]];
                 Add(Tile(Row));

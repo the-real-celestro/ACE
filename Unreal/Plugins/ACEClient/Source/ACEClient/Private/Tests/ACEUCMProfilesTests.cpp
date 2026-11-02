@@ -47,7 +47,8 @@ bool FACEUCMProfileStorageTest::RunTest(const FString&)
     TestTrue(TEXT("Migration writes linked setup"),Save(Root,TEXT("First"),Profile,Links,nullptr,Error));
     FString Backup;FFileHelper::LoadFileToString(Backup,*(Root/TEXT("Profiles/Legacy/ucm/First.json")));
     TSharedPtr<FJsonObject> BackupObject;FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Backup),BackupObject);
-    TestTrue(TEXT("Migration preserves all original data in backup"),BackupObject && FJsonValue::CompareEqual(FJsonValueObject(Original),FJsonValueObject(BackupObject)));
+    TSharedPtr<FJsonObject> OriginalOnDisk;FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Legacy),OriginalOnDisk);
+    TestTrue(TEXT("Migration preserves all original data in backup"),BackupObject && FJsonValue::CompareEqual(FJsonValueObject(OriginalOnDisk),FJsonValueObject(BackupObject)));
     TestEqual(TEXT("All six sections have references"),Links->Values.Num(),6);
     TSharedPtr<FJsonObject> Reload,ReloadLinks;
     TestTrue(TEXT("Linked setup resolves"),Load(Root,TEXT("First"),Reload,ReloadLinks,Error));
@@ -245,23 +246,28 @@ bool FACEUCMProfilePanelTest::RunTest(const FString&)
             TestTrue(*(FString(Page)+TEXT(" has Delete profile")),Text.Contains(TEXT("Delete\n")));
         }
         if(FString(Page)==TEXT("Route"))TestFalse(TEXT("Route has no duplicate import selector"),Text.Contains(TEXT("Navigation route\n")));
-        if(FString(Page)==TEXT("Monsters"))TestTrue(TEXT("Monsters can add current target"),Text.Contains(TEXT("Add selected monster")));
+        if(FString(Page)==TEXT("Monsters"))TestTrue(TEXT("Mobs can add current target"),Text.Contains(TEXT("Add selected mob")));
         if(FString(Page)==TEXT("Buffs"))
         {
             TestTrue(TEXT("Buffs includes protection choices"),Text.Contains(TEXT("Protections"))&&Text.Contains(TEXT("Banes")));
             if(FACEPluginStyle::IsCodex())TestTrue(TEXT("Codex exposes protection presets"),Text.Contains(TEXT("Custom\n"))&&Text.Contains(TEXT("BPSAC\n")));
         }
+        for(const TCHAR* Caption:{TEXT("Enable Combat\n"),TEXT("Enable Summoning\n"),TEXT("Enable Buffs\n"),TEXT("Enable Recovery\n"),TEXT("Accept buff requests\n"),TEXT("Enable Route Navigation\n"),TEXT("Enable Vendor Restocking\n"),TEXT("Run imported meta\n"),TEXT("Loot corpses\n")})
+            TestFalse(*(FString(Page)+TEXT(" has no duplicate activity control: ")+Caption),Text.Contains(Caption));
     }
     const FString Overview=CollectText(Host->MakeUCMPanel(TEXT("Overview")));
     TestFalse(TEXT("Overview no longer includes Open Log"),Overview.Contains(TEXT("Open UCM Log")));
     TestFalse(TEXT("Overview no longer includes protection selectors"),Overview.Contains(TEXT("Protections:"))||Overview.Contains(TEXT("Banes:")));
     TestTrue(TEXT("Overview calls section Configuration"),Overview.Contains(TEXT("Configuration")));
+    TestTrue(TEXT("Overview keeps the master Combat and Summoning controls"),Overview.Contains(TEXT("Enable Combat\n"))&&Overview.Contains(TEXT("Enable Summoning\n")));
+    TestTrue(TEXT("Overview keeps buff request control"),Overview.Contains(TEXT("Accept buff requests\n")));
+    TestFalse(TEXT("Loot notification settings have one home in Loot"),Overview.Contains(TEXT("Announce item ID matches\n")));
     TestFalse(TEXT("Overview removes setup header and plugin bar preference"),Overview.Contains(TEXT("Setup:"))||Overview.Contains(TEXT("Show plugin bar")));
     for(const auto& Section:ACEUCMProfiles::Sections())
     {
         if(Section==TEXT("Character")&&FACEPluginStyle::IsCodex())
             TestTrue(TEXT("Overview selects Character through its header"),Overview.Contains(TEXT("Profile\n")));
-        else TestTrue(*(TEXT("Overview contains profile selector for ")+Section),Overview.Contains(Section+TEXT(": ")));
+        else TestTrue(*(TEXT("Overview contains profile selector for ")+Section),Overview.Contains(Section==TEXT("Monsters")?TEXT("Mobs\nShared\n"):Section+TEXT(": ")));
     }
     const FString ImportText=CollectText(Host->MakeUCMPanel(TEXT("Import")));
     TestFalse(TEXT("Import removes setups and JSON editor"),ImportText.Contains(TEXT("New setup"))||ImportText.Contains(TEXT("Save current setup"))||ImportText.Contains(TEXT("Edit advanced JSON")));
@@ -285,13 +291,26 @@ bool FACEUCMProfilePanelTest::RunTest(const FString&)
     }
     TestFalse(TEXT("Micro removes running checkbox"),CollectText(Micro).Contains(TEXT("UCM running")));
     auto Rat=MakeShared<FJsonObject>();Rat->SetStringField(TEXT("name"),TEXT("Brown Rat"));UCM->Profile->SetArrayField(TEXT("monsters"),{MakeShared<FJsonValueObject>(Rat)});
-    const FString Monsters=CollectText(Host->MakeUCMPanel(TEXT("Monsters")));
-    TestTrue(TEXT("Monster rules inherit global defaults"),Monsters.Contains(TEXT("Priority: use Combat default"))&&Monsters.Contains(TEXT("Attack Range: use Combat default")));
-    TestTrue(TEXT("Monster search and name action exist"),Monsters.Contains(TEXT("Search"))&&Monsters.Contains(TEXT("Add monster by name")));
+    auto MonstersPanel=Host->MakeUCMPanel(TEXT("Monsters"));
+    TFunction<void(const TSharedRef<SWidget>&)> OpenDetails=[&](const TSharedRef<SWidget>& Widget)
+    {
+        if(Widget->GetType()==TEXT("SACEPluginButton")&&Widget->GetTag()==TEXT("UCMMonster.Brown Rat.details"))
+        {StaticCastSharedRef<SButton>(Widget)->SimulateClick();return;}
+        // Snapshot children: clicking Details rebuilds the panel.
+        TArray<TSharedRef<SWidget>> Children;auto* C=Widget->GetChildren();for(int32 I=0;I<C->Num();++I)Children.Add(C->GetChildAt(I));
+        for(const auto& Child:Children)OpenDetails(Child);
+    };
+    OpenDetails(MonstersPanel);const FString Monsters=CollectText(MonstersPanel);
+    TestTrue(TEXT("Monster details retain default priority and range"),Monsters.Contains(TEXT("Priority: use default"))&&Monsters.Contains(TEXT("Attack Range: use default")));
+    TestTrue(TEXT("Monster search and name action exist"),Monsters.Contains(TEXT("Search"))&&Monsters.Contains(TEXT("Add\n")));
+    TestTrue(TEXT("Details exposes the complete attack profile"),Monsters.Contains(TEXT("Combat mode\n"))&&Monsters.Contains(TEXT("Imperil\n"))&&Monsters.Contains(TEXT("Ring spells\n"))&&Monsters.Contains(TEXT("Pet damage type\n"))&&Monsters.Contains(TEXT("Secondary vulnerability\n")));
+    TestTrue(TEXT("Tab uses Mobs while existing initial page names remain compatible"),Monsters.Contains(TEXT("Mobs\n"))&&!Monsters.Contains(TEXT("Monsters\n")));
+    TestTrue(TEXT("New initial page name opens the mob editor"),CollectText(Host->MakeUCMPanel(TEXT("Mobs"))).Contains(TEXT("Add selected mob")));
     UCM->Profile->SetNumberField(TEXT("ring_min_targets"),4);
     auto CombatPanel=Host->MakeUCMPanel(TEXT("Combat"));
     const FString Combat=CollectText(CombatPanel);
-    TestTrue(TEXT("Combat exposes both profile defaults"),Combat.Contains(TEXT("Default monster priority"))&&Combat.Contains(TEXT("Default monster attack range")));
+    TestTrue(TEXT("Combat exposes both profile defaults"),Combat.Contains(TEXT("Default mob priority"))&&Combat.Contains(TEXT("Default mob attack range")));
+    TestFalse(TEXT("Combat does not duplicate chart spell or damage switches"),Combat.Contains(TEXT("Use ring spells\n"))||Combat.Contains(TEXT("Magic Yield\n"))||Combat.Contains(TEXT("Void curses\n"))||Combat.Contains(TEXT("Fire\n")));
     TestTrue(TEXT("Ring count displays a whole number without percent"),Combat.Contains(TEXT("Minimum ring targets\n4\n")));
     TMap<FName,TSharedPtr<SSlider>> Sliders;
     TFunction<void(const TSharedRef<SWidget>&)> CollectSliders=[&](const TSharedRef<SWidget>& Widget)
@@ -299,7 +318,7 @@ bool FACEUCMProfilePanelTest::RunTest(const FString&)
         if(Widget->GetType()==FName(TEXT("SSlider"))||Widget->GetType()==FName(TEXT("SACEPluginSlider")))Sliders.Add(Widget->GetTag(),StaticCastSharedRef<SSlider>(Widget));
         auto Children=Widget->GetChildren();for(int32 I=0;I<Children->Num();++I)CollectSliders(Children->GetChildAt(I));
     };
-    CollectSliders(CombatPanel);CollectSliders(Host->MakeUCMPanel(TEXT("Monsters")));
+    CollectSliders(CombatPanel);CollectSliders(MonstersPanel);
     for(const TCHAR* Key:{TEXT("ring_min_targets"),TEXT("monster_default_priority"),TEXT("priority")})
     {
         const auto* Slider=Sliders.Find(FName(Key));

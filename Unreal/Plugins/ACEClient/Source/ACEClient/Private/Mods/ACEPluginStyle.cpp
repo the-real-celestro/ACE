@@ -4,6 +4,7 @@
 #include "ACEClientSubsystem.h"
 #include "ACEHoverTooltipWidget.h"
 #include "ACEDatSubsystem.h"
+#include "ACERuntimeOptions.h"
 #include "Dat/ACEDatTextureResolver.h"
 #include "UI/ACEUIFontStyles.h"
 #include "UI/ACEUIResourceResolver.h"
@@ -107,6 +108,15 @@ FSlateFontInfo FACEPluginStyle::NativeFont(FName Typeface,int32 Size)
     if(IsCodex())return FCoreStyle::GetDefaultFontStyle(Typeface,Size);
     const int32 ConsistentSize=Size==13?12:Size>=14&&Size<=16?15:Size>=17&&Size<=20?18:Size;
     return FCoreStyle::GetDefaultFontStyle(Typeface,ConsistentSize);
+}
+FSlateFontInfo FACEPluginStyle::ScaleFont(FSlateFontInfo Font)
+{
+    Font.Size=FMath::Max(1.f,Font.Size*ACERuntimeOptions::PluginTextScale());
+    return Font;
+}
+TAttribute<FSlateFontInfo> FACEPluginStyle::ScaledFont(TAttribute<FSlateFontInfo> Font)
+{
+    return TAttribute<FSlateFontInfo>::CreateLambda([Font](){return ScaleFont(Font.Get());});
 }
 void FACEPluginStyle::AddReferencedObjects(FReferenceCollector& C)
 {C.AddReferencedObject(Resolver);C.AddReferencedObject(Atlas);for(auto& Pair:Fonts)C.AddReferencedObject(Pair.Value->Atlas);for(auto& Texture:ButtonTextures)C.AddReferencedObject(Texture);}
@@ -601,23 +611,22 @@ int32 SACEPluginSlider::OnPaint(const FPaintArgs& A,const FGeometry& G,const FSl
 void SACEPluginText::Construct(const FArguments& A)
 {
     Retail=FACEPluginStyle::Current();Wrap=A._AutoWrapText;WrapAt=A._WrapTextAt;Justification=A._Justification;
-    if(!Retail->Codex){STextBlock::Construct(A);}
-    else
+    FArguments Scaled=A;
+    TAttribute<FSlateFontInfo> Base=A._Font.IsSet()?A._Font:TAttribute<FSlateFontInfo>(A._TextStyle->Font);
+    if(Retail->Codex)
     {
-        // Codex sets body copy in compact Roboto (labels ~10pt, page copy ~12pt); classic plugin
-        // pages ask for 13-22pt DAT sizes, so scale those down. Fancy titles keep their size.
-        auto Args=A;
+        // One Codex type scale: sublabel 9 (requested 11-12), label/value 10 (13-16),
+        // emphasis 11 (17-20), large 13 (21+). Fancy titles keep their size. The user's
+        // plugin text scale is applied on top by ScaledFont.
         auto Compact=[](FSlateFontInfo F)
         {
-            // One Codex type scale: sublabel 9 (requested 11-12), label/value 10 (13-16),
-            // emphasis 11 (17-20), large 13 (21+). Captions ask for 9-10 directly; Fancy titles keep their size.
             if(F.TypefaceFontName!=FName(TEXT("Fancy"))&&F.Size>=11.f)F.Size=F.Size<=12.f?9.f:F.Size<=16.f?10.f:F.Size<=20.f?11.f:13.f;
             return F;
         };
-        if(A._Font.IsBound())Args._Font=TAttribute<FSlateFontInfo>::CreateLambda([Font=A._Font,Compact]{return Compact(Font.Get());});
-        else if(A._Font.IsSet())Args._Font=Compact(A._Font.Get());
-        STextBlock::Construct(Args);
+        Base=TAttribute<FSlateFontInfo>::CreateLambda([Base,Compact]{return Compact(Base.Get());});
     }
+    Scaled.Font(FACEPluginStyle::ScaledFont(Base));
+    STextBlock::Construct(Scaled);
     // Match the bitmap path when a label uses characters absent from the DAT.
     // Never turn a narrow plugin title, setting or button into stacked fragments.
     SetWrappingPolicy(ETextWrappingPolicy::DefaultWrapping);
@@ -658,7 +667,7 @@ bool SACEPluginText::CanDrawNative() const
     if(Retail->Codex&&!Fancy)return false;
     const int32 Key=Fancy?1000+Size:Size;
     if(!Face||FaceSize!=Key||!Face->Atlas)
-    {Face=Retail->Typeface(Size,Fancy);FaceSize=Key;CachedWidth=-1;CheckedGlyphs.Reset();NativeGlyphs=true;}
+    {if(FaceSize!=Key)Width=0;Face=Retail->Typeface(Size,Fancy);FaceSize=Key;CachedWidth=-1;CheckedGlyphs.Reset();NativeGlyphs=true;}
     if(!Face->Atlas)return false;
     const FString Text=GetText().ToString();
     if(Text!=CheckedGlyphs)

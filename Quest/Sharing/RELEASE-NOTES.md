@@ -1,55 +1,41 @@
-# AC:Unreal / AC:VR release 144
+# AC:Unreal / AC:VR release 148
 
 Windows desktop, PC VR, native Linux x86_64, standalone Quest, and the Android
-phone/tablet preview share **2026.10.30.144**. Android version code: 144.
-Quest installer revision: 9. These notes cover all changes since v143.
+phone/tablet preview share **2026.11.01.148**. Android version code: 148.
+Quest installer revision: 9. These notes cover changes since v147.
 
-## Retail interface fixes
+## UCM Mobs and attack profiles
 
-- Make the main chat expand/restore button reliably take priority over chat text,
-  including at scaled sizes, so clicking it does not start an unintended tell.
-- Keep vendor Add to List on the Items tab with the selected item intact.
-  Repeated clicks accumulate quantities without switching to the Buying tab.
-- Keep combat, use, examine, minimize, close, logout, and radar-lock icons visible
-  when the pointer drags off them or their authored rollover artwork is absent.
+- Add a compact Mobs table for Default and per-mob attack profiles, with visible
+  names, quick attack/debuff switches, damage and pet choices, and column tooltips.
+- Expand Details to configure the full per-mob attack profile: matching, attack
+  modes, debuffs, weapons, offhand, damage, pet damage, priority, and range.
+- Keep table and Details edits synchronized and saved. New native rows inherit
+  Default; imported profiles retain their independent settings.
+- Support essence summoning without automatic attacks, pursuit, weapon changes,
+  or combat assessment when attack families are disabled. Explicit Ignore rules
+  still exclude mobs, and older imported VT summon-only settings are recognized.
+- Consolidate duplicate controls, rename visible Monster labels to Mob, and show
+  the selected profile name plainly. Keep mob names visible while scrolling;
+  hide the horizontal scrollbar when the table fits the window.
 
-## Spell hotbar and archery
+## Backpack interactions
 
-- Correct the equipped wand's innate spell icon, selection frame, and tooltip.
-  Refresh it when equipment changes and include it when cycling spell selections,
-  including empty favorite banks and fallback after unequipping.
-- Correct manual power/accuracy slider hit detection and dragging across UI scales.
-  Normal missile attacks honor the selected accuracy mark.
-- Show the floating charge meter in Advanced Combat UI and hide the normal combat
-  panel there. Advanced attacks use the held charge on release, as in retail.
-
-## Loot profile builder
-
-- Add named weapon-skill IDs to the UCM and standalone Loot Profile editors,
-  including modern weapon and magic skills plus custom numeric IDs.
-- Distinguish a weapon's attack skill from its wield-requirement skill, preserving
-  VTank rule comparisons and imported profile behavior.
-
-## Android phones and tablets
-
-- Save control layouts across restarts, including positions, sizes, bindings,
-  hidden buttons, and added buttons.
-- Preserve preferred layouts when folding/unfolding or opening pinned panels;
-  temporary screen fitting no longer replaces saved positions or visibility.
-- Save the last valid dragged position if the app loses focus or backgrounds.
-- Allow related mobile preferences, including opacity, sensitivity, pinned chat,
-  and plugin visibility, to persist through the same settings path.
-- Use AC:Unreal Mobile update and installation messages tailored to phones and
-  tablets, including Android permission prompts and reopening after installation.
+- Fix dragging portable packs directly from the world and from their open
+  container icon into inventory.
+- Correct pack movement between player inventory and chest pack slots, including
+  slot capacity, insertion order, and drag feedback.
+- Prevent invalid nested packs and containment cycles; retain server-authoritative
+  ownership and contents during moves.
 
 ## Validation and packaging
 
-Focused regressions cover retail DAT/Slate pointer interactions, spell selection,
-missile packet accuracy, loot-profile editing and reloads, update behavior,
-touch/VR menus, and mobile settings saved through the actual Android INI hierarchy.
-Build and package verification results accompany the release locally.
-Live-server and physical-device acceptance remain separate from automated tests.
+Release verification covers UCM decisions, summoning, imports, profile editing,
+responsive table/details layouts, backpack interactions, and updater behavior in
+the editor and packaged Windows/Linux clients. Android packages are checked for
+identity, version, signing continuity, 16 KiB alignment, and bundled plugins.
+The Windows installer is checked upgrading v147 while preserving saved data.
 
 Packages exclude retail DATs, personal settings, server data, and generated
 MeshCache files. Android phones/tablets remain a preview using a separate APK
-from Quest. Existing signing identities and installer revision are retained.
+from Quest. No physical-device or live-server acceptance test was performed.

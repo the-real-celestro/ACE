@@ -178,6 +178,9 @@ public:
 	bool TryHandleOverlayClick(FVector2D CanvasLocalPos, bool bRightClick = false);
 	/** LMB press on inventory icon begins a pending drag (activate after small move). */
 	bool TryBeginInventoryDrag(FVector2D CanvasLocalPos);
+	/** Desktop world items share the captured inventory drag/drop path. */
+	bool TryBeginWorldInventoryDrag(FVector2D CanvasLocalPos);
+	bool BeginWorldItemDrag(int32 Guid, FVector2D CanvasLocalPos);
 	void AssignInventoryShortcut(int32 Guid, int32 SlotIndex, int32 SourceShortcut = INDEX_NONE);
 	void UpdateInventoryDrag(FVector2D CanvasLocalPos);
 	/** Completes drag (move/wield/drop) or click/double-click use when not dragged. */
@@ -413,8 +416,6 @@ private:
 	 */
 	int32 ChatSendChannel = 0;
 	bool bChatTargetPopupOpen = false;
-	bool bMainChatExpanded = false;
-	int32 MainChatRestoreY = 0, MainChatRestoreHeight = 0;
 	void ToggleMainChatExpanded();
 	FString LastOutgoingTellName;
 	FString LastOutgoingTellLineKey;
@@ -492,6 +493,9 @@ private:
 	bool bChatUnread[5] = {};
 	int32 ScrollDragChatWindow = 0;
 	void RefreshChatRowLayout(int32 Window);
+	void RefreshChatEntryLayouts();
+	uint32 ChatEntryFontId = 0;
+	int32 ChatEntryLineHeight = 12;
 	float ChatRowWidths[5] = {};
 	uint32 ChatRowFontIds[5] = {};
 	FVector2D ChatRowScales[5] = {};

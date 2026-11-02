@@ -839,8 +839,13 @@ void UACEUICanvasWidget::SyncElementRecursive(
 		// own presenter; the ordinary DAT canvas follows retail's image semantics.
 		if (Tex && !Element->bFloatingHealthArtwork)
 		{
-			const float TexW = FMath::Max(1.f, static_cast<float>(Tex->GetSizeX()) * LastScaleX);
-			const float TexH = FMath::Max(1.f, static_cast<float>(Tex->GetSizeY()) * LastScaleY);
+			// Font-sized chat controls opt into stretching per axis. Their complete
+			// button faces must not repeat when the logical region grows, while the
+			// entry strip still tiles horizontally and normal DAT borders keep tiling.
+			const float TexW = Element->bStretchImageX ? float(ElX1 - ElX0)
+				: FMath::Max(1.f, static_cast<float>(Tex->GetSizeX()) * LastScaleX);
+			const float TexH = Element->bStretchImageY ? float(ElY1 - ElY0)
+				: FMath::Max(1.f, static_cast<float>(Tex->GetSizeY()) * LastScaleY);
 			// A scaled canvas rounds element edges to whole pixels; that rounding is not a tile.
 			const float TolX = FMath::IsNearlyEqual(LastScaleX, 1.f) ? KINDA_SMALL_NUMBER : FMath::Max(1.f, LastScaleX);
 			const float TolY = FMath::IsNearlyEqual(LastScaleY, 1.f) ? KINDA_SMALL_NUMBER : FMath::Max(1.f, LastScaleY);
@@ -1075,6 +1080,10 @@ FReply UACEUICanvasWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, 
 			return FReply::Handled().CaptureMouse(TakeWidget());
 		}
 	}
+	// An unclaimed world press may be a portable item. Capture it before the
+	// viewport turns the gesture into camera orbit; clicks still select/use.
+	if (GameplayBinder && bLeft && GameplayBinder->TryBeginWorldInventoryDrag(Local))
+		return FReply::Handled().CaptureMouse(TakeWidget());
 	if (GameplayBinder)
 	{
 		GameplayBinder->ClearChatEntryFocus();

@@ -1,5 +1,89 @@
 # Virindi compatibility review
 
+## Compact monster controls and pet-only operation (2026-11-01)
+
+Checked the supplied `utank2_decompiled/uTank2/PluginCore.cs` monster-column
+tooltips at 1686–1700, `h1.cs` summoning gate, `ga.cs` pet selection at 1033–1080,
+and `f7.cs` target admission. VT's pet selector uses admission (`o`), independent
+of the subsequent attack-valid result (`n`). Turning attack families off must
+therefore not exclude a monster from pet selection. The old USD adapter had
+translated all three disabled families into Ignore; new imports no longer do
+that, and the runtime recognizes the old encoding. Explicit Ignore and negative
+priority still exclude pets. UCM additionally supports Summoning with Combat off.
+
+The native Mobs editor provides a compact default/mob matrix with
+immediate attack/debuff switches, combat mode and damage/pet selectors. Extended
+columns cover all spell modes in the reference, with tooltips and full-size hit
+targets. Details shares all attack/debuff, mode, damage and pet controls with
+the table and adds weapon, offhand, secondary vulnerability, priority, range and
+native name matching. New native rows opt into live default inheritance; existing imported
+rows keep independent settings and matching expressions. Editing a switch does
+not stop UCM. No-attacks rules skip combat assessment, pursuit and equipment
+changes while remaining available to the independent summoning activity.
+
+The follow-up UI review removes the above-chart Combat/Summoning switches and
+pet-only shortcut and duplicated spell/damage switches in Combat. Details is a
+complete editor of the same saved row; its controls cannot diverge from the table.
+Activity switches are centralized in Overview with Micro as
+the quick-control surface. Loot notifications are configured in Loot only.
+The chart preserves legacy Character fallbacks without changing run/pause state.
+All abbreviated columns have retail-styled header and switch tooltips with full
+names and descriptions; switches also explain inherited values. Their header hit
+areas participate in Slate hover testing, including padding around the letters.
+The Mobs selector shows the selected name alone, including **Default**. Saved
+`Monsters` section keys and filenames remain compatible with existing imports.
+
+Regression coverage exercises pet-only operation with Combat on/off, previous
+USD encoding, repeated summons, per-monster attack overrides, cancellation of
+an existing target, Ignore, actual matrix buttons, save/reload, search, and
+normal/enlarged text at narrow/wide widths. These are offline automation checks,
+not a live-server hunt or a change to VT's full streak-chain optimizer.
+
+## Combat weapon elements and selection (2026-10-30)
+
+Reviewed the supplied `utank2_decompiled/ga.cs`: appraisal extraction at lines
+191–296, monster loadout selection at 633–751, automatic weapon priority at
+830–997, confirmed vulnerability check at 1027, and element/bonus resolution at
+1230–1343. `gv.cs` selects the first available element from the ordered monster
+list; `e0.cs` obtains that list from monster overrides or species defaults.
+`bv.cs` checks ammunition availability for launchers. The server's
+`DamageEvent.GetBaseDamage` confirms that prismatic ammunition inherits the
+launcher's actual element, defaulting to piercing on a neutral launcher.
+
+Found and corrected the Fire/Cold reversal between VT's element enum and retail
+damage masks: VT Cold=5 and Fire=6 map to protocol Cold=8 and Fire=16. The earlier
+conversion reversed both, including the bundled 1,470-monster catalog, UI labels,
+spell/vulnerability categories, imports and pet element matching. Existing native
+Character and Monsters sections independently normalize their former Fire/Cold
+choices to the retail masks; version markers prevent a second swap. Raw loot
+property comparisons and the VT pet enum are not changed.
+
+Caster appraisal snapshots now read integer quality 45, which VT exposes as
+`WandElemDmgType`. Casters generally have no weapon profile, so reading its
+`DamageType` field yielded zero. Selection now accounts for matching slayers,
+armor/critical bonuses against confirmed vulnerabilities, elemental rends and
+cleaves, Nether casters, other bonus weapons, and base-element matches. Within
+each priority, the monster's ordered element preference wins before raw damage.
+Armor-rend/critical bonus ordering follows VT's 4000/2000/1000 and quest-bonus
+400/200/100 weighting. The selected attack spell, vulnerability, ammunition and
+automatic melee power use the resulting loadout's element. Main and secondary
+weapons use the same priority rules.
+
+Intentional UCM behavior remains: explicit damage requirements cannot silently
+attack with another element; server-supplied resistances override the stock
+catalog; otherwise-equivalent choices use usable skill and estimated damage,
+then equipped status, instead of VT's inventory enumeration order. Unassessed
+equipment still requires appraisal, and unavailable ammunition cannot qualify a
+launcher. No server resistance is inferred for unknown custom creatures.
+
+Validation: `ACE.Plugins.VTankWeaponSelection` exercises the shipped Lua through
+native caster snapshots, all seven retail elements, slayers/rends/cleaves,
+confirmed vulnerabilities, explicit requirements, custom resistances, spell and
+vulnerability coherence, all three launcher types with prismatic ammunition,
+VT imports, and shared-profile migration/save/reload. The database converter has
+a synthetic VT-schema regression. Related combat, summoning, settings, storage
+and workload suites are also run. These checks do not replace a live server hunt.
+
 ## Import and meta execution review — 2026-10-13
 
 Compared the supplied VT decompile's `hn.cs` rule scheduler, `f.cs` All action,
@@ -1061,3 +1145,59 @@ and duplicate history, and does no snapshot work on unchanged idle frames.
 `ACE.Plugins.LootNotifications` covers unknown appraisal fields, rule order,
 selected and unselected assessments, reselection, duplicate suppression, large
 profiles, disabled switches, confirmed pickups, timeouts, and local-only output.
+
+## October 30: loot builder strings, alternatives and parameter audit
+
+Reviewed the supplied `utank2_decompiled/uTank2/LootPlugins` property enums and
+`g6.cs` packet-property mappings, and decompiled the installed `VTClassic.dll`
+for `StringValueMatch`, `SpellMatch`, `eLootRuleType`, `AnySimilarColor`,
+`SimilarColorArmorType`, and `SlotSimilarColor`. The property catalog includes
+all 171 distinct VT integer IDs, 25 decimal IDs, and 17 string IDs, in addition
+to ACE property names and custom numeric IDs. The native builder represents
+all 31 standard Classic requirement kinds: comparisons, spells, character
+requirements, calculations, palette checks, and the disabled-rule flag. Classic's
+retired DamagePercent requirement retains its always-false behavior.
+
+New rules can combine requirements with AND or OR. An individual numeric
+requirement can match any selected value, so a Light Weapons rule can require
+`WeaponMasteryCategory in [Sword, Unarmed]` without relaxing its other filters.
+Text fields expose literal Contains/Exact/Prefix, pipe-separated Any/All, and
+VT regular expressions. Case sensitivity is explicit; imports preserve Classic's
+case-sensitive `new Regex(pattern)` behavior. Existing rules remain AND/regex.
+Basic item filters continue to constrain both logical modes. Unknown appraisal
+data is distinct from failure, including across cooperative work-budget yields.
+
+Fixed the missing SecondaryName public string and its UTL import rejection.
+The string Name property retains the singular wire name independently from the
+stack's display name. Added public structure, cooldown, hook, ownership and
+creation/physics-header aliases, and creature appraisal aliases when supplied.
+Armor protection aliases now map the wire's Slash/Pierce/Bludgeon/Cold/Fire/
+Acid/Nether/Electric order into Decal's Slash/Pierce/Bludgeon/Acid/Lightning/Fire/
+Cold order. Unknown properties still follow each rule's missing-value policy;
+the editor cannot expose a value the server has not supplied.
+
+Palette color requirements use VT's sample byte (`bb.a`) and its absolute hue
+difference plus Euclidean saturation/value tolerance. Original wire palette
+ordering is retained separately from the renderer's layer replacement. The 63
+standard armor groups are derived from the installed ColorSlots.Default.xml.
+Samples use a bounded cache invalidated by DAT reload, rather than reading each
+palette for every inventory snapshot. Custom armor-group files, arbitrary loot
+expressions and third-party User actions still require their own adapters;
+unsupported imports are preserved but cannot be activated partially.
+
+Retail `ItemExamineUI.cpp` explicitly appends `(Unarmed Weapon)` when property
+353 is 1. That suffix is a weapon subtype, independent of Light/Heavy/Finesse
+skill, and remains intact. `ACE.Plugins.LootBuilderParity` exercises real editor
+controls, file save/reload, named subtype alternatives, string and color rules,
+native snapshot mappings and the shipped UCM loot decision. Tailoring tests also
+verify wire palette slots survive render-layer normalization.
+
+Validated with a successful Win64 Development editor build and passing
+LootBuilderParity, WeaponSkillLoot, LootRules, VirindiProfiles, LootNotifications,
+LootThroughput, LootMemory, HuntMemory, InventorySalvage, LootProfileInteraction,
+RegexValidationCache, LootIconProperties, VTankWeaponSelection,
+AppraisalPresentation and TailoringLayers automation tests. Literal text searches
+use a bounded native helper because the sandbox intentionally disables Lua's
+unbounded pattern functions. Classic SpellMatch also preserves its requirement
+for at least one matching spell when a profile saves Count=0, and ignores a
+whitespace-only exclusion expression. No live-server hunt was used for this audit.

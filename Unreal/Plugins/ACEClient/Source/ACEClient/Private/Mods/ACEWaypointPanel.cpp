@@ -572,7 +572,7 @@ public:
         ShowTitle=A._ShowTitle;
         auto Body=SNew(SVerticalBox);if(ShowTitle)Body->AddSlot().AutoHeight()[WaypointLabel(A._Map?TEXT("Explore Dereth"):TEXT("Waypoint"),26)];
         auto Input=SNew(SHorizontalBox);
-        Input->AddSlot().FillWidth(1)[SAssignNew(Entry,SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",18)).HintText(FText::FromString(TEXT("42.0N, 33.6E")))
+        Input->AddSlot().FillWidth(1)[SAssignNew(Entry,SACEPluginEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",18)).HintText(FText::FromString(TEXT("42.0N, 33.6E")))
             .OnTextCommitted_Lambda([this](const FText& T,ETextCommit::Type Type){if(Type==ETextCommit::OnEnter)Navigate(T.ToString());})];
         Input->AddSlot().AutoWidth().Padding(8,0)[WaypointButton(TEXT("Go"),[this]{Navigate(Entry->GetText().ToString());})];
         Input->AddSlot().AutoWidth().Padding(4,0)[WaypointButton(TEXT("Clear"),[this]{if(Host.IsValid())Host->ClearWaypoint();})];
@@ -582,23 +582,34 @@ public:
         Body->AddSlot().AutoHeight().Padding(0,0,0,6)[Input];
         if(A._Map)
         {
-            Body->AddSlot().AutoHeight().Padding(0,0,0,6)[SNew(SHorizontalBox)
-                +SHorizontalBox::Slot().FillWidth(1)[SNew(SEditableTextBox).Tag(TEXT("WaypointMapSearch"))
-                    .Style(&PanelStyle->Edit).Font(FACEPluginStyle::NativeFont("Regular",14)).HintText(FText::FromString(TEXT("Find a location")))
-                    .OnTextChanged_Lambda([this](const FText& T){if(Map)Map->SetSearch(T.ToString());})]
-                +SHorizontalBox::Slot().AutoWidth().Padding(6,0,0,0)[Check(TEXT("dungeon"),TEXT("Dungeon"),false)]];
-            Body->AddSlot().FillHeight(1).Padding(0,0,0,6)
-                [SAssignNew(Map,SWaypointMap).Host(Host.Get()).Tag(TEXT("WaypointMapViewport"))
-                    .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Drag to pan · Scroll to zoom · Click to navigate. Dungeon floors near your elevation are brighter."))))];
-            auto Tools=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(5,3));
-            Tools->AddSlot()[WaypointButton(TEXT("+"),[this]{Map->ChangeZoom(1.5,Map->GetCachedGeometry().GetLocalSize()*.5);})];
-            Tools->AddSlot()[WaypointButton(TEXT("−"),[this]{Map->ChangeZoom(1/1.5,Map->GetCachedGeometry().GetLocalSize()*.5);})];
-            Tools->AddSlot()[WaypointButton(TEXT("Center"),[this]{Map->CenterOnPlayer();})];
-            Tools->AddSlot()[WaypointButton(TEXT("Reset"),[this]{Map->ResetView();})];
-            Tools->AddSlot()[Check(TEXT("towns"),TEXT("Towns"),true)];
-            Tools->AddSlot()[Check(TEXT("portals"),TEXT("Portals"),true)];
-            Tools->AddSlot()[Check(TEXT("pois"),TEXT("POIs"),true)];
-            Body->AddSlot().AutoHeight()[Tools];
+            auto Controls=SNew(SHorizontalBox);
+            Controls->AddSlot().AutoWidth()[Check(TEXT("dungeon"),TEXT("Dungeon"),false)];
+            Controls->AddSlot().AutoWidth()[Check(TEXT("towns"),TEXT("Towns"),true)];
+            Controls->AddSlot().AutoWidth()[Check(TEXT("portals"),TEXT("Portals"),true)];
+            Controls->AddSlot().AutoWidth()[Check(TEXT("pois"),TEXT("POIs"),true)];
+            Body->AddSlot().AutoHeight()[Controls];
+            Body->AddSlot().AutoHeight()[SNew(SHorizontalBox)
+                +SHorizontalBox::Slot().AutoWidth()[Check(TEXT("fill_dungeon"),TEXT("Fill walkable areas"),false)]
+                +SHorizontalBox::Slot().AutoWidth()[Check(TEXT("show_route"),TEXT("Show active route"),true)]];
+            Body->AddSlot().AutoHeight().Padding(0,6)[Check(TEXT("heading_up"),TEXT("Player facing up (off: north up)"),false)];
+            Body->AddSlot().AutoHeight()[Check(TEXT("dungeon_overlay"),TEXT("Pin map to interface"),false)];
+            Body->AddSlot().AutoHeight()[Check(TEXT("map_minimized"),TEXT("Minimize pinned map (keep direction arrow)"),false)];
+            Body->AddSlot().AutoHeight().Padding(0,6)[WaypointLabel(TEXT("Map background opacity"),14)];
+            Body->AddSlot().AutoHeight()[SNew(SSlider).Style(&PanelStyle->Slider).MinValue(0.f).MaxValue(1.f)
+                .IsEnabled_Lambda([this](){return Host.IsValid()&&!Host->IsPluginOpacityGlobal();})
+                .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Shared with Waypoint Map background opacity in Plugin Manager. The global plugin opacity overrides this setting."))))
+                .Value_Lambda([this](){return Host.IsValid()?Host->WaypointMapOpacity():1.f;})
+                .OnValueChanged_Lambda([this](float Value){if(Host.IsValid())Host->SetWaypointMapOpacity(Value);})];
+            Body->AddSlot().AutoHeight()[WaypointLabel(TEXT("The pinned map follows you, automatically switches between overworld and interior layouts, and stays visible when this window closes. Both views share the same position and size. Use + and − to zoom, even while locked. Unlock the game UI to move, resize or use wheel zoom. Uncheck Pin to hide it."),13)];
+            Body->AddSlot().AutoHeight().Padding(0,6)[SNew(SACEPluginEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",16)).HintText(FText::FromString(TEXT("Filter locations by name"))).OnTextChanged_Lambda([this](const FText& T){if(Map)Map->SetSearch(T.ToString());})];
+            Body->AddSlot().FillHeight(1).Padding(0,10)[SAssignNew(Map,SWaypointMap).Host(Host.Get())];
+            Body->AddSlot().AutoHeight()[SNew(SHorizontalBox)
+                +SHorizontalBox::Slot().AutoWidth()[WaypointButton(TEXT("+"),[this]{Map->ChangeZoom(1.5,Map->GetCachedGeometry().GetLocalSize()*.5);})]
+                +SHorizontalBox::Slot().AutoWidth().Padding(5,0)[WaypointButton(TEXT("−"),[this]{Map->ChangeZoom(1/1.5,Map->GetCachedGeometry().GetLocalSize()*.5);})]
+                +SHorizontalBox::Slot().AutoWidth()[WaypointButton(TEXT("Center on me"),[this]{Map->CenterOnPlayer();})]
+                +SHorizontalBox::Slot().AutoWidth().Padding(5,0)[WaypointButton(TEXT("Reset view"),[this]{Map->ResetView();})]];
+            Body->AddSlot().AutoHeight().Padding(0,8)[WaypointButton(TEXT("Waypoint settings"),[this]{if(Host.IsValid())ChildSlot[Host->MakeWaypointPanel(false,false,ShowTitle)];})];
+            Body->AddSlot().AutoHeight().Padding(0,8)[WaypointLabel(TEXT("Drag to pan · Scroll to zoom · Click to navigate\nTowns and nearby portals. Atlas detail appears when zoomed in or searched. Dungeon floors near your elevation are brighter."),13)];
         }
         else
         {
@@ -608,7 +619,7 @@ public:
             Body->AddSlot().AutoHeight().Padding(0,8)[WaypointLabel(TEXT("Use the game UI lock or hold Quick-show pinned windows to move the arrow."),13)];
             Body->AddSlot().AutoHeight()[WaypointButton(TEXT("Open map"),[this]{if(Host.IsValid())ChildSlot[Host->MakeWaypointPanel(true,false,ShowTitle)];})];
             Body->AddSlot().AutoHeight().Padding(0,12)[WaypointLabel(TEXT("GoArrow atlas (optional)"),18)];
-            Body->AddSlot().AutoHeight()[SAssignNew(AtlasPath,SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",16)).HintText(FText::FromString(TEXT("Full path to GoArrow locations.xml")))];
+            Body->AddSlot().AutoHeight()[SAssignNew(AtlasPath,SACEPluginEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",16)).HintText(FText::FromString(TEXT("Full path to GoArrow locations.xml")))];
             Body->AddSlot().AutoHeight().Padding(0,6)[WaypointButton(TEXT("Import locations"),[this]{if(Host.IsValid()){Host->ImportWaypointLocations(AtlasPath->GetText().ToString().TrimStartAndEnd());Status=Host->Notice;}})];
             Body->AddSlot().AutoHeight().Padding(0,12)[WaypointLabel(TEXT("Click coordinates in chat or enter them above. The arrow shows your current coordinates. Unlock the game UI and drag its title to move it; its position is saved."),15)];
         }

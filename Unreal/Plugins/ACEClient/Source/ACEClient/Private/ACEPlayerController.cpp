@@ -1762,8 +1762,8 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			WalkingRootDelta = App->AdvanceWalkingMotion(DeltaTime, WalkingCycleSeconds);
 			bWalkingTransitionPending = App->HasWalkingTransition();
 			// Report the requested raw movement to the server, but don't predict
-			// a full-speed walk/run cycle while the combat sequence still owns
-			// the forward channel. This also covers mobile's movement controls.
+			// a full-speed walk/run cycle while a missile/physical combat link
+			// owns the forward channel. Casting stays mobile on desktop and touch.
 			if (!bVR && App->HasPendingCombatForwardMotion()) WalkingCycleSeconds = 0.f;
 		}
 	}
@@ -4202,13 +4202,14 @@ void AACEPlayerController::UpdateMouseLook(float DeltaTime, USpringArmComponent*
     }
     if (UpdateMouseButtons(bRightDown, bLeftDown,
         bInputFocused, IsMouseOverBlockingUI() || (DatGameplayBinder
-            && (DatGameplayBinder->IsInventoryDragActive() || DatGameplayBinder->IsSpellDragActive()
+            && (DatGameplayBinder->IsInventoryInteractionActive() || DatGameplayBinder->IsSpellDragActive()
                 || DatGameplayBinder->IsScrollbarDragActive()))))
     {
         if(!bWasInstant)IdentifyAtScreenPosition(MouseLookPressX, MouseLookPressY);
     }
     // Do not capture an ordinary left click: it still selects objects. Begin
     // free orbit only after a world press turns into a drag.
+    if (DatGameplayBinder && DatGameplayBinder->IsInventoryInteractionActive()) bLeftOrbitEligible = false;
     if (!bMouseLookActive && bLeftDown && bLeftOrbitEligible && bHaveMouse
         && FMath::Abs(MX - MouseLookPressX) + FMath::Abs(MY - MouseLookPressY) > 4.f)
         SetMouseLookActive(true);

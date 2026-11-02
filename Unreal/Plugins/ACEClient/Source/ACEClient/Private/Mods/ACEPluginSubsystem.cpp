@@ -5,6 +5,7 @@
 #include "ACEPluginVM.h"
 #include "ACEProfiling.h"
 #include "ACEVTProfile.h"
+#include "ACEUCMLootPresentation.h"
 #include "Mods/ACEUCMProfiles.h"
 #include "ACEClientSubsystem.h"
 #include "ACEDatSubsystem.h"
@@ -179,7 +180,9 @@ namespace
             for(const TCHAR* K:{TEXT("name"),TEXT("label")})if(FTCHARToUTF8(*String(R,K)).Length()>256)return false;
             for(const TCHAR* K:{TEXT("action"),TEXT("name_mode")})if(R->HasField(K)&&R->Values[K]->Type!=EJson::String)return false;
             if(!TArray<FString>{TEXT("keep"),TEXT("skip"),TEXT("salvage"),TEXT("sell"),TEXT("read")}.Contains(String(R,TEXT("action"),TEXT("keep"))))return false;
-            if(!TArray<FString>{TEXT("prefix"),TEXT("exact"),TEXT("contains")}.Contains(String(R,TEXT("name_mode"),TEXT("prefix"))))return false;
+            if(!TArray<FString>{TEXT("prefix"),TEXT("exact"),TEXT("contains"),TEXT("any"),TEXT("all"),TEXT("regex")}.Contains(String(R,TEXT("name_mode"),TEXT("prefix"))))return false;
+            if(String(R,TEXT("name_mode"))==TEXT("regex")&&!ACEVTProfile::IsSupportedPattern(String(R,TEXT("name"))))return false;
+            if(R->HasField(TEXT("conditions_mode"))&&(!R->HasTypedField<EJson::String>(TEXT("conditions_mode"))||!TArray<FString>{TEXT("all"),TEXT("any")}.Contains(String(R,TEXT("conditions_mode")))))return false;
             if(R->HasField(TEXT("enabled"))&&R->Values[TEXT("enabled")]->Type!=EJson::Boolean)return false;
             if(R->HasField(TEXT("count_by_name"))&&R->Values[TEXT("count_by_name")]->Type!=EJson::Boolean)return false;
             if(R->HasField(TEXT("compatibility_issues")))
@@ -204,16 +207,23 @@ namespace
                     if(Field==TEXT("legacy"))
                     {
                         const int Key=int(Number(C,TEXT("key")));const TArray<TSharedPtr<FJsonValue>>* Args=nullptr;
-                        if(Number(C,TEXT("key"))!=Key||!TArray<int>{6,7,10,17,1000,1001,1002,1003,1004,2000,2001,2003,2005,2006,2007,2008}.Contains(Key)||!C->TryGetArrayField(TEXT("args"),Args)||Args->Num()!=((Key==1000||Key==17||Key==2003||Key==2005)?2:(Key==1004||Key==2008)?3:1))return false;
+                        if(Number(C,TEXT("key"))!=Key||!TArray<int>{6,7,10,14,15,16,17,1000,1001,1002,1003,1004,2000,2001,2003,2005,2006,2007,2008}.Contains(Key)||!C->TryGetArrayField(TEXT("args"),Args)||Args->Num()!=((Key==1000||Key==17||Key==2003||Key==2005)?2:(Key==1004||Key==2008)?3:Key==14||Key==15?5:Key==16?6:1))return false;
                         for(const auto& Arg:*Args)if(Arg->Type!=EJson::Number||!FMath::IsFinite(Arg->AsNumber()))return false;
+                        if(Key>=14&&Key<=16&&!ACEUCMLootPresentation::ValidColorMatch(C))return false;
                     }
                     if(Field==TEXT("int")||Field==TEXT("float"))
                     {
-                        if(!TArray<FString>{TEXT("le"),TEXT("ge"),TEXT("eq"),TEXT("ne"),TEXT("bits")}.Contains(String(C,TEXT("op"))))return false;
+                        if(!TArray<FString>{TEXT("le"),TEXT("ge"),TEXT("eq"),TEXT("ne"),TEXT("bits"),TEXT("in")}.Contains(String(C,TEXT("op"))))return false;
                         if(String(C,TEXT("op"))==TEXT("bits")&&(Number(C,TEXT("value"))<0||Number(C,TEXT("value"))>MAX_uint32||FMath::FloorToDouble(Number(C,TEXT("value")))!=Number(C,TEXT("value"))))return false;
+                        if(String(C,TEXT("op"))==TEXT("in"))
+                        {
+                            const TArray<TSharedPtr<FJsonValue>>* Values=nullptr;
+                            if(C->HasField(TEXT("invalid_values"))||!C->TryGetArrayField(TEXT("values"),Values)||Values->IsEmpty()||Values->Num()>64)return false;
+                            for(const auto& Value:*Values)if(Value->Type!=EJson::Number||!FMath::IsFinite(Value->AsNumber()))return false;
+                        }
                     }
                     if(C->HasField(TEXT("missing_zero"))&&C->Values[TEXT("missing_zero")]->Type!=EJson::Boolean)return false;
-                    for(const TCHAR* K:{TEXT("pattern"),TEXT("exclude")})if(C->HasField(K)&&(C->Values[K]->Type!=EJson::String||!ACEVTProfile::IsSupportedPattern(String(C,K))))return false;
+                    if(!ACEUCMLootPresentation::ValidTextMatch(C))return false;
                     if(Field==TEXT("spells")&&(Number(C,TEXT("value"))<0||Number(C,TEXT("value"))>1024||FMath::FloorToDouble(Number(C,TEXT("value")))!=Number(C,TEXT("value"))))return false;
                 }
             }
@@ -283,7 +293,7 @@ void UACEPluginSubsystem::Deinitialize()
     GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnAppraisalObserved.RemoveDynamic(this,&UACEPluginSubsystem::ObserveAppraisal);
     GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnChatMessage.RemoveDynamic(this,&UACEPluginSubsystem::ObservePluginChat);
     GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnVitalsUpdated.RemoveDynamic(this,&UACEPluginSubsystem::ObserveLedgerVitals);
-    if(auto S=ObservedSession.Pin()){S->OnUseDone.Remove(UseDoneHandle);S->OnSpellCastRequested.Remove(SpellCastHandle);S->OnPlayerTell.Remove(TellHandle);S->OnChatMessage.Remove(MetaChatHandle);S->OnCombatFeedback.Remove(CombatFeedbackHandle);}
+    if(auto S=ObservedSession.Pin()){S->OnItemUseRequested.Remove(ItemUseHandle);S->OnUseDone.Remove(UseDoneHandle);S->OnSpellCastRequested.Remove(SpellCastHandle);S->OnPlayerTell.Remove(TellHandle);S->OnChatMessage.Remove(MetaChatHandle);S->OnCombatFeedback.Remove(CombatFeedbackHandle);}
     StopAll(TEXT("Client closing")); ReleaseLocalCosmetics(); FTSTicker::GetCoreTicker().RemoveTicker(Ticker);
     FlushUCMLog();
     FTSTicker::GetCoreTicker().RemoveTicker(DecisionWakeTicker);DecisionWakeTicker.Reset();
@@ -390,6 +400,8 @@ void UACEPluginSubsystem::Discover()
 {
     ++PluginOrderRevision;
     RemoveDesktopDock();
+    TMap<FString,uint64> ChatResume;
+    for(const auto& P:Plugins)ChatResume.Add(P->Id,P->ChatCursor);
     StopAll(TEXT("Reloading plugins")); ReleaseLocalCosmetics(); Plugins.Reset(); Notice.Empty();
     AutoCraft.Reset();
     CompanionSession.Reset();CompanionPlayer=0;CompanionServer.Empty();
@@ -414,16 +426,17 @@ void UACEPluginSubsystem::Discover()
             P->Description = String(M, TEXT("description")); P->Directory = Root / Dir;
             P->LocalService = String(M,TEXT("mode"))==TEXT("local");
             P->Companion = String(M,TEXT("mode"))==TEXT("companion");
+            P->ChatCursor=ChatResume.FindRef(Id);
             const TArray<TSharedPtr<FJsonValue>>* Permissions = nullptr;
             bool Valid = TArray<FString>{TEXT(""),TEXT("automation"),TEXT("companion"),TEXT("local")}.Contains(String(M,TEXT("mode"))) && M->TryGetArrayField(TEXT("permissions"), Permissions);
             if (Permissions) for (const auto& V : *Permissions)
             {
                 const FString Permission = V->AsString();
-                if (Permission != TEXT("admin_content") && Permission != TEXT("terrain") && Permission != TEXT("profiles") && Permission != TEXT("data") && Permission != TEXT("chat") && Permission != TEXT("chat_filter") && Permission != TEXT("state") && Permission != TEXT("ui") && Permission != TEXT("markers") && Permission != TEXT("waypoint") && Permission != TEXT("messaging") && Permission != TEXT("commands") && Permission != TEXT("local_tools") && Permission != TEXT("local_cosmetics") && Permission != TEXT("cast") && Permission != TEXT("combat") && Permission != TEXT("navigation") && Permission != TEXT("inventory") && Permission != TEXT("loot") && Permission != TEXT("say") && Permission != TEXT("fellowship") && Permission != TEXT("confirm")) Valid = false;
+                if (Permission != TEXT("identify") && Permission != TEXT("sound") && Permission != TEXT("admin_content") && Permission != TEXT("terrain") && Permission != TEXT("profiles") && Permission != TEXT("data") && Permission != TEXT("chat") && Permission != TEXT("chat_filter") && Permission != TEXT("state") && Permission != TEXT("ui") && Permission != TEXT("markers") && Permission != TEXT("waypoint") && Permission != TEXT("messaging") && Permission != TEXT("commands") && Permission != TEXT("local_tools") && Permission != TEXT("local_cosmetics") && Permission != TEXT("cast") && Permission != TEXT("combat") && Permission != TEXT("navigation") && Permission != TEXT("inventory") && Permission != TEXT("loot") && Permission != TEXT("say") && Permission != TEXT("fellowship") && Permission != TEXT("confirm")) Valid = false;
                 else P->Permissions.AddUnique(Permission);
             }
             if(P->Companion)for(const auto& Permission:P->Permissions)
-                if(!TArray<FString>{TEXT("admin_content"),TEXT("terrain"),TEXT("chat"),TEXT("chat_filter"),TEXT("state"),TEXT("ui"),TEXT("markers"),TEXT("waypoint"),TEXT("messaging"),TEXT("commands"),TEXT("profiles"),TEXT("data"),TEXT("say")}.Contains(Permission))Valid=false;
+                if(!TArray<FString>{TEXT("identify"),TEXT("sound"),TEXT("admin_content"),TEXT("terrain"),TEXT("chat"),TEXT("chat_filter"),TEXT("state"),TEXT("ui"),TEXT("markers"),TEXT("waypoint"),TEXT("messaging"),TEXT("commands"),TEXT("profiles"),TEXT("data"),TEXT("say")}.Contains(Permission))Valid=false;
             if(P->LocalService)
             {
                 if(Number(M,TEXT("service_api"))!=1 || !P->Permissions.Contains(TEXT("local_cosmetics"))) Valid=false;
@@ -450,7 +463,14 @@ void UACEPluginSubsystem::Discover()
                     P->SnapshotFields.Add(Key);
                 }
             }
-            if (!Valid) { Notice += TEXT("Unsupported permissions, snapshot fields, update interval or local service API: ") + Id + TEXT("\n"); continue; }
+            if(M->HasField(TEXT("chat_history")))Valid&=M->HasTypedField<EJson::Boolean>(TEXT("chat_history"))&&M->TryGetBoolField(TEXT("chat_history"),P->ChatHistory);
+            if(M->HasField(TEXT("chat_subscriptions")))
+            {
+                const TArray<TSharedPtr<FJsonValue>>* Rules=nullptr;FString Error;
+                P->SelectiveChat=true;
+                Valid&=P->Permissions.Contains(TEXT("chat"))&&M->TryGetArrayField(TEXT("chat_subscriptions"),Rules)&&ValidatePluginChatFilters(*Rules,P->ChatSubscriptions,Error);
+            }
+            if (!Valid) { Notice += TEXT("Unsupported permissions, snapshot fields, chat subscriptions, update interval or local service API: ") + Id + TEXT("\n"); continue; }
             // Bind consent to the actual capability set, including after plugin upgrades.
             P->Permissions.Sort();
             const FString Grant = FString::Join(P->Permissions, TEXT(","));
@@ -612,6 +632,7 @@ void UACEPluginSubsystem::Stop(const FString& Id, const FString& Reason, bool Pr
     if (auto P = Find(Id))
     {
         P->ChatFilters.Reset();
+        P->ChatInbox.Empty();P->ChatInboxBytes=0;P->ChatInboxDropped=0;
         const bool OwnsPolicy=P->IsPolicy()&&(P->Running||PolicyPlugin()==P);
         if(OwnsPolicy){RestoreWorldRendering();bTrackRouteMovement=false;RouteMovementSamples.Reset();bRouteMovementOverflow=false;
             FollowMovementSamples.Reset();FollowMovementTarget=0;bFollowMovementOverflow=false;}
@@ -736,7 +757,7 @@ bool UACEPluginSubsystem::SelectUCMSection(const FString& Section, const FString
     if (!ACEUCMProfiles::Save(UserDirectory(), ACEUCMProfiles::ActiveName(), O, Links, Before, Notice, ValidUCMProfile)) return false;
     Stop(P->Id, TEXT("Profile changed; press Start to resume"));
     P->Profile = O; P->ProfileName=ACEUCMProfiles::ActiveName(); P->ProfileLinks = Links; P->ProfileBaseline = ACEUCMProfiles::Copy(O);
-    Notice = TEXT("Selected ") + Section + TEXT(": ") + Name; return true;
+    Notice = TEXT("Selected ") + ACEUCMProfiles::DisplaySection(Section) + TEXT(": ") + Name; return true;
 }
 bool UACEPluginSubsystem::SaveUCMSectionAs(const FString& Section, const FString& Name)
 {
@@ -757,7 +778,7 @@ bool UACEPluginSubsystem::NewUCMSection(const FString& Section, const FString& N
     if(!Defaults||!ValidUCMProfile(Defaults)){Notice=TEXT("Cannot read bundled UCM defaults");return false;}
     if(!ACEUCMProfiles::SaveSectionAs(UserDirectory(),Section,Name,Defaults,Notice))return false;
     if(SelectUCMSection(Section,Name))
-    {Notice=TEXT("Created and selected ")+Section+TEXT(": ")+Name+TEXT(".json. Changes save automatically.");return true;}
+    {Notice=TEXT("Created and selected ")+ACEUCMProfiles::DisplaySection(Section)+TEXT(": ")+Name+TEXT(".json. Changes save automatically.");return true;}
     IFileManager::Get().Delete(*(UserDirectory()/TEXT("Profiles")/Section/(Name+TEXT(".json"))));return false;
 }
 bool UACEPluginSubsystem::DeleteUCMSection(const FString& Section, const FString& Name)
@@ -770,7 +791,7 @@ bool UACEPluginSubsystem::DeleteUCMSection(const FString& Section, const FString
     if(!SaveProfile(P->Id,P->ProfileName,ProfileJson(P->Id),false))return false;
     if(!ACEUCMProfiles::DeleteSection(UserDirectory(),Section,Name,Notice))return false;
     if(!LoadProfile(P->Id,P->ProfileName))return false;
-    Notice=TEXT("Deleted ")+Section+TEXT(": ")+Name+TEXT(". References now use Default; a backup is in Profiles/Deleted.");return true;
+    Notice=TEXT("Deleted ")+ACEUCMProfiles::DisplaySection(Section)+TEXT(": ")+Name+TEXT(". References now use Default; a backup is in Profiles/Deleted.");return true;
 }
 bool UACEPluginSubsystem::InitializeUCMSelection()
 {
