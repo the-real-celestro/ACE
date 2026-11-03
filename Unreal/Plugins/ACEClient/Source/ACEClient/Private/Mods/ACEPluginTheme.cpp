@@ -144,7 +144,11 @@ void UACEPluginSubsystem::TickPluginPreview()
         Only(TEXT("ucm"));PreviewDesktop->Toggle(TEXT("huntledger"));
         PreviewNext=Now+3;break;
     case 10: Shot(TEXT("PluginsTogether.png"));PreviewNext=Now+2;break;
-    case 11: UE_LOG(LogTemp,Display,TEXT("Plugin preview: done"));FPlatformMisc::RequestExit(false);PreviewNext=Now+60;break;
+    case 11: Enable(TEXT("waypoint"));SavePluginWindowPosition(TEXT("waypoint"),FVector2D(290,70));SavePluginWindowPosition(TEXT("waypoint.size"),FVector2D(560,700));Desktop();Only(TEXT("waypoint"));PreviewNext=Now+3;break;
+    case 12: Shot(TEXT("Waypoint.png"));PreviewNext=Now+1.5;break;
+    case 13: Enable(TEXT("ucmmicro"));SavePluginWindowPosition(TEXT("ucmmicro"),FVector2D(290,70));Desktop();Only(TEXT("ucmmicro"));PreviewNext=Now+3;break;
+    case 14: Shot(TEXT("MiniRemote.png"));PreviewNext=Now+1.5;break;
+    case 15: UE_LOG(LogTemp,Display,TEXT("Plugin preview: done"));FPlatformMisc::RequestExit(false);PreviewNext=Now+60;break;
     default: return;
     }
     ++PreviewStep;
