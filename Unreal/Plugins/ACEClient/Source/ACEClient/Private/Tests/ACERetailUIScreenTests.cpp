@@ -2101,6 +2101,49 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             Gameplay->HandleSelectionChanged(Client->GetSelectedObject());
             Gameplay->ApplyCombatMode(int32(ACECombatMode::Melee));
             Gameplay->bCombatAutoRepeat=false;Gameplay->RequestedAttackPower=.5f;
+            {
+                TGuardValue<uint32> Options(Session.CharacterOptions1,Session.CharacterOptions1 & ~0x1000u);
+                const auto SavedSkills=Gameplay->LastVitals.Skills;
+                Session.PlayerVitals.Skills.RemoveAll([](const FACESkillInfo& S){return S.SkillId==50;});
+                FACESkillInfo Recklessness;Recklessness.SkillId=50;
+                const int32 SkillIndex=Session.PlayerVitals.Skills.Add(Recklessness);
+                const auto Band=Manager->FindElementByName(TEXT("basic_recklessness_fill"));
+                if(TestTrue(TEXT("Retail Recklessness art exists"),Band.IsValid()))
+                {
+                    Manager->BringFloatyToFront(Manager->FindElementByName(TEXT("RootGameplay_FloatyCombatPanel_Field")));
+                    for(float Scale:{.75f,1.f,2.f})
+                    {
+                        for(int32 Training:{1,2,3})
+                        {
+                            Session.PlayerVitals.Skills[SkillIndex].AdvancementClass=Training;
+                            Gameplay->LastVitals.Skills=Session.PlayerVitals.Skills;
+                            Gameplay->RefreshCombatPanelOverlays();
+                            CaptureScreen(FString::Printf(TEXT("Recklessness_%d_%g"),Training,Scale),Scale);
+                            const auto* Paint=Canvas->PaintStates.Find(Band->InstanceId);
+                            if(Training<2)
+                            {
+                                TestTrue(TEXT("Untrained Recklessness has no visible art"),!Paint||Paint->Visibility==ESlateVisibility::Collapsed);
+                                continue;
+                            }
+                            if(TestNotNull(TEXT("Recklessness has a rendered paint state"),Paint))
+                            {
+                                TestEqual(TEXT("Only trained and specialized characters see Recklessness"),
+                                    Paint->Visibility!=ESlateVisibility::Collapsed,Training>=2);
+                                if(Training>=2)
+                                {
+                                    TestEqual(TEXT("Idle charge does not clip the Recklessness range"),Paint->W,Band->Width);
+                                    TestTrue(TEXT("Idle Recklessness uses its DAT texture"),Paint->Texture.IsValid());
+                                    const auto Meter=Band->Parent.Pin();
+                                    TestTrue(TEXT("Retail range starts at ten percent"),FMath::IsNearlyEqual(float(Band->X)/Meter->Width,.1f,.01f));
+                                    TestTrue(TEXT("Retail range ends at ninety percent"),FMath::IsNearlyEqual(float(Band->X+Band->Width)/Meter->Width,.9f,.01f));
+                                }
+                            }
+                        }
+                    }
+                }
+                Session.PlayerVitals=SavedVitals;Gameplay->LastVitals.Skills=SavedSkills;
+                Gameplay->RefreshCombatPanelOverlays();CaptureScreen(TEXT("RecklessnessRestored"));
+            }
             Session.CachedC2SPackets.Reset();
             Gameplay->BeginCombatPowerCharge(ACEAttackHeight::Medium,true);
             Gameplay->CombatPowerBuildStartTime=FPlatformTime::Seconds()-2.;
@@ -2755,6 +2798,10 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 Gameplay->SpellBarSlotNumIcons[I]->GetVisibility()==ESlateVisibility::Collapsed);
         }
         Favorites={1,2,3}; Gameplay->RefreshSpellHotbarOverlays();
+        CaptureScreen(TEXT("GameplayNumberedSpellTooltips"));
+        FString SpellTooltip;const auto SpellGeometry=Gameplay->SpellBarIcons[0]->GetCachedGeometry();
+        TestTrue(TEXT("Numbered spell icon exposes its name through canvas hover"),Gameplay->GetStatTooltipAt(SpellGeometry.LocalToAbsolute(SpellGeometry.GetLocalSize()*.5),SpellTooltip));
+        TestTrue(TEXT("Numbered spell tooltip identifies the spell"),SpellTooltip.Contains(TEXT("Strength Other I")));
 		Gameplay->StepCombatSpellSelection(1, false, false);
 		TestEqual(TEXT("Next selection moves from innate to first favorite"), Gameplay->SelectedCombatSpellSlot, 0);
 		Gameplay->StepCombatSpellSelection(-1, false, false);
@@ -3350,6 +3397,21 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         Session.TradePartnerGuid=Partner.Guid;
         Session.TradeSelfItems={Device.Guid}; Session.TradePartnerItems={Item.Guid};
         Gameplay->ShowTradePanel(Partner.Guid); CaptureScreen(TEXT("GameplayTrade"));
+        Gameplay->SelectedPackGuid=Player.Guid;
+        Gameplay->HandleTradeStateChanged(ACEGameEvent::AddToTrade);
+        const int32 OfferedSlot=Gameplay->InventorySlotGuids.IndexOfByKey(Device.Guid);
+        if (TestTrue(TEXT("Offered item remains visible in the backpack"),Gameplay->InventorySlots.IsValidIndex(OfferedSlot)))
+        {
+            auto* Slot=Gameplay->InventorySlots[OfferedSlot].Get();
+            TestTrue(TEXT("Trade event marks the offered inventory icon"),Slot->Background.GetResourceObject()==
+                Resources->ResolveItemForeground(Device.IconId,Device.IconOverlayId,Device.UiEffects,true));
+            Session.TradeSelfItems.Reset();
+            Gameplay->HandleTradeStateChanged(ACEGameEvent::ResetTrade);
+            TestTrue(TEXT("Clearing trade removes the offered mark without another inventory update"),Slot->Background.GetResourceObject()==
+                Resources->ResolveItemForeground(Device.IconId,Device.IconOverlayId,Device.UiEffects,false));
+            Session.TradeSelfItems={Device.Guid};
+            Gameplay->HandleTradeStateChanged(ACEGameEvent::AddToTrade);
+        }
         TFunction<void()> CheckTradeAndToolbarDrops=[&]()
         {
             const FVector2D SavedCursor=FSlateApplication::Get().GetCursorPos();

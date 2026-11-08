@@ -37,6 +37,8 @@ struct FACELoginSettings
 	bool bAutoUpdate = false;
 	/** Lobby account sort: "az" (default), "recent", or "custom" (the saved order). */
 	FString AccountSort = TEXT("az");
+	/** Linux opt-in: local passwords are readable by this OS user, not encrypted. */
+	bool bSavePasswordsLocally = false;
 	void MigrateLegacy();
 	const FACELoginServer* SelectedServer() const;
 	void RemoveServer(const FString& Id);

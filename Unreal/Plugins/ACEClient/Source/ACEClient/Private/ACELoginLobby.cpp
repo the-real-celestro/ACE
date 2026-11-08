@@ -1248,6 +1248,8 @@ void UACELoginWidget::NativeConstruct()
 	Profile.bAutoUpdate=false;
 #endif
 	AutoUpdateCheckBox->SetIsChecked(Profile.bAutoUpdate);
+	if (RememberPasswordsCheckBox) RememberPasswordsCheckBox->SetIsChecked(Profile.bSavePasswordsLocally);
+	if (RememberPasswordsMark) RememberPasswordsMark->SetRenderOpacity(Profile.bSavePasswordsLocally?1.f:0.f);
 	if (Updater) { Updater->SetAutoUpdateEnabled(Profile.bAutoUpdate); Updater->Check(true); }
 	RefreshUpdateControls();
 #if !UE_BUILD_SHIPPING
@@ -1626,6 +1628,15 @@ void UACELoginWidget::OnAccountSearchChanged(const FText&)
 void UACELoginWidget::OnAccountSearchCommitted(const FText&, ETextCommit::Type CommitMethod)
 {
 	if (CommitMethod==ETextCommit::OnEnter && IsLobbyKeyboardActive()) RunAction(TEXT("launch"));
+}
+
+void UACELoginWidget::OnRememberPasswordsChanged(bool bChecked)
+{
+	if (RememberPasswordsMark) RememberPasswordsMark->SetRenderOpacity(bChecked?1.f:0.f);
+	if (Profile.bSavePasswordsLocally==bChecked) return;
+	Profile.bSavePasswordsLocally=bChecked;
+	bLoginEntriesDirty=true;
+	SaveLoginEntries();
 }
 
 void UACELoginWidget::OnAutoUpdateChanged(bool bChecked)

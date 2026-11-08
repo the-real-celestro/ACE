@@ -13,7 +13,39 @@ then Start. The example's activities start off. It has its own profiles and does
 not edit the built-in UCM configuration. The machine-readable action/field catalog is
 [`ClientMods/api.json`](../../ClientMods/api.json).
 
+## Find the functionality you need
+
+- Installation, enabled limits and execution: [lifecycle](#lifecycle-and-ownership).
+- Character, inventory, equipment and action results: [snapshots and permissions](#permissions-and-snapshots).
+- Item classification: [Loot matching](LootMatching.md), including appraisal and resumable evaluation.
+- Trackers that read server messages: [chat delivery and filters](#read-and-filter-chat).
+- Custom PNGs, gauges, timers, animation and controls: [native UI](#native-ui) and [Graphics Gallery](Examples/graphics_gallery/main.lua).
+- Color pickers, scale, offsets and container item selection: [Appearance Controls](Examples/appearance_controls/main.lua).
+- Target health, effects and opaque/translucent nameplates: [target data and world plates](#target-data-and-object-attached-plates).
+- Casting, combat, equipment, transfers and navigation: [game intents](#game-intents) and [built-in policies](#reuse-or-replace-the-built-in-policies).
+- Configuration, imports, outgoing chat and sounds: [services](#services-and-profiles).
+- Terrain navigation overlays: [terrain API](#optional-terrain-overlays-api-2).
+- Administrative content tools: [content service](#administrative-content-service-api-2).
+- Local appearance conversion: the separate [Local Cosmetics service](LocalCosmetics.md).
+
 ## Lifecycle and ownership
+
+The host discovers every valid installed plugin; disabled plugins no longer hide
+later folders. **Plugin Manager > Enabled plugin limit** defaults to **16**.
+Players may raise it or set **0** for unlimited. Only enabled plugins count;
+disabled plugins take no slot. An enabled but stopped plugin still counts, as
+does an enabled UI-only tool. Closing a window does not disable its plugin.
+Disabling frees a slot immediately. The limit is saved across restarts, and the
+manager rejects lowering it below the current enabled count without stopping
+any plugin. Bundled and third-party plugins use the same allowance.
+
+This is a host preference, not a manifest property or Lua setter. Plugins cannot
+raise the limit, enable themselves, or grant permissions. `snapshot.plugins`
+lists discovered IDs with `{enabled, running}`; request `plugins` explicitly when
+using `snapshot_fields`. This map does not include the configured limit or other
+plugins' private data. The machine-readable catalog's `host.plugin_limit`
+describes the setting; it is not a live settings query. Increasing this allowance
+does not change VM memory/work quotas, world-plate limits, or automation ownership.
 
 Use `"api":2` with either `"mode":"automation"` or `"mode":"companion"`.
 Automation explicitly starts, owns game actions, and stops on logout/character
@@ -51,8 +83,9 @@ target scans, and vendor data. With no list, the existing full snapshot remains
 available. `api`, `time`, `unix_time`, `player`, `server`, `state`, `error`,
 `events`, and `capabilities` are always retained. Permissions still apply;
 listing a field never grants access. Character qualities, `character_name`,
-`level`, and action results require `data`. Inventory and other full automation
-fields currently build the shared full snapshot before filtering; use only
+`level`, and action results require `data`. Inventory-only observers use the
+cached inventory path described below. Other full automation fields can build
+the shared full snapshot before filtering; use only
 the fields your observer needs to reduce native work and Lua allocations.
 
 ## Plugin title and toolbar icon
@@ -321,6 +354,23 @@ never change the selected creature's yellow mesh tint or selection settings.
 For solid text with a softer backing, keep `opacity=1` and lower
 `background_opacity`. Set both to 1 for an opaque nameplate.
 
+Plate colors accept `green`, `yellow`, `red`, `blue`, `white`, `purple`, `black`,
+`transparent`, `#RRGGBB`, or `#RRGGBBAA` (sRGB RGB, linear alpha). `color` styles
+the name and brackets; `text_color` styles role, level, vital numbers and timers.
+`background_color` styles the backing, multiplied by `background_opacity`.
+`health_color`, `stamina_color`, and `mana_color` style their respective bar fills.
+Omitting these fields preserves the existing palette. Overall `opacity` also
+multiplies each chosen color's alpha; use `FF` alpha for fully opaque content.
+
+`scale` is a uniform multiplier from 0.25 to 4 (default 1). `offset_x` and
+`offset_y` are finite plate-local logical pixels from -2,048 to 2,048 (default 0):
+positive X moves right and positive Y moves down in the camera-facing plane.
+Offsets scale with the plate; the whole plate, including brackets, moves together.
+Optional `vr_scale`, `vr_offset_x`, and `vr_offset_y` override individual values
+in VR; each omitted override inherits the corresponding desktop value. These
+controls affect the plugin's plate only, never the actor or its selection tint.
+Use native `type="color"` and slider controls below to expose addon preferences.
+
 An omitted `world_plates` retains this plugin's list; `{}` clears it. A supplied
 list atomically replaces it. `selection_only` defaults to true, hiding the old
 target immediately when selection changes; set false for an additional tracked
@@ -403,7 +453,7 @@ running, the first eligible plugin supplies its settings. Only the stock recharg
 policy runs then; the author's stopped callback is not invoked.
 
 The sandbox also supplies `lootmatch`, `spellindex`, `regexmatch`, `regextest`,
-`string.contains`, `ucmcommand` (legacy alias `vtcommand`) and `workavailable`.
+`string.contains`, `string.findplain`, `ucmcommand` (legacy alias `vtcommand`) and `workavailable`.
 These are the same bounded helpers used by UCM. A command returned by
 `ucmcommand()` is a policy command record, not a host intent: pass it to a
 policy-command request or process the record in your own Lua code.
@@ -420,6 +470,50 @@ blocked by skill, supplies or retry delay, so a policy can apply its separate
 buff margin and report unavailable families. Groups retain every tier and
 reference the original records; they do not choose which spell to cast.
 Indexing remains subject to the per-callback native work and memory limits.
+
+The optional sixth `components_required` argument defaults to true. Pass
+`s.components_required ~= false` to honor an explicit server exemption; do not
+infer an exemption from missing component data. `unavailable_until` is a table
+keyed by numeric spell IDs with monotonic retry times. Indexing accepts at most
+16,384 spells and 4,096 inventory entries, with 131,072 combined native visits per
+callback. `supplied[id]` is a boolean, not an inventory count. Eligibility is not
+a guarantee of line of sight, target validity, or server acceptance.
+
+## Sandbox helper functions
+
+These helpers are available without loading a module or enabling UCM. They run
+inside the same quota as the plugin; they do not grant game-action permissions.
+
+- `lootmatch(rule, item, snapshot, scan)` evaluates one rule. Returns **true**,
+  **false**, **nil** (needs assessment data), or **"pending"** (resume next callback).
+  Always pass a mutable `scan` table and compare explicitly with `true` before
+  acting. See the [full signature, conditions and example](LootMatching.md).
+- `string.contains(text, value)` returns a case-sensitive literal-match boolean.
+  Text is limited to 4,096 UTF-8 bytes and the search value to 256 bytes.
+- `string.findplain(text, value, start)` returns the first literal match's one-based
+  byte position, or nil. `start` defaults to 1 and is clamped to at least 1.
+  Text/search limits are 16,384/8,192 UTF-8 bytes. This returns one index, not the
+  start/end pair of the standard Lua `string.find` function.
+- `regextest(text, pattern)` returns a boolean; `regexmatch(text, pattern)` returns
+  a capture object or nil. Capture keys are strings, including `"0"` for the whole
+  match. Text/pattern limits are 16,384/8,192 UTF-8 bytes. Use the supported bounded
+  [VT regex subset](VirindiCompatibility.md); invalid expressions and exceeding
+  the cumulative 20 ms regex allowance raise an error and stop the plugin.
+- `ucmcommand(text)` compiles up to 4,096 UTF-8 bytes into a policy command record;
+  `vtcommand` is the compatibility alias. It does not execute the command.
+  Unsupported commands raise an error. The [policy service](#services-and-profiles)
+  provides the corresponding command-queue bridge.
+- `workavailable()` becomes false at 200,000 Lua instructions or 5 ms of cumulative
+  regex work. Preserve your cursor and return to resume on the next callback;
+  spinning until it becomes true cannot work. It never extends the hard limits.
+- `spellindex(...)`: the [indexing helper above](#reuse-or-replace-the-built-in-policies)
+  returns four tables and leaves the decision of what to cast to your policy.
+
+The VM exposes base functions plus `table`, `math`, `utf8`, and bounded `string`
+operations. There is no `require`, `io`, `os`, `debug`, coroutine API, dynamic
+loading, `pcall`/`xpcall`, metatable access, `collectgarbage`, or `print`. Standard
+Lua pattern functions `string.find`, `match`, `gmatch`, `gsub`, and `dump` are
+removed. Use the helpers above and the notice/log services for output.
 
 ## Permissions and snapshots
 
@@ -462,6 +556,19 @@ transfer eligibility, vendor room/price and inventory failure fields are include
 as well. `identified=false` means a property may be unknown; it is not evidence
 that the property is zero. Automation appraisal uses inventory permission;
 companions use the narrower identify permission above.
+
+Assessed inventory entries expose `can_wield` and, when a requirement fails,
+`wield_reason`. The reason identifies the requirement slot, type/property, required
+value and observed value. Eligibility checks all four wield-requirement triplets,
+including boolean, creature-type and ILT Int64Stat (13) checks used by custom servers.
+For type 13, the property ID refers to a 64-bit character quality, not an integer
+quality or skill. When that count has not been replicated, `can_wield=true` permits
+an equip attempt and `wield_requires_server_check=true` indicates that the server
+must validate the missing count. A received zero is known and checked normally;
+other known unmet requirements still prevent the attempt. Already-worn
+equipment is usable in the snapshot; sending a new equip action rechecks current
+requirements. Server responses remain authoritative. `identified=true` alone
+does not mean an item meets requirements or has a usable combat loadout.
 
 An API 2 companion requesting only `inventory`, `inventory_revision` and
 `appraisal_revision` through `snapshot_fields` builds the cached inventory section
@@ -579,11 +686,18 @@ ui = {
 }
 ```
 
-Controls: text, button, checkbox, slider, number, input, select, progress, icon,
-image, row, column, section, tabs, overlay and frame. Containers use `children`; tabs use each
+Controls: text, button, checkbox, slider, number, input, select, color, progress, icon,
+item_icon, image, row, column, section, tabs, overlay and frame. Containers use `children`; tabs use each
 child's text as its tab title. Sections have `expanded`; their expansion state
 and selected tab are retained while the window is open. Common options are text,
 tooltip, enabled, padding, size (font/icon), bold and color (green/red/yellow/blue).
+The player's **Lua Plugin Text Scale** setting applies to native labels, button
+captions and editable text, including already open third-party windows. It is
+independent of chat text scale. Do not multiply font sizes by chat scale yourself.
+Prefer flexible widths and wrapping; fixed-size panels must allow for larger
+text. The same Lua UI runs on desktop, VR/Quest and Android phones/tablets, but
+test touch targets and layout at each intended screen size.
+
 Rows normally divide their width equally. Use `compact=true` on a row to size
 all its children to their content, or `auto_width=true` on individual children
 to reserve just their natural width while siblings fill the remainder. Row
@@ -601,10 +715,24 @@ slider accept min/max/step; native code clamps/snaps the returned value.
 For progress controls, `color` sets the fill and `text_color` sets the label
 (light text by default).
 
+`type="color"` provides a swatch, editable hex value, and an expandable color
+wheel with brightness and opacity sliders. `value` is required and accepts a
+named color or `#RRGGBB`/`#RRGGBBAA`; `expanded=true` initially opens the wheel.
+Changes emit `{type="change", id=..., value="#RRGGBBAA"}` using uppercase hex,
+including alpha. Malformed values are rejected. Handle the event and return
+the new value, just like other controls; save it with `state` (requires `state`
+permission) or a profile to persist it. The picker requires `ui` permission.
+
+```lua
+{id="tint", type="color", text="Nameplate color", value="#FFC040FF"}
+```
+
 `width` and `height` reserve fixed logical dimensions (0–2,048), including on
 columns and row children. Text accepts `align="left"`, `"center"`, or `"right"`.
 `overlay` draws children in order in the same space; `frame` adds a colored backing
 (default `#00000080`). Colors also accept `#RRGGBB` and `#RRGGBBAA`.
+The panel palette includes green, red, yellow, blue, purple, white, black and
+transparent. Hex RGB is sRGB; alpha is linear.
 Any frame, image, text or progress control may set `clickable=true` to emit the
 normal click event, or use the same action fields as buttons.
 
@@ -613,6 +741,15 @@ restores it during Quick-show immediately, without waiting for Lua. The same sta
 is available as `window_chrome_hidden` in the snapshot.
 
 Custom images preserve their source aspect ratio inside their width/height box.
+All controls and containers accept `scale` (0.25–4, default 1), `offset_x` and
+`offset_y` (-2,048–2,048, default 0). These are render transforms: scale and
+rotation are applied around the control's center, then offsets move it in its
+parent's logical pixels (right/down positive). Child controls and their hit
+targets transform together. Nesting a transformed column scales its whole panel
+content. Render transforms do not resize the window or reserve extra layout
+space; provide sufficient surrounding space and avoid overlapping controls or
+clipping at panel edges. Use width/height/padding for layout allocation. These
+values multiply the normal UI scale and coexist with Lua Plugin Text Scale.
 All controls accept `opacity` (0–1), `rotation` (degrees, -360–360), and
 `effect="blink"`, `"pulse"`, or `"rotate"`. `period` is 0.1–60 seconds;
 `min_opacity` defaults to 0.2 for blink/pulse. Native Slate animation advances each
@@ -623,7 +760,7 @@ materials. See [Graphics Gallery](Examples/graphics_gallery/main.lua) for layere
 artwork, a vital gauge, a countdown, native effects and clickable controls.
 
 Buttons default to `{type="click",id=...}` events. Optional `action` is event,
-select, waypoint or command; a command button uses `command="/acueucm ..."`. Native
+select, select_item, waypoint or command; a command button uses `command="/acueucm ..."`. Native
 buttons revalidate their current target at click time. Inputs and other editable
 controls emit `{type="change",id=...,value=...}`. Input commits on Enter/focus loss;
 `live=true` also emits while typing. Input is capped at 1,024 characters. The host
@@ -633,6 +770,31 @@ Use stable IDs: removing a control or changing its type replaces that control.
 Focused text edits are preserved; an open select keeps its current options until
 it closes. Handle events and return the updated value yourself. Event delivery
 does not automatically save configuration.
+
+`action="select_item", target=item.id` selects a known item in your main pack,
+a nested owned pack, or the currently open external container (chest/corpse).
+Optional `container=item.container` verifies its **direct** containing object;
+IDs are positive unsigned 32-bit numbers, not inventory slot indexes or WCIDs.
+The current server contents list takes precedence over stale object metadata.
+Missing items, closed external containers, stale membership and containment
+cycles are rejected. It requires API 2 and `ui` permission; no inventory/action
+ownership is needed. Selection updates the existing inventory selection and
+highlight; it does not open another pack, scroll its panel, use, equip, loot,
+move or attack. `action="select"` on a UI button or companion also supports
+accessible container items and retains its world-target behavior.
+
+```lua
+{id="pick", type="button", text="Select item", action="select_item",
+ target=item.id, container=item.container}
+```
+
+A click reports `{type="click",id="pick",ok=...,error=...}`. Companions and
+API 2 automation plugins can also return `{action="select_item",target=id,
+container=container_id}` directly; failures appear in `s.error`. Prefer explicit
+user clicks over reselecting every update. Read current inventory via the `data`
+permission and `snapshot_fields={"inventory"}`; never save session-local GUIDs.
+See [Appearance Controls](Examples/appearance_controls/main.lua) for saved color,
+scale and offset settings applied to panels and nameplates, plus item selection.
 
 `icon` uses a numeric DAT `icon` ID (available on inventory/spell records).
 `image` uses `asset="my_icon.png"` from your own plugin's `images` folder. No
@@ -734,7 +896,7 @@ PublicAPI regression creates a third-party ID with UCM disabled, verifies full
 snapshots, target-death wakes, native route geometry, force buffs, failure
 isolation, state restoration, nested UI events, profile archive/permission checks,
 and the shipped policy module. Existing UCM/VM/companion regressions remain in use.
-Source is shared with Windows/Linux/VR/Quest. Platform-specific live gameplay and
+Source is shared with Windows/Linux/VR/Quest and Android phones/tablets. Platform-specific live gameplay and
 server behavior still require testing; an editor automation pass does not prove
 all plugins or servers behave identically.
 

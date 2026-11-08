@@ -3831,7 +3831,7 @@ bool UACEUIGameplayBinder::ShouldPreserveShortcutSelection(int32 Guid) const
 
 void UACEUIGameplayBinder::ActivateHotbarSlot(int32 SlotIndex)
 {
-	if (!Client || SlotIndex < 0 || SlotIndex >= 10)
+	if (!Client || SlotIndex < 0 || SlotIndex >= 12)
 	{
 		return;
 	}
@@ -3842,7 +3842,7 @@ void UACEUIGameplayBinder::ActivateHotbarSlot(int32 SlotIndex)
 	const bool bSpellBarOpen = bMagic && CombatRoot.IsValid() && CombatRoot->bVisible;
 	if (bSpellBarOpen)
 	{
-		// Scrolling changes the view, never the first ten key bindings.
+		// Scrolling changes the view, never the twelve spell key bindings.
 		const TArray<int32> Bar = Client->GetSpellBar(Client->GetActiveSpellBar());
 		const int32 SpellId = Bar.IsValidIndex(SlotIndex) ? Bar[SlotIndex] : 0;
 		if (SpellId != 0)
@@ -3856,7 +3856,7 @@ void UACEUIGameplayBinder::ActivateHotbarSlot(int32 SlotIndex)
 		}
 		return;
 	}
-	UseShortcutSlot(SlotIndex + 1);
+	if (SlotIndex < 10) UseShortcutSlot(SlotIndex + 1);
 }
 
 void UACEUIGameplayBinder::SelectInventoryGuid(int32 Guid)
@@ -8120,6 +8120,16 @@ bool UACEUIGameplayBinder::IsPointerOverStatList(FVector2D CanvasLocalPos) const
 bool UACEUIGameplayBinder::GetStatTooltipAt(FVector2D Absolute, FString& OutText, uint32* OutTemplateId) const
 {
 	if (OutTemplateId) *OutTemplateId = UACEHoverTooltipWidget::OptionsTemplate;
+    if (Canvas) for (const auto& Entry : SpellBarIcons)
+    {
+        const auto* Icon=Entry.Get();
+        if (Icon && Icon->GetVisibility()!=ESlateVisibility::Collapsed && Canvas->IsWidgetExposedAt(Icon,Absolute))
+        {
+            OutText=Icon->GetToolTipText().ToString();
+            if (OutTemplateId) *OutTemplateId=UACEHoverTooltipWidget::ObjectTemplate;
+            return !OutText.IsEmpty();
+        }
+    }
 	if (GetMapTooltipAt(Absolute, OutText))
 	{
 		if (OutTemplateId) *OutTemplateId = UACEHoverTooltipWidget::MapTemplate;
@@ -8193,6 +8203,7 @@ bool UACEUIGameplayBinder::ScrollStatList(float WheelDelta)
 
 bool UACEUIGameplayBinder::IsChatEntryFocused() const
 {
+	if (!ACEInputBindings::IsTextEntryFocused()) return false;
 	if (StackAmountEntry && StackAmountEntry->HasKeyboardFocus()) return true;
 	// This gate also suppresses movement keys while editing other HUD text.
 	if (SquelchNameEntry && SquelchNameEntry->HasKeyboardFocus()) return true;
@@ -12043,6 +12054,7 @@ void UACEUIGameplayBinder::SetItemSlotForeground(UBorder* Border, const FACEWorl
     if (!Item) { SetIconDid(Border,0); return; }
     // Retail marks salvage offers with the same trade-state overlay as sale offers.
     const bool bOffered = SalvageQueueGuids.Contains(Item->Guid)
+        || (Client && Client->GetTradeSelfItems().Contains(Item->Guid))
         || (OpenVendorGuid != 0 && VendorSellCart.ContainsByPredicate(
             [Item](const TPair<int32,int32>& Entry) { return Entry.Value == Item->Guid; }));
     UTexture2D* Texture = Canvas->GetResourceResolver()->ResolveItemForeground(Item->IconId,Item->IconOverlayId,Item->UiEffects,bOffered,
@@ -12659,6 +12671,9 @@ uint64 UACEUIGameplayBinder::HashInventoryOverlayState() const
 	{
 		return H;
 	}
+	const auto& TradeItems = Client->GetTradeSelfItems();
+	H = HashCombine(H, GetTypeHash(TradeItems.Num()));
+	for (int32 Guid : TradeItems) H = HashCombine(H, GetTypeHash(Guid));
 	for (int32 S = 0; S < 18; ++S) H = HashCombine(H, GetTypeHash(Client->GetShortcutObject(S)));
 	const FACEPlayerVitals Vitals = Client->GetPlayerVitals();
 	int32 Encumbrance = 0;
@@ -15259,6 +15274,7 @@ void UACEUIGameplayBinder::HandleVendorOpened(int32 Guid)
 
 void UACEUIGameplayBinder::HandleTradeStateChanged(int32 EventType)
 {
+	RefreshInventoryOverlays();
 	using namespace ACEGameEvent;
 	if (EventType == OpenTrade || EventType == RegisterTrade)
 	{

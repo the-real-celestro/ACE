@@ -1683,6 +1683,18 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		? FMath::Clamp(PendingMouseTurnDegrees / FMath::Max(TurnRateDegPerSec*DeltaTime, KINDA_SMALL_NUMBER),-1.5f,1.5f) : T;
 	MouseTurnReportSeconds += DeltaTime;
 	const bool bMouseTurnReport = (bMouseTurnSend || bMouseTurnSent) && MouseTurnReportSeconds >= .5f;
+	// Mouse events are sparse at low speeds. Bridge short gaps in footwork only;
+	// heading prediction and outgoing raw input still stop immediately.
+	if (bMouseFacing && !bVR && !bJumpAirborne)
+	{
+		if (!FMath::IsNearlyZero(PendingMouseTurnDegrees))
+		{
+			MouseTurnAnimationIdle=0.f;
+			MouseTurnAnimationRate=FMath::Clamp(PendingMouseTurnDegrees/FMath::Max(TurnRateDegPerSec*DeltaTime,KINDA_SMALL_NUMBER),-1.5f,1.5f)*1.5f;
+		}
+		else if ((MouseTurnAnimationIdle+=DeltaTime)>.1f) MouseTurnAnimationRate=0.f;
+	}
+	else {MouseTurnAnimationIdle=0.f;MouseTurnAnimationRate=0.f;}
 	auto LocalAnimationRate = [&](float Forward, float Strafe)
 	{
 		if (bUniformVRMovement)
@@ -1710,7 +1722,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				&& !bServerMoveToActive && !bPluginDrivingMovement && !bPluginFastBuffMovement);
 			// Retail StopObjectCompletely and ordinary key-up both return through
 			// the motion table. Stop/chat suppress input, not the unfinished step.
-			App->SetTurnInput(bVR || bJumpAirborne ? 0.f : ReportedTurn*((bMouseFacing||bRunning)?1.5f:1.f));
+			App->SetTurnInput(bVR || bJumpAirborne ? 0.f : bMouseFacing ? MouseTurnAnimationRate : ReportedTurn*(bRunning?1.5f:1.f));
 			if (!bJumpAirborne && !FMath::IsNearlyZero(F)
 				&& (FMath::Sign(F) != FMath::Sign(ForwardSent) || bForceMovementResend))
 			{
@@ -7651,6 +7663,12 @@ void AACEPlayerController::BeginUseApproach(int32 TargetGuid, float DistanceAc, 
 		return;
 	}
 	bManualMovementCommandSent = false; // The use approach now owns the pending stop.
+	// The interaction takes over the previous mouse turn. Its delayed half-
+	// second release must not become a new MoveToState after Use/Give: ACE treats
+	// that as manual cancellation, which can strand a custom reward's callback.
+	bMouseTurnSent = false;
+	MouseTurnReportSeconds = 0.f;
+	PendingMouseTurnDegrees = 0.f;
 	if (bServerMoveToActive && ServerMoveToTargetGuid == TargetGuid)
 	{
 		// A repeated double-click must not toggle the object or reset its charge

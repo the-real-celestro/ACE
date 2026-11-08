@@ -413,7 +413,6 @@ void UACEPluginSubsystem::Discover()
         TArray<FString> Dirs; IFileManager::Get().FindFiles(Dirs, *(Root / TEXT("*")), false, true); Dirs.Sort();
         for (const FString& Dir : Dirs)
         {
-            if (Plugins.Num() >= 16) break;
             auto M = Read(Root / Dir / TEXT("plugin.json"));
             const FString Id = String(M, TEXT("id"));
             if (!M || !SafeName(Id) || Find(Id) || (Number(M, TEXT("api")) != 1 && Number(M, TEXT("api")) != 2))
@@ -485,13 +484,59 @@ void UACEPluginSubsystem::Discover()
             else if(IFileManager::Get().FileExists(*(UserDirectory()/TEXT("Profiles")/Id/(Profile+TEXT(".json")))))LoadProfile(Id, Profile);
         }
     }
+    // Discovery must include disabled plugins too. Apply the allowance only to
+    // enabled entries, preferring saved choices over newly installed defaults.
+    const int32 Limit=GetEnabledPluginLimit();
+    int32 EnabledCount=0;
+    for(bool SavedChoice:{true,false})for(const auto& P:Plugins)
+    {
+        if(!P->Enabled || Settings->HasField(P->Id)!=SavedChoice)continue;
+        if(Limit==0 || EnabledCount<Limit){++EnabledCount;continue;}
+        P->Enabled=false;
+        P->Status=TEXT("Enabled plugin limit reached. Raise the limit in Plugin Manager to enable this plugin.");
+        Notice+=P->Name+TEXT(": ")+P->Status+TEXT("\n");
+        // Keep the saved permission grant so Refresh can restore the choice
+        // after the user raises the limit. No script has started at this point.
+    }
 }
 bool UACEPluginSubsystem::ValidatePublicProfile(const TSharedPtr<FJsonObject>& Profile) const { return Profile&&ValidUCMProfile(Profile)&&ValidItemToolsProfile(Profile); }
 void UACEPluginSubsystem::SaveSettings() { if (!Write(UserDirectory() / TEXT("settings.json"), Settings)) Notice = TEXT("Could not save plugin preferences"); }
+int32 UACEPluginSubsystem::GetEnabledPluginCount() const
+{
+    int32 Count=0;
+    for(const auto& P:Plugins)if(P->Enabled)++Count;
+    return Count;
+}
+int32 UACEPluginSubsystem::GetEnabledPluginLimit() const
+{
+    const double Limit=Number(Settings,TEXT("plugins.enabled_limit"),16);
+    return Limit>=0 && Limit<=MAX_int32 && FMath::FloorToDouble(Limit)==Limit ? int32(Limit) : 16;
+}
+bool UACEPluginSubsystem::SetEnabledPluginLimit(int32 Limit)
+{
+    Notice.Empty();
+    if(Limit<0){Notice=TEXT("Use 0 for unlimited, or a positive enabled plugin limit.");return false;}
+    const int32 Count=GetEnabledPluginCount();
+    if(Limit!=0 && Limit<Count)
+    {
+        Notice=FString::Printf(TEXT("%d plugins are enabled. Disable plugins first, or choose a limit of at least %d (0 means unlimited)."),Count,Count);
+        return false;
+    }
+    Settings->SetNumberField(TEXT("plugins.enabled_limit"),Limit);
+    SaveSettings();
+    return Notice.IsEmpty();
+}
 void UACEPluginSubsystem::SetEnabled(const FString& Id, bool Enabled)
 {
     if (auto P = Find(Id))
     {
+        Notice.Empty();
+        const int32 Limit=GetEnabledPluginLimit();
+        if(Enabled && !P->Enabled && Limit!=0 && GetEnabledPluginCount()>=Limit)
+        {
+            Notice=FString::Printf(TEXT("Enabled plugin limit (%d) reached. Disable another plugin or raise the limit in Plugin Manager. Disabled plugins do not count."),Limit);
+            return;
+        }
         Stop(Id); P->Enabled = Enabled;
         if(P->LocalService) P->LocalServiceStopped=false;
         if(P->Companion) P->CompanionStopped=false;
@@ -1674,7 +1719,7 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
     const FString Status = String(I, TEXT("status")); if (!Status.IsEmpty()) P.Status = Status;
     if(I->HasTypedField<EJson::String>(TEXT("targeting_status")))P.TargetingStatus=String(I,TEXT("targeting_status"));
     const FString Action = String(I, TEXT("action"));
-    if(P.Api>=2 && (Action==TEXT("waypoint")||Action==TEXT("command")))return;
+    if(P.Api>=2 && (Action==TEXT("waypoint")||Action==TEXT("command")||Action==TEXT("select_item")))return;
     if(P.Id==TEXT("itemtools"))ItemToolsProgress=MakeShared<FJsonObject>(*I);
     if(Action.StartsWith(TEXT("it_"))){ExecuteItemTools(P,I);return;}
     if(P.IsPolicy()&&Action==TEXT("activity_failed")){ReportActivityFailure(P,I,Status,false);return;}

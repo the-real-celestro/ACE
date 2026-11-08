@@ -8,6 +8,157 @@ button exists, its opcode has a constant, or a focused regression test passes.
 This is the working acceptance record, most recently reviewed on 2026-10-13. The client
 is **not yet a feature-complete retail replacement**.
 
+## Spell inspection with foci: 2026-11-07
+
+Retail `SpellExamineUI::ExamineSpell` obtains its ingredients through
+`ClientMagicSystem::GetAppropriateSpellFormula` (0x00567D50). That method uses
+the matching school's infused augmentation or
+`ACCWeenieObject::MagicPackIsOwned` (0x0058CB80), which searches the player's
+container-slot list, not the ordinary inventory grid or nested bags. Spell
+inspection now uses those same side slots; the previous grid-only lookup
+excluded real foci. The open inspection's existing refresh path picks up
+containment, removal and augmentation changes without reopening the panel.
+
+`CSpellBase::InqScarabOnlyFormula` retains scarabs and chorizite, then uses
+`SpellFormula::FindMostPowerfulPowerComponent` to choose the prismatic taper
+count. This is distinct from the first component used for spell-icon level;
+the formula helper now preserves that distinction for multi-scarab spells.
+
+The reported intermittent need for old components on Levistras is not yet
+reproduced. The player saw a yellow warning (exact text unknown), retail
+worked, and several relogs eventually restored casting in Unreal.
+Retail and this client send spell/target IDs through CastTargetedSpell or
+CastUntargetedSpell, without a component-formula flag. ACE's
+`Player.HasComponentsForSpell` calls `SpellFormula.GetPlayerFormula`, which
+selects the formula from server-owned inventory/augmentation state on each
+check. Correcting the inspection does not establish a fix for a server-side
+component rejection. The exact rejection text and a log captured while it
+happens are still needed to identify that remaining report.
+
+Regression coverage: `ACE.RetailParity.SpellComponents` exercises real DAT
+spells in all five schools, open-panel updates from containment/removal
+receipts, wrong-school and nested foci, infused augmentations, all three
+player/object/description login orderings, and actual
+loopback cast packets with scarabs/prismatic tapers but no old components.
+`SpellFormulaLevels` covers all ten power-component taper counts, chorizite
+and mixed-scarab formulas. The Development Editor build and those two suites,
+`ACE.Network.SpellDataRevision` and `ACE.RetailParity.UIInteractions` passed.
+Results are recorded under `TestOutput/SpellComponents/`. Release v152 also
+passes these suites in the packaged Windows and native Linux clients. Its
+18 editor, 19 Windows and 19 Linux suite runs are recorded under
+`TestOutput/Release-v152/`; the release artifact directory includes the
+regression summary, APK verification and Windows upgrade-preservation results.
+Quest and Android source synchronization and package checks pass; physical
+headset/phone acceptance is not claimed by those automated checks.
+
+## Linux display resolutions: 2026-11-05
+
+UE 5.8's Vulkan `RHIGetAvailableResolutions` returns false without enumerating
+modes. The video options therefore previously offered only the current saved
+size, commonly the shared 1920x1080 default. Linux now queries SDL3 for the
+display containing the game window and uses desktop pixel dimensions rather
+than potentially scaled logical bounds. Native modes and the current custom
+size are retained; common window/backbuffer sizes fitting the desktop cover
+compositors that expose only one mode. Duplicate refresh-rate entries collapse
+to one resolution, with no 1080p ceiling.
+
+Opening the picker refreshes modes after a monitor move or hotplug while
+preserving unapplied selections. Borderless still fills the desktop, and
+changes retain the existing 15-second Keep/Revert confirmation. Linux platform
+defaults now request desktop resolution on a fresh install; saved choices and
+command-line overrides take precedence.
+
+Validation: Win64 editor and native Linux package builds passed. Resolution
+options and both retail UI suites passed on Windows and Linux; the Linux
+DisplayRecovery fixture passed apply/confirm/disk-save/reload for 1280x800,
+2560x1440, 3440x1440, 3840x2160 and a custom 1712x964 size, plus timeout/revert.
+Native SDL enumeration passed under WSLg X11 (28 advertised modes, 22 unique
+options) and Wayland (22 modes/options), both at a 2560x1440 desktop. Simulated
+monitor lists cover 800p through 8K, ultrawide and empty/single-mode drivers.
+Reports are in `TestOutput/Nov5LinuxResolutions/`; `linux-recovery-tests` is the
+final persistence run. The initial persistence test read an INI cache key as
+a filename; it now reads the generated settings path. Physical Linux monitor
+hotplug and visible 4K/fullscreen rendering remain unverified here.
+
+## Crowded-event dispatch, Recklessness and Linux login: 2026-11-05
+
+Network dispatch retains the normal 0.5 ms allowance, but ready work waiting
+at least 100 ms enables an 8 ms total receive/dispatch catch-up allowance.
+Socket backlog can increase receive time to 2 ms per socket. The existing
+128-work-unit cap remains; an atomic callback finishes before yielding, so one
+expensive callback can exceed the time allowance. Idle queues return to the
+normal allowance. `ace.Network.CatchUpBudgetMs=0` disables catch-up for comparison.
+`/acueperf` now distinguishes socket backlog, undispatched packets, ordered
+events, dispatchable age and events held on missing stamps/objects. The latter
+do not cause catch-up work when no event can actually progress.
+
+Retail `SharedNet::ProcessOptionalHeader` creates a `CEchoResponseHeader` for
+an EchoRequest; `ClientNet` calls that base implementation. Echo handling is
+therefore retained. A loopback traffic fixture compares sustained ordered
+events under fixed and adaptive budgets, including final drain, ACK progress,
+duplicates and ordering. This reproduces budget starvation, but does not prove
+the cause of the reported live event delay without a capture from that event.
+
+The Recklessness DAT field is a fixed range marker, not a charge fill. Exclude
+`basic_recklessness_fill` and `adv_recklessness_fill` from meter-fill clipping.
+Retail `UIElement_Meter` animates child 2; `gmCombatUI` gates Recklessness on
+trained/specialized skill 50. End-of-retail DAT geometry and ACE
+`Player.GetRecklessnessMod` use 10–90%, despite older 20–80% descriptions.
+
+Linux Accounts now offers an unchecked-by-default password persistence option.
+Opt-in writes unencrypted credentials to a uniquely named temporary file
+created with owner-only permissions before replacement. Opt-out removes saved
+passwords while retaining session credentials. Windows DPAPI and Android
+Keystore behavior are unchanged. Persistence and launcher fixtures cover
+opt-in, reopening, opt-out, all accounts and Linux file permissions.
+
+Validation: Win64 Development editor and native Linux package builds passed.
+Eight Windows suites passed (seven in `editor-final-tests`, UIScreens in its
+final `ui-final-tests` rerun); all nine native Linux suites passed. Linux display
+fixtures retained existing console-priority/viewport warnings. Reports and
+rendered Accounts/Recklessness images are in
+`TestOutput/Nov5CrowdLoginRecklessness/`. The 1,440-event Windows UDP fixture
+peaked at 1,140 queued work items with catch-up disabled and 139 with it enabled;
+Linux measured 1,142 and 139. All events drained in order without duplicates.
+These are controlled loopback results, not a live crowded-server validation.
+
+## Trade, input and turn-animation follow-up: 2026-11-04
+
+ACE `Player_Trade.FinalizeTrade` removes outgoing items with ObjectDelete,
+then sends TradeComplete and ResetTrade. The client previously retained these
+objects as owned inventory, interpreting deletion only as a 3D removal. Offered
+items now leave inventory on the authoritative delete/completion. Completion
+also covers event/object queue ordering, and does not delete an item twice if
+ACE has recreated it for its original owner after failed delivery. Cancellation
+and items not offered are preserved. Trade offers use the retail item-foreground
+mark; the inventory cache includes offer IDs so add/reset updates it immediately.
+
+Spell-bar hover names use the actual visible spell icon tooltip. All twelve
+numbered spell slots are exposed in keyboard configuration and retail keymap
+round trips (default 1-9, 0, -, =). A hidden or detached text editor no longer
+suppresses Give or Action Deck hotkeys merely because Slate retained its focus.
+Visible typing continues to suppress gameplay hotkeys.
+
+Stationary turn animation integrates elapsed turn speed instead of multiplying
+total clip time by the most recent mouse delta. Short gaps between slow mouse
+events retain footwork for at most 100 ms; physical heading and network movement
+are unchanged. Use/Give clears the previous mouse-turn release bookkeeping so a
+late neutral MoveToState cannot cancel the new server interaction chain. Retail
+`ItemHolder::UseObject` and ACE `GameActionMoveToState` were the comparison paths.
+
+The provided logs identify Corpse of Daimyo Nobanuga, WCID 600938, setup
+02001B99. They show repeated Use requests followed by approach cancellation and
+no UseDone. The stale mouse-release path is reproduced in a fixture using that
+setup; the logs alone do not prove it caused this particular failed reward.
+Live custom-server reward delivery and the rare Action Deck incident still need
+verification. No synthetic loot receipt or automatic repeated Use was added.
+
+Win64 Development editor build passed. KeyboardBindings, NetworkAnimationParity,
+WorldEntry and ActionDeck passed in the initial run; final InteractionRecovery
+and UIScreens reruns passed with zero errors/warnings, including returned-item
+ordering and cached inventory mark removal. Reports and rendered UI fixtures are
+under `TestOutput/Nov4Reports/` (final changed suites under `final/`).
+
 ## Backpack drag pickup and return transfers: 2026-11-01
 
 Compared local retail `UIElement_SmartBoxWrapper` world drag handling,
@@ -704,6 +855,42 @@ a sphere-less sign's item type; the projectile fixture loads its required DAT
 metadata. Tou-Tou's sphere-less model also retains height when Gravity is set.
 Shared Quest source verification passed. This is an automated reproduction
 using the reported state; no packaged release or affected live session was tested.
+
+### Apostate gateway render-state follow-up: 2026-11-06
+
+The v150 report for gateway `800031CF` / WCID 40810 has zero actor displacement,
+normal scale, a registered opaque mesh, and bounds inside the camera frustum.
+The player also reported standing on the invisible gateway. This does not match
+the earlier falling-object failure. The supplied inside-pit screenshot means a
+camera above the opening cannot alone explain the report. Game-thread visibility
+flags and collision do not establish that the renderer actually drew the mesh.
+
+`CustomWorldPresentation` now loads the surrounding static scenery plus the
+stock acid and door at their authored placements. Pixel comparisons cover the
+reported 6.44-unit distance / 110.01-degree FOV, four views of the populated pit,
+and real camera-boom endpoints above the gateway. Camera collision is exercised
+from both the gateway and ledge, at two distances and four orientations. Hidden
+mesh rebuilds now advance actual rendered frames before revealing the object.
+These local tests still render the gateway; they have not reproduced the live
+failure or established a rendering fix.
+
+`/acueobject` additionally reads the resident render-thread draw flag, transform,
+bounds, and occlusion eligibility without rebuilding the proxy. It reports
+triangle/vertex counts, material, draw-distance limits, recent rendering, camera
+position/cell, near clip, boom collision settings, and two camera collision rays.
+The rays describe collision only, since a PhysicsBSP hit need not correspond to
+visible geometry. The diagnostic remains local and on demand. An affected
+session should capture this expanded report and `/acueperf` before resetting
+graphics or reconnecting; the old report cannot distinguish stale renderer
+state from a camera/occlusion failure.
+
+Validation: Windows editor build and five D3D12 SM5 suites passed in
+`TestOutput/GatewayVisibility/final-d3d12-tests`: `CustomWorldPresentation`,
+`ChatInputAndCommands`, `CameraAndEdges`, `CachedWorldDraws`, and
+`IdleBodyTransforms`. The chat test invokes the diagnostic on a live mesh and
+checks that it does not rebuild, move, or hide it, change selection, or send a
+server packet. Offscreen captures do not reproduce a live fullscreen transition
+or the affected player's hardware/session. No packaged release was tested.
 
 ## Stat colors without active spells: 2026-10-20
 

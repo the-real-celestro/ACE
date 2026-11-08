@@ -16,6 +16,9 @@
 #include "Android/AndroidJNI.h"
 #elif (PLATFORM_LINUX || PLATFORM_MAC)
 #include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
 #endif
 #if PLATFORM_MAC
 #include "ACELoginKeychain.h"
@@ -125,7 +128,10 @@ namespace ACELoginSettings
 		Json->SetStringField(TEXT("host"), Settings.Host);
 		Json->SetStringField(TEXT("port"), Settings.Port);
 		Json->SetStringField(TEXT("account"), Settings.Account);
-        Json->SetStringField(TEXT("password"), (PLATFORM_LINUX || PLATFORM_MAC) ? FString() : Settings.Password);
+		// Mac keeps passwords in the Keychain; Linux saves them only when opted in.
+		const bool SavePasswords = PLATFORM_MAC ? false : (!PLATFORM_LINUX || Settings.bSavePasswordsLocally);
+		Json->SetBoolField(TEXT("savePasswordsLocally"), Settings.bSavePasswordsLocally);
+		Json->SetStringField(TEXT("password"), SavePasswords ? Settings.Password : FString());
 		if (Settings.bProfileFormat)
 		{
 			Json->SetNumberField(TEXT("version"), 3);
@@ -153,7 +159,7 @@ namespace ACELoginSettings
 				// Optional lobby fields; older builds ignore unknown keys.
 				if (A.bFavorite) J->SetBoolField(TEXT("favorite"), true);
 				if (A.LastUsed > 0) J->SetNumberField(TEXT("lastUsed"), double(A.LastUsed));
-                J->SetStringField(TEXT("username"), A.Username); J->SetStringField(TEXT("password"), (PLATFORM_LINUX || PLATFORM_MAC) ? FString() : A.Password);
+                J->SetStringField(TEXT("username"), A.Username); J->SetStringField(TEXT("password"), SavePasswords ? A.Password : FString());
 				Accounts.Add(MakeShared<FJsonValueObject>(J));
 			}
 			Json->SetArrayField(TEXT("servers"), Servers); Json->SetArrayField(TEXT("accounts"), Accounts);
@@ -172,19 +178,31 @@ namespace ACELoginSettings
 #elif PLATFORM_ANDROID
 		if (!AndroidCrypt(reinterpret_cast<const uint8*>(Utf8.Get()), Utf8.Length(), true, Bytes)) return false;
 #elif (PLATFORM_LINUX || PLATFORM_MAC)
-        // Persist nonsecret profile data only. Linux keeps passwords in memory for this session;
-        // Mac stores them in the Keychain (see SaveKeychainPasswords).
+        // Linux password persistence is opt-in; Mac stores passwords in the Keychain
+        // (see SaveKeychainPasswords). The local file is owner-readable only.
         Bytes.Append(reinterpret_cast<const uint8*>(Utf8.Get()), Utf8.Length());
 #else
 		return false;
 #endif
 		const FString Directory = FPaths::GetPath(Path);
 		if (!IFileManager::Get().MakeDirectory(*Directory, true)) return false;
-		// Per-process temp name so two running copies saving at once never clobber each other.
-		const FString TemporaryPath = FString::Printf(TEXT("%s.%u.tmp"), *Path, FPlatformProcess::GetCurrentProcessId());
-        bool Saved = FFileHelper::SaveArrayToFile(Bytes, *TemporaryPath);
+		const FString TemporaryPath = Path + TEXT(".tmp-") + FGuid::NewGuid().ToString(EGuidFormats::Digits);
 #if (PLATFORM_LINUX || PLATFORM_MAC)
-        Saved = Saved && chmod(TCHAR_TO_UTF8(*FPaths::ConvertRelativePathToFull(TemporaryPath)), S_IRUSR | S_IWUSR) == 0;
+		// Restrict access when creating the file, before any plaintext is written.
+		const int Fd = open(TCHAR_TO_UTF8(*FPaths::ConvertRelativePathToFull(TemporaryPath)),
+			O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, S_IRUSR | S_IWUSR);
+		bool Saved = Fd >= 0;
+		int32 Written = 0;
+		while (Saved && Written < Bytes.Num())
+		{
+			const ssize_t Count = write(Fd, Bytes.GetData()+Written, Bytes.Num()-Written);
+			if (Count < 0 && errno == EINTR) continue;
+			if (Count <= 0) { Saved = false; break; }
+			Written += static_cast<int32>(Count);
+		}
+		if (Fd >= 0 && close(Fd) != 0) Saved = false;
+#else
+		bool Saved = FFileHelper::SaveArrayToFile(Bytes, *TemporaryPath);
 #endif
         Saved = Saved && IFileManager::Get().Move(*Path, *TemporaryPath, true, false);
 		if (!Saved) IFileManager::Get().Delete(*TemporaryPath, false, true);
@@ -231,12 +249,15 @@ namespace ACELoginSettings
 		TSharedPtr<FJsonObject> Json;
 		if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Json) || !Json) return false;
 		FACELoginSettings Loaded;
+		Json->TryGetBoolField(TEXT("savePasswordsLocally"), Loaded.bSavePasswordsLocally);
 		if (!Json->TryGetStringField(TEXT("host"), Loaded.Host)
 			|| !Json->TryGetStringField(TEXT("port"), Loaded.Port)
 			|| !Json->TryGetStringField(TEXT("account"), Loaded.Account)
 			|| !Json->TryGetStringField(TEXT("password"), Loaded.Password)) return false;
-#if (PLATFORM_LINUX || PLATFORM_MAC)
+#if PLATFORM_MAC
         Loaded.Password.Reset();
+#elif PLATFORM_LINUX
+        if (!Loaded.bSavePasswordsLocally) Loaded.Password.Reset();
 #endif
 		double Version = 0;
 		if (Json->TryGetNumberField(TEXT("version"), Version))
@@ -279,8 +300,10 @@ namespace ACELoginSettings
 				double LastUsed = 0;
 				if ((*J)->TryGetNumberField(TEXT("lastUsed"), LastUsed) && FMath::IsFinite(LastUsed) && LastUsed > 0 && LastUsed < 4102444800.0)
 					A.LastUsed = int64(LastUsed);
-#if (PLATFORM_LINUX || PLATFORM_MAC)
+#if PLATFORM_MAC
                 A.Password.Reset();
+#elif PLATFORM_LINUX
+                if (!Loaded.bSavePasswordsLocally) A.Password.Reset();
 #endif
 				AccountIds.Add(A.Id);
 				// Upgrade any early server-scoped profile without losing alternate

@@ -1,41 +1,38 @@
-# AC:Unreal / AC:VR release 148
+# AC:Unreal / AC:VR release 152
 
 Windows desktop, PC VR, native Linux x86_64, standalone Quest, and the Android
-phone/tablet preview share **2026.11.01.148**. Android version code: 148.
-Quest installer revision: 9. These notes cover changes since v147.
+phone/tablet preview share **2026.11.07.152**. Android version code: 152.
+Quest installer revision: 9. These notes cover changes since v151.
 
-## UCM Mobs and attack profiles
+## Spell inspection
 
-- Add a compact Mobs table for Default and per-mob attack profiles, with visible
-  names, quick attack/debuff switches, damage and pet choices, and column tooltips.
-- Expand Details to configure the full per-mob attack profile: matching, attack
-  modes, debuffs, weapons, offhand, damage, pet damage, priority, and range.
-- Keep table and Details edits synchronized and saved. New native rows inherit
-  Default; imported profiles retain their independent settings.
-- Support essence summoning without automatic attacks, pursuit, weapon changes,
-  or combat assessment when attack families are disabled. Explicit Ignore rules
-  still exclude mobs, and older imported VT summon-only settings are recognized.
-- Consolidate duplicate controls, rename visible Monster labels to Mob, and show
-  the selected profile name plainly. Keep mob names visible while scrolling;
-  hide the horizontal scrollbar when the table fits the window.
+- Show the correct component requirements when the matching school's foci is
+  in a player backpack slot, or the character has its infused augmentation.
+- Refresh an open spell inspection when foci ownership or augmentations change.
+- Correct prismatic taper counts for formulas with multiple scarabs while
+  retaining required scarabs and chorizite.
 
-## Backpack interactions
+## Lua plugin APIs
 
-- Fix dragging portable packs directly from the world and from their open
-  container icon into inventory.
-- Correct pack movement between player inventory and chest pack slots, including
-  slot capacity, insertion order, and drag feedback.
-- Prevent invalid nested packs and containment cycles; retain server-authoritative
-  ownership and contents during moves.
+- Add a native color picker with hex entry, color wheel, brightness and opacity.
+- Add scale and X/Y offsets for plugin controls, including entire panel contents.
+- Add custom nameplate text, backing and vital-bar colors, plus scale and offsets
+  with independent VR placement overrides. The selected actor's tint is unchanged.
+- Add item selection in owned packs and open chests/corpses, with current
+  container membership checked before selecting; selection never uses or moves items.
+- Fix clipping of plugin text when controls are scaled, moved or rotated.
+- Expand the Lua API documentation and machine-readable catalog; include an
+  optional Appearance Controls example demonstrating saved preferences.
 
-## Validation and packaging
+## Validation and scope
 
-Release verification covers UCM decisions, summoning, imports, profile editing,
-responsive table/details layouts, backpack interactions, and updater behavior in
-the editor and packaged Windows/Linux clients. Android packages are checked for
-identity, version, signing continuity, 16 KiB alignment, and bundled plugins.
-The Windows installer is checked upgrading v147 while preserving saved data.
+Automated checks cover spell formulas and login ordering, plugin input/rendering,
+saved preferences, container-selection packets, packaged clients, APK contents,
+upgrade preservation and public download integrity. Results accompany the local
+release artifacts. Quest and phone hardware were not acceptance-tested for v152.
 
-Packages exclude retail DATs, personal settings, server data, and generated
-MeshCache files. Android phones/tablets remain a preview using a separate APK
-from Quest. No physical-device or live-server acceptance test was performed.
+The intermittent Levistras casting rejection with foci remains unconfirmed; the
+inspection correction is not a claimed fix for that server-side warning.
+
+Packages exclude retail DATs, personal settings, server data and generated
+MeshCache files. Android phones/tablets remain a separate preview APK.

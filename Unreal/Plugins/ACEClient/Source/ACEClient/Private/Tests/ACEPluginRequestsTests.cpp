@@ -522,7 +522,7 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
         H->ClearBuffRequests();TestTrue(TEXT("Clear sends cancellation to the remaining requester"),HasTell(TEXT("Bob"),TEXT("cancelled")));
         FACEWorldObject Blade;Blade.Guid=9300;Blade.Name=TEXT("Tethered blade");Blade.ContainerId=Session.PlayerGuid;
         Blade.ItemType=ACEItemType::MeleeWeapon;Blade.ValidLocations=ACEEquipMask::MeleeWeapon;Blade.CombatUse=1;
-        Session.WorldObjects.Add(Blade.Guid,Blade);FACEAppraisalInfo BladeInfo;BladeInfo.bSuccess=true;H->Appraisals.Add(Blade.Guid,BladeInfo);
+        Session.WorldObjects.Add(Blade.Guid,Blade);FACEAppraisalInfo BladeInfo;BladeInfo.bSuccess=true;BladeInfo.IntProperties.Add(105,7);H->Appraisals.Add(Blade.Guid,BladeInfo);
         auto Equip=MakeShared<FJsonObject>();Equip->SetNumberField(TEXT("item"),Blade.Guid);
         for(bool Left:{true,false})
         {
@@ -543,13 +543,14 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
         }
         FACEWorldObject Ust;Ust.Guid=9301;Ust.ContainerId=Session.PlayerGuid;Ust.ItemType=0x20000000;Session.WorldObjects.Add(Ust.Guid,Ust);
         auto Salvage=MakeShared<FJsonObject>();Salvage->SetNumberField(TEXT("item"),Blade.Guid);Salvage->SetNumberField(TEXT("tool"),Ust.Guid);
-        for(int Protection=0;Protection<4;++Protection)
+        for(int Protection=0;Protection<5;++Protection)
         {
             auto& Live=Session.WorldObjects[Blade.Guid];Live=Blade;Live.MaterialType=59;Live.Structure=200;
             H->Appraisals.Add(Blade.Guid,BladeInfo); // equip invalidates the previous appraisal
             if(Protection==1)H->Appraisals[Blade.Guid].IntProperties.Add(171,1);
             if(Protection==2)H->Appraisals[Blade.Guid].StringProperties.Add(8,TEXT("Owner"));
             if(Protection==3)Live.ObjectDescriptionFlags|=ACEObjectDescFlag::Retained;
+            if(Protection==4)H->Appraisals[Blade.Guid].IntProperties.Remove(105);
             Session.CachedC2SPackets.Reset();H->ExecuteInventory(*P,Salvage,TEXT("salvage"));
             bool Sent=false;for(const auto& Packet:Session.CachedC2SPackets)
             {FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);if(R.ReadUInt32()==ACEGameAction::CreateTinkeringTool)Sent=true;}
@@ -1555,6 +1556,13 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
                 Session.ApplyServerCombatMode(Mode);H->UpdateCombatTransition(*P);
                 TestEqual(TEXT("Late stance acknowledgment cannot dispatch an obsolete attack"),Mode==8?CastCount():AttackCount(),Before);
             }
+            P->Profile->SetBoolField(TEXT("recovery"),true);
+            P->CombatTransitionIntent=AttackIntent(971,2);P->CombatTransitionIntent->SetStringField(TEXT("activity"),TEXT("combat"));
+            P->NextAction=FPlatformTime::Seconds()+5;P->NextDecision=P->NextAction;
+            auto Hurt=Session.PlayerVitals;Hurt.Health=20;Hurt.MaxHealth=100;H->LastCombatVitals=FIntVector(100,100,100);
+            H->ObserveCombatVitals(Hurt);
+            TestFalse(TEXT("Damage during stance preparation drops the unsent combat decision"),P->CombatTransitionIntent.IsValid());
+            TestTrue(TEXT("Recovery can reevaluate immediately after damage"),P->NextAction==0&&P->NextDecision==0);
             H->CombatTarget=971;H->PendingSpell=0;P->WaitAction=TEXT("identify");P->WaitItem=971;P->NextAction=FPlatformTime::Seconds()-1;
             H->RefreshActionWait(*P);P->NextDecision=FPlatformTime::Seconds()+.25;
             FTSTicker::GetCoreTicker().RemoveTicker(H->DecisionWakeTicker);H->DecisionWakeTicker.Reset();

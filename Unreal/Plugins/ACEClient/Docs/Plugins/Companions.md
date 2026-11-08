@@ -22,6 +22,13 @@ Plugins > Refresh**, enable it and enter the game. The installed client's
 `ClientMods/api.json` advertises `companion_api: 1`; earlier releases do not have
 this extension. These features do not require UCM to be enabled.
 
+Every valid installed plugin remains listed, including disabled plugins.
+Plugin Manager's **Enabled plugin limit** defaults to 16 and can be raised or
+set to **0** for unlimited. Disabled plugins use no slot; an enabled companion
+still counts while stopped or with its window closed. The setting persists
+across restarts and is controlled by the player, not Lua. See
+[host lifecycle and limits](PublicAPI.md#lifecycle-and-ownership).
+
 - [Kill tracker example](Examples/kill_tracker/main.lua): configurable progress
   regex, persisted count, NPC and monster markers, clickable selection, and NAV.
 - [Nearby targets / Vsense example](Examples/vsense/main.lua): click any listed
@@ -148,6 +155,15 @@ and VR, with no gameplay input leakage. A click queues
 the object at click time. A vanished or out-of-area target is rejected. `command`
 uses the separate `command` field so its button caption can be friendly text.
 Button clicks never implicitly attack or use a selected object.
+
+API 2 companions can use `action="select_item", target=item_id` with optional
+`container=direct_container_id` to select items in owned packs or a currently
+open chest/corpse. This requires `ui` permission. The current container and item
+membership are checked on every click; closed/stale containers are rejected.
+This only changes selection, without opening, using, moving or looting items.
+API 2 `select` also accepts these accessible container items. See the
+[Public API](PublicAPI.md#native-ui) for the color picker, scale/offset fields,
+selection rules and complete example.
 
 The same actions can be returned directly as flat fields:
 `{action="waypoint",target=id}`, `{action="select",target=id}`, or
