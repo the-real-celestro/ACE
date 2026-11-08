@@ -28,6 +28,7 @@
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SSlider.h"
+#include "Widgets/Layout/SUniformGridPanel.h"
 #include "Widgets/SOverlay.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Brushes/SlateRoundedBoxBrush.h"
@@ -580,7 +581,44 @@ public:
             .ComboButtonStyle(&PanelStyle->Combo).ButtonContent()[WaypointLabel(TEXT("Settings"),14)]
             .OnGetMenuContent_Lambda([this,PanelStyle](){return MapSettings(PanelStyle);})];
         Body->AddSlot().AutoHeight().Padding(0,0,0,6)[Input];
-        if(A._Map)
+        if(A._Map&&FACEPluginStyle::IsCodex())
+        {
+            // Codex: one slim toolbar, a collapsible options section, then the map fills the window.
+            auto Tools=SNew(SHorizontalBox);
+            Tools->AddSlot().FillWidth(1).VAlign(VAlign_Center)[SNew(SACEPluginEditableTextBox).Tag(TEXT("WaypointMapSearch")).Style(&FACEPluginStyle::Current()->Edit)
+                .HintText(FText::FromString(TEXT("Find a location"))).OnTextChanged_Lambda([this](const FText& T){if(Map)Map->SetSearch(T.ToString());})];
+            Tools->AddSlot().AutoWidth().Padding(6,0,0,0)[WaypointButton(TEXT("+"),[this]{Map->ChangeZoom(1.5,Map->GetCachedGeometry().GetLocalSize()*.5);})];
+            Tools->AddSlot().AutoWidth().Padding(3,0,0,0)[WaypointButton(TEXT("\u2212"),[this]{Map->ChangeZoom(1/1.5,Map->GetCachedGeometry().GetLocalSize()*.5);})];
+            Tools->AddSlot().AutoWidth().Padding(3,0,0,0)[WaypointButton(TEXT("Center"),[this]{Map->CenterOnPlayer();})];
+            Tools->AddSlot().AutoWidth().Padding(3,0,0,0)[WaypointButton(TEXT("Reset"),[this]{Map->ResetView();})];
+            Tools->AddSlot().AutoWidth().Padding(6,0,0,0)[SNew(SACEPluginButton).Tag(TEXT("WaypointMapOptions")).ButtonStyle(&FACEPluginStyle::Current()->DockButton)
+                .ContentPadding(FMargin(6,2)).IsFocusable(false).OnClicked_Lambda([this]{ShowOptions=!ShowOptions;return FReply::Handled();})
+                [SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",14)).Text_Lambda([this]{return FText::FromString(ShowOptions?TEXT("Map options \u25B4"):TEXT("Map options \u25BE"));})]];
+            Tools->AddSlot().AutoWidth().Padding(3,0,0,0)[SNew(SACEPluginButton).Tag(TEXT("WaypointSettingsGear")).ButtonStyle(&FACEPluginStyle::Current()->DockButton)
+                .ContentPadding(FMargin(6,2)).IsFocusable(false).ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Waypoint settings"))))
+                .OnClicked_Lambda([this]{if(Host.IsValid())ChildSlot[Host->MakeWaypointPanel(false,false,ShowTitle)];return FReply::Handled();})
+                [SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",15)).Text(FText::FromString(TEXT("\u2699")))]];
+            Body->AddSlot().AutoHeight().Padding(0,0,0,6)[Tools];
+            auto Options=SNew(SUniformGridPanel).SlotPadding(FMargin(6,2));int32 Index=0;
+            for(const auto& O:TArray<TTuple<FString,FString,bool>>{{TEXT("dungeon"),TEXT("Dungeon"),false},{TEXT("towns"),TEXT("Towns"),true},
+                {TEXT("portals"),TEXT("Portals"),true},{TEXT("pois"),TEXT("POIs"),true},{TEXT("fill_dungeon"),TEXT("Fill walkable areas"),false},
+                {TEXT("show_route"),TEXT("Show active route"),true},{TEXT("heading_up"),TEXT("Player facing up"),false},
+                {TEXT("dungeon_overlay"),TEXT("Pin map to interface"),false},{TEXT("map_minimized"),TEXT("Minimize pinned map"),false}})
+            {Options->AddSlot(Index%2,Index/2)[Check(O.Get<0>(),O.Get<1>(),O.Get<2>())];++Index;}
+            Body->AddSlot().AutoHeight().Padding(0,0,0,6)[SNew(SBox).Visibility_Lambda([this]{return ShowOptions?EVisibility::Visible:EVisibility::Collapsed;})
+                [SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight()[Options]
+                +SVerticalBox::Slot().AutoHeight().Padding(6,6,6,0)[SNew(SHorizontalBox)
+                    +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,10,0)[WaypointLabel(TEXT("Background opacity"),13)]
+                    +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[SNew(SSlider).Style(&PanelStyle->Slider).MinValue(0.f).MaxValue(1.f)
+                        .IsEnabled_Lambda([this](){return Host.IsValid()&&!Host->IsPluginOpacityGlobal();})
+                        .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Shared with Waypoint Map background opacity in Plugin Manager. The global plugin opacity overrides this setting."))))
+                        .Value_Lambda([this](){return Host.IsValid()?Host->WaypointMapOpacity():1.f;})
+                        .OnValueChanged_Lambda([this](float Value){if(Host.IsValid())Host->SetWaypointMapOpacity(Value);})]]]];
+            Body->AddSlot().FillHeight(1)[SAssignNew(Map,SWaypointMap).Host(Host.Get()).Tag(TEXT("WaypointMapViewport"))
+                .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Drag to pan · Scroll to zoom · Click to navigate. A pinned map follows you and stays visible when this window closes."))))];
+            Body->AddSlot().AutoHeight().Padding(0,4,0,0)[WaypointLabel(TEXT("Drag to pan · Scroll to zoom · Click to navigate"),12)];
+        }
+        else if(A._Map)
         {
             auto Controls=SNew(SHorizontalBox);
             Controls->AddSlot().AutoWidth()[Check(TEXT("dungeon"),TEXT("Dungeon"),false)];
@@ -631,6 +669,7 @@ public:
         ChildSlot[SNew(SBorder).BorderImage(&PanelStyle->Background).Padding(A._Map?8:14)[Content]];
     }
 private:
+    bool ShowOptions=false;
     TWeakObjectPtr<UACEPluginSubsystem> Host;TSharedPtr<SEditableTextBox> Entry,AtlasPath;TSharedPtr<SWaypointMap> Map;FString Status;bool ShowTitle=true;
     TSharedRef<SWidget> MapSettings(const TSharedRef<FACEPluginStyle>& Style)
     {
@@ -652,7 +691,7 @@ private:
     }
     void Navigate(const FString& S){if(Host.IsValid())Status=Host->SetWaypoint(S)?TEXT("Destination set"):Host->Notice;}
     TSharedRef<SWidget> Check(const FString& Key,const FString& Caption,bool Default)
-    {return SNew(SCheckBox).Style(&FACEPluginStyle::Current()->Check).Padding(3).IsChecked_Lambda([this,Key,Default]{return Host.IsValid()&&Host->WaypointOption(Key,Default)?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
+    {return SNew(SCheckBox).Style(FACEPluginStyle::IsCodex()?&FACEPluginStyle::Current()->Switch:&FACEPluginStyle::Current()->Check).Padding(3).IsChecked_Lambda([this,Key,Default]{return Host.IsValid()&&Host->WaypointOption(Key,Default)?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
         .OnCheckStateChanged_Lambda([this,Key](ECheckBoxState V){if(Host.IsValid())Host->SetWaypointOption(Key,V==ECheckBoxState::Checked);})[WaypointLabel(Caption,14)];}
 };
 }

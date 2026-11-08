@@ -180,6 +180,11 @@ UACELobbyAccountListView::UACELobbyAccountListView(const FObjectInitializer& Obj
 	: Super(ObjectInitializer)
 {
 	EntryWidgetClass = UACELobbyAccountRow::StaticClass();
+#if WITH_EDITOR
+	// Editor builds of UListViewBase only accept Blueprint entry classes unless the class is
+	// marked cooked (packaged builds never check). The row is native, so mark it.
+	UACELobbyAccountRow::StaticClass()->bCooked = true;
+#endif
 	SelectionMode = ESelectionMode::None;
 	bIsFocusable = false; // Keyboard stays with the launcher (type-to-jump, arrows, Enter).
 	// No setter is exposed for the spacing in UE 5.8; it is a plain reflected float.

@@ -339,12 +339,14 @@ namespace ACEUCMPanelPrivate
         {
             Heading(TEXT("Configuration"),TEXT("Start or pause activities here or in UCM Micro. Configure each activity in its own tab; use the Mobs chart for attacks, debuffs and pet choices. Changes save automatically."));
             if(!Plugin->Enabled)Add(Button(TEXT("Enable UCM capabilities"),[this](){Host->SetEnabled(Plugin->Id,true);Rebuild();}));
-            auto Activities=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(12,4));
-            Activities->AddSlot()[CombatToggle(TEXT("Enable Combat"))];
-            Activities->AddSlot()[Toggle(TEXT("summon_pets"),TEXT("Enable Summoning"),TEXT("Summon eligible essences from the Equipment Pool for mobs allowed by the chart. Works independently of Combat; keeps an existing pet active."),false,false)];
-            Activities->AddSlot()[Toggle(TEXT("buffing"),TEXT("Enable Buffs"),TEXT("Maintain buffs."),true,false)];
-            Activities->AddSlot()[Toggle(TEXT("buff_others"),TEXT("Accept buff requests"),TEXT("Accept role-based buff requests by tell while UCM and Buffs are running."),false,false)];
-            Activities->AddSlot()[Toggle(TEXT("recovery"),TEXT("Enable Recovery"),TEXT("Maintain vitals."),true,false)];Add(Activities);
+            // Activity switches in a two-column grid of full rows: label left, switch right, aligned like every other row.
+            auto Activities=SNew(SUniformGridPanel).SlotPadding(FMargin(4,2));int32 ActivityIndex=0;
+            const auto Activity=[&](TSharedRef<SWidget> W){const int32 Cols=LootNarrow?1:2;Activities->AddSlot(ActivityIndex%Cols,ActivityIndex/Cols)[SNew(SBox).MinDesiredHeight(30).VAlign(VAlign_Center)[W]];++ActivityIndex;};
+            Activity(CombatToggle(TEXT("Enable Combat")));
+            Activity(Toggle(TEXT("summon_pets"),TEXT("Enable Summoning"),TEXT("Summon eligible essences from the Equipment Pool for mobs allowed by the chart. Works independently of Combat; keeps an existing pet active."),false,false));
+            Activity(Toggle(TEXT("buffing"),TEXT("Enable Buffs"),TEXT("Maintain buffs."),true,false));
+            Activity(Toggle(TEXT("buff_others"),TEXT("Accept buff requests"),TEXT("Accept role-based buff requests by tell while UCM and Buffs are running."),false,false));
+            Activity(Toggle(TEXT("recovery"),TEXT("Enable Recovery"),TEXT("Maintain vitals."),true,false));Add(Activities);
             auto Grid=SNew(SUniformGridPanel).SlotPadding(FMargin(4,6));int32 Index=0;
             for(const auto& Section:TArray<FString>{TEXT("Character"),TEXT("Routes"),TEXT("Loot"),TEXT("Vendors"),TEXT("Metas"),TEXT("Monsters")})
             {

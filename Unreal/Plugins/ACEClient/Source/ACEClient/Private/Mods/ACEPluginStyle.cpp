@@ -620,7 +620,7 @@ void SACEPluginText::Construct(const FArguments& A)
         // plugin text scale is applied on top by ScaledFont.
         auto Compact=[](FSlateFontInfo F)
         {
-            if(F.TypefaceFontName!=FName(TEXT("Fancy"))&&F.Size>=11.f)F.Size=F.Size<=12.f?9.f:F.Size<=16.f?10.f:F.Size<=20.f?11.f:13.f;
+            if(F.TypefaceFontName!=FName(TEXT("Fancy"))&&F.Size>=11.f)F.Size=F.Size<=12.f?9.5f:F.Size<=16.f?10.f:F.Size<=20.f?11.f:13.f;
             return F;
         };
         Base=TAttribute<FSlateFontInfo>::CreateLambda([Base,Compact]{return Compact(Base.Get());});

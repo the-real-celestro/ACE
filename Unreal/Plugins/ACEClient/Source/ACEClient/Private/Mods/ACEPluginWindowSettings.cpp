@@ -84,7 +84,12 @@ bool UACEPluginSubsystem::IsPluginQuickShow() const
     return M&&M->IsQuickShowUi();
 }
 bool UACEPluginSubsystem::IsPluginWindowChromeHidden(const FString& Id) const
-{return !IsPluginQuickShow()&&(IsPluginWindowPinned(Id)||(IsLedger(Id)&&!IsPluginBarUnlocked()));}
+{
+#if !UE_BUILD_SHIPPING
+    // Preview captures show ledgers framed; in play a locked bar shows them as a HUD readout.
+    if(PreviewStep>=0&&IsLedger(Id)&&!IsPluginWindowPinned(Id))return false;
+#endif
+    return !IsPluginQuickShow()&&(IsPluginWindowPinned(Id)||(IsLedger(Id)&&!IsPluginBarUnlocked()));}
 bool UACEPluginSubsystem::CanManipulatePluginWindow(const FString& Id) const
 {return IsPluginBarUnlocked()&&(!IsPluginWindowPinned(Id)||IsPluginQuickShow());}
 

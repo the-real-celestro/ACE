@@ -250,9 +250,11 @@ namespace ACEPluginPanelPrivate
             }
             OrderRows();
             const FString Folder=FPaths::ConvertRelativePathToFull(Host->UserDirectory()/TEXT("Installed"));
+            // Short footer: name only the last two folders; the full path is in the tooltip and Open plugin folder.
+            FString ShortFolder=Folder;{TArray<FString> Parts;Folder.ParseIntoArray(Parts,TEXT("/"));if(Parts.Num()>2)ShortFolder=TEXT("\u2026/")+Parts[Parts.Num()-2]+TEXT("/")+Parts.Last();}
             auto Footer=SNew(SHorizontalBox)
                 +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(2,0,12,0)
-                    [CodexText(FText::FromString(ManagerNotice.IsEmpty()?TEXT("Drop plugin folders into ")+Folder:ManagerNotice),10,FACEPluginStyle::Muted(),true)]
+                    [SNew(SBox).ToolTip(FACEPluginStyle::Tooltip(FText::FromString(Folder)))[CodexText(FText::FromString(ManagerNotice.IsEmpty()?TEXT("Drop plugin folders into ")+ShortFolder:ManagerNotice),10,FACEPluginStyle::Muted(),true)]]
                 +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,6,0)[Plate(TEXT("Open plugin folder"),[Folder]{IFileManager::Get().MakeDirectory(*Folder,true);FPlatformProcess::ExploreFolder(*Folder);},NAME_None,true,false)]
                 +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::CompactButtonPadding)).ButtonStyle(&Retail->DockButton).IsFocusable(false)
                     .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Reload installed plugins. Running plugins will stop."))))

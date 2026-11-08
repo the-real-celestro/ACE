@@ -53,7 +53,7 @@ bool MonsterFlag(const TSharedPtr<FJsonObject>& Rule,const FString& Key) const
 TSharedRef<SWidget> MonsterSwitch(const TSharedPtr<FJsonObject>& Rule,const FString& Key,const FString& Caption,bool Details=false)
 {
     return SNew(SACEPluginButton).Tag(FName(*(FString(Details?TEXT("UCMMobDetail."):TEXT("UCMMonster."))+Str(Rule,TEXT("name"))+TEXT(".")+Key)))
-        .ButtonStyle(&Style()).ContentPadding(FMargin(5,7)).IsFocusable(false)
+        .ButtonStyle(Codex()?&QuietStyle():&Style()).ContentPadding(Codex()?FMargin(0,2):FMargin(5,7)).IsFocusable(false)
         .ToolTip(FACEPluginStyle::Tooltip(TAttribute<FText>::CreateLambda([this,Rule,Key,Caption](){return FText::FromString(Caption+TEXT("\n")+(MonsterFlag(Rule,Key)?TEXT("On"):TEXT("Off"))
             +(!Rule->HasField(Key)&&Bool(Rule,TEXT("inherit_default"))?TEXT(" (inherited from Default)"):TEXT(""))+TEXT(". Click to toggle for this row."));})))
         .OnClicked_Lambda([this,Rule,Key](){Rule->SetBoolField(Key,!MonsterFlag(Rule,Key));
@@ -62,7 +62,8 @@ TSharedRef<SWidget> MonsterSwitch(const TSharedPtr<FJsonObject>& Rule,const FStr
             if(Str(Rule,TEXT("combat"))!=TEXT("ignore"))Rule->SetBoolField(TEXT("ignore"),false);
             SaveMonster(Rule);return FReply::Handled();})
         [SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",15)).Justification(ETextJustify::Center)
-            .Text_Lambda([this,Rule,Key](){return FText::FromString(MonsterFlag(Rule,Key)?TEXT("On"):TEXT("—"));})
+            // Codex: a quiet dot per cell (filled gold when on) keeps the 14-column grid inside the window.
+            .Text_Lambda([this,Rule,Key](){return FText::FromString(MonsterFlag(Rule,Key)?(Codex()?TEXT("\u25CF"):TEXT("On")):(Codex()?TEXT("\u00B7"):TEXT("—")));})
             .ColorAndOpacity_Lambda([this,Rule,Key](){return MonsterFlag(Rule,Key)?Accent:Muted;})];
 }
 TSharedRef<SWidget> MonsterChoice(const TSharedPtr<FJsonObject>& Rule,const FString& Key,const TArray<TPair<FString,FString>>& Options,bool Numeric=false,bool Details=false)
@@ -130,6 +131,7 @@ void MonsterDetailFlags(const TSharedPtr<FJsonObject>& Rule)
         Add(Row);
     }
 }
+bool Codex() const {return FACEPluginStyle::IsCodex()&&!EditorOnly;}
 void MonsterMatrix()
 {
     // Preserve the visible values of older inherited rows before editing Default.
@@ -139,6 +141,26 @@ void MonsterMatrix()
     {CopyMonsterDefaults(Rule,true);Changed=true;}
     if(Changed)Save();
     SectionSelector(TEXT("Monsters"));SectionBody.Reset();
+    if(Codex())
+    {
+        Heading(TEXT("Mobs"),TEXT("One row per mob. Default applies to every mob without its own row. Hover a column letter for what it does."));SectionBody.Reset();
+        // One compact control row: add by name or selection, then find.
+        Add(SNew(SHorizontalBox)
+            +SHorizontalBox::Slot().FillWidth(1)[SAssignNew(MonsterName,SACEPluginEditableTextBox)
+                .Style(&FACEPluginStyle::Current()->Edit).HintText(FText::FromString(TEXT("Mob name begins with…")))
+                .OnTextCommitted_Lambda([this](const FText& V,ETextCommit::Type How){if(How==ETextCommit::OnEnter)AddMonster(V.ToString());})]
+            +SHorizontalBox::Slot().AutoWidth().Padding(4,0)[Button(TEXT("Add"),[this](){AddMonster(MonsterName->GetText().ToString());})]
+            +SHorizontalBox::Slot().AutoWidth().Padding(0,0,12,0)[Button(TEXT("Add selected mob"),[this](){AddSelectedMonster();})]
+            +SHorizontalBox::Slot().FillWidth(1)[SNew(SACEPluginEditableTextBox).Style(&FACEPluginStyle::Current()->Edit)
+                .HintText(FText::FromString(TEXT("Find a mob…"))).Text(FText::FromString(MonsterSearch))
+                .OnTextChanged_Lambda([this](const FText& V){MonsterSearch=V.ToString();})
+                .OnTextCommitted_Lambda([this](const FText&,ETextCommit::Type How){if(How==ETextCommit::OnEnter){MonsterFilter=MonsterSearch.TrimStartAndEnd();MonsterPage=0;Rebuild();}})]
+            +SHorizontalBox::Slot().AutoWidth().Padding(4,0,0,0)[Button(MonsterFilter.IsEmpty()?TEXT("Find"):TEXT("Clear"),[this](){
+                if(MonsterFilter.IsEmpty())MonsterFilter=MonsterSearch.TrimStartAndEnd();else{MonsterSearch.Empty();MonsterFilter.Empty();}MonsterPage=0;Rebuild();})]);
+        Add(Text(TEXT("A attacks · R ring · S streak · I V Y F B G W FC Cp DC Cs debuffs · P priority · \u25CF on  \u00B7 off"),11,Muted));
+    }
+    else
+    {
     auto Actions=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(6,6));
     Actions->AddSlot()[Button(TEXT("Add selected mob"),[this](){AddSelectedMonster();})];
     Add(Actions);
@@ -152,19 +174,23 @@ void MonsterMatrix()
         .OnTextCommitted_Lambda([this](const FText&,ETextCommit::Type How){if(How==ETextCommit::OnEnter){MonsterFilter=MonsterSearch.TrimStartAndEnd();MonsterPage=0;Rebuild();}})]
         +SHorizontalBox::Slot().AutoWidth().Padding(6,0)[Button(TEXT("Search"),[this](){MonsterFilter=MonsterSearch.TrimStartAndEnd();MonsterPage=0;Rebuild();})]
         +SHorizontalBox::Slot().AutoWidth()[Button(TEXT("Clear search"),[this](){MonsterSearch.Empty();MonsterFilter.Empty();MonsterPage=0;Rebuild();})]);
+    }
     const auto& Modes=MonsterModes();
     MonsterFontSize=FACEPluginStyle::ScaleFont(FACEPluginStyle::NativeFont("Regular",16)).Size;
     const float Scale=FMath::Max(1.f,MonsterFontSize/15.f);
-    const auto Column=[Scale](TSharedRef<SHorizontalBox> Row,float Width,TSharedRef<SWidget> W){Row->AddSlot().AutoWidth().Padding(2,2).VAlign(VAlign_Center)[SNew(SBox).WidthOverride(Width*Scale).MinDesiredHeight(34)[W]];};
+    const bool Slim=Codex();
+    // Codex widths fit the whole grid inside the window; classic keeps the wide retail cells.
+    const auto W=[Slim](float Classic,float Codex){return Slim?Codex:Classic;};
+    const auto Column=[Scale,Slim](TSharedRef<SHorizontalBox> Row,float Width,TSharedRef<SWidget> Cell){Row->AddSlot().AutoWidth().Padding(Slim?1:2,Slim?0:2).VAlign(VAlign_Center)[SNew(SBox).WidthOverride(Width*Scale).MinDesiredHeight(Slim?24:34)[Cell]];};
     auto Table=SNew(SVerticalBox);auto Header=SNew(SHorizontalBox);auto Names=SNew(SVerticalBox);
     const auto HeadingCell=[](const TCHAR* Key,const TCHAR* Label,const TCHAR* Help){return SNew(SBox)
         .Tag(FName(*(FString(TEXT("UCMMonster.Header."))+Key))).Visibility(EVisibility::Visible).HAlign(HAlign_Center).VAlign(VAlign_Center)
         .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(Help)))[Text(Label,15,Accent)];};
-    Column(Header,115,HeadingCell(TEXT("combat"),TEXT("Mode"),TEXT("Combat mode\nAuto chooses a usable skill and weapon. No attacks allows pets only. Ignore excludes both attacks and pets. Activity switches in Overview / Micro must be enabled.")));
-    Column(Header,55,HeadingCell(TEXT("priority"),TEXT("P"),TEXT("Priority\nHigher numbers are targeted first. 0 is the default; -1 ignores this mob.")));
-    for(const auto& M:Modes)Column(Header,42,HeadingCell(M.Key,M.Short,M.Help));
-    Column(Header,105,HeadingCell(TEXT("damage_type"),TEXT("Damage"),TEXT("Attack damage type\nAuto chooses an element for this mob; choose an element to override it.")));
-    Column(Header,80,Text(TEXT("")));Column(Header,70,Text(TEXT("")));
+    Column(Header,W(115,80),HeadingCell(TEXT("combat"),TEXT("Mode"),TEXT("Combat mode\nAuto chooses a usable skill and weapon. No attacks allows pets only. Ignore excludes both attacks and pets. Activity switches in Overview / Micro must be enabled.")));
+    Column(Header,W(55,36),HeadingCell(TEXT("priority"),TEXT("P"),TEXT("Priority\nHigher numbers are targeted first. 0 is the default; -1 ignores this mob.")));
+    for(const auto& M:Modes)Column(Header,W(42,22),HeadingCell(M.Key,M.Short,M.Help));
+    Column(Header,W(105,66),HeadingCell(TEXT("damage_type"),TEXT("Damage"),TEXT("Attack damage type\nAuto chooses an element for this mob; choose an element to override it.")));
+    Column(Header,W(80,40),Text(TEXT("")));Column(Header,W(70,24),Text(TEXT("")));
     Table->AddSlot().AutoHeight()[Header];
     // Names stay outside the horizontal scroller. Match each control row's
     // measured height so names remain aligned at every plugin text scale.
@@ -178,22 +204,24 @@ void MonsterMatrix()
     for(const auto& Rule:Rows)
     {
         auto Row=SNew(SHorizontalBox);const bool Default=Bool(Rule,TEXT("default"));
-        Column(Row,115,MonsterChoice(Rule,TEXT("combat"),MonsterOptions(TEXT("combat"))));
-        Column(Row,55,MonsterChoice(Rule,TEXT("priority"),MonsterOptions(TEXT("priority")),true));
-        for(const auto& M:Modes)Column(Row,42,MonsterSwitch(Rule,M.Key,M.Help));
-        Column(Row,105,MonsterChoice(Rule,TEXT("damage_type"),MonsterOptions(TEXT("damage_type")),true));
-        Column(Row,80,SNew(SACEPluginButton).Tag(FName(*(TEXT("UCMMonster.")+Str(Rule,TEXT("name"))+TEXT(".details")))).ButtonStyle(&Style()).ContentPadding(FMargin(5,7))
-            .OnClicked_Lambda([this,Rule](){if(Bool(Rule,TEXT("default")))SaveMonster(Rule);const auto Current=P()->GetArrayField(TEXT("monsters"));for(int32 I=0;I<Current.Num();++I)if(Current[I]->AsObject()==Rule)ExpandedMonster=ExpandedMonster==I?INDEX_NONE:I;Rebuild();return FReply::Handled();})[Text(TEXT("Details"),14)]);
-        Column(Row,70,SNew(SACEPluginButton).Tag(FName(*(TEXT("UCMMonster.")+Str(Rule,TEXT("name"))+TEXT(".remove")))).ButtonStyle(&Style()).ContentPadding(FMargin(5,7))
+        Column(Row,W(115,80),MonsterChoice(Rule,TEXT("combat"),MonsterOptions(TEXT("combat"))));
+        Column(Row,W(55,36),MonsterChoice(Rule,TEXT("priority"),MonsterOptions(TEXT("priority")),true));
+        for(const auto& M:Modes)Column(Row,W(42,22),MonsterSwitch(Rule,M.Key,M.Help));
+        Column(Row,W(105,66),MonsterChoice(Rule,TEXT("damage_type"),MonsterOptions(TEXT("damage_type")),true));
+        Column(Row,W(80,40),SNew(SACEPluginButton).Tag(FName(*(TEXT("UCMMonster.")+Str(Rule,TEXT("name"))+TEXT(".details")))).ButtonStyle(&Style()).ContentPadding(FMargin(5,7))
+            .OnClicked_Lambda([this,Rule](){if(Bool(Rule,TEXT("default")))SaveMonster(Rule);const auto Current=P()->GetArrayField(TEXT("monsters"));for(int32 I=0;I<Current.Num();++I)if(Current[I]->AsObject()==Rule)ExpandedMonster=ExpandedMonster==I?INDEX_NONE:I;Rebuild();return FReply::Handled();})[Text(Slim?TEXT("Edit"):TEXT("Details"),14)]);
+        Column(Row,W(70,24),SNew(SACEPluginButton).Tag(FName(*(TEXT("UCMMonster.")+Str(Rule,TEXT("name"))+TEXT(".remove")))).ButtonStyle(&Style()).ContentPadding(FMargin(5,7))
             .IsEnabled(!Default).ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Remove this mob's rule."))))
-            .OnClicked_Lambda([this,Rule](){RemoveMonster(Rule);return FReply::Handled();})[Text(TEXT("Remove"),14)]);
-        Table->AddSlot().AutoHeight()[SNew(SBorder).BorderImage(&FACEPluginStyle::Current()->TitleBackground).Padding(0)[Row]];
+            .OnClicked_Lambda([this,Rule](){RemoveMonster(Rule);return FReply::Handled();})[Text(Slim?TEXT("\u2715"):TEXT("Remove"),14)]);
+        static const FSlateBrush Hairline=[]{FSlateBrush B=*FCoreStyle::Get().GetBrush("WhiteBrush");B.TintColor=FLinearColor(.65f,.52f,.28f,.18f);return B;}();
+        if(Slim)Table->AddSlot().AutoHeight()[SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight()[Row]+SVerticalBox::Slot().AutoHeight()[SNew(SBox).HeightOverride(1)[SNew(SImage).Image(&Hairline)]]];
+        else Table->AddSlot().AutoHeight()[SNew(SBorder).BorderImage(&FACEPluginStyle::Current()->TitleBackground).Padding(0)[Row]];
         Names->AddSlot().AutoHeight()[SNew(SBox).HeightOverride_Lambda([Row](){return Row->GetDesiredSize().Y;})
-            [SNew(SBorder).Tag(FName(*(TEXT("UCMMonster.Name.")+Str(Rule,TEXT("name"))))).BorderImage(&FACEPluginStyle::Current()->TitleBackground)
+            [SNew(SBorder).Tag(FName(*(TEXT("UCMMonster.Name.")+Str(Rule,TEXT("name"))))).BorderImage(Slim?FCoreStyle::Get().GetBrush("NoBrush"):&FACEPluginStyle::Current()->TitleBackground)
                 .Padding(FMargin(6,2)).VAlign(VAlign_Center).Clipping(EWidgetClipping::ClipToBounds)
                 .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(Default?TEXT("Default settings for mobs without their own rule."):Str(Rule,TEXT("name")))))
                 [SNew(SACEPluginText).Text(FText::FromString(Default?TEXT("Default"):Str(Rule,TEXT("name"))))
-                    .Font(FACEPluginStyle::NativeFont("Regular",15)).ColorAndOpacity(Default?Accent:Ink).AutoWrapText(false).OverflowPolicy(ETextOverflowPolicy::Ellipsis)]]];
+                    .Font(FACEPluginStyle::NativeFont("Regular",Slim?14:15)).ColorAndOpacity(Default?Accent:Ink).AutoWrapText(false).OverflowPolicy(ETextOverflowPolicy::Ellipsis)]]];
     }
     Add(SNew(SHorizontalBox)+SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Top)
         [SNew(SBox).WidthOverride_Lambda([this,Scale](){return FMath::Clamp(BodyScroll->GetCachedGeometry().GetLocalSize().X*.4f,120.f,220.f*Scale);})[Names]]

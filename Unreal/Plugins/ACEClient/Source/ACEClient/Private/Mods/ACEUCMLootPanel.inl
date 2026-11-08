@@ -153,7 +153,7 @@ void LootPanel()
     const auto Outer=Body,OuterSection=SectionBody;SectionBody.Reset();
     auto RuleList=SNew(SVerticalBox).Tag(TEXT("LootRuleList"));Body=RuleList;
     Add(Text(TEXT("Loot rules"),18));
-    Add(SNew(SACEPluginEditableTextBox).Style(&LootEditStyle).HintText(FText::FromString(TEXT("Find a rule..."))).Text(FText::FromString(LootSearch))
+    Add(SNew(SACEPluginEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).HintText(FText::FromString(TEXT("Find a rule..."))).Text(FText::FromString(LootSearch))
         .OnTextCommitted_Lambda([this](const FText& T,ETextCommit::Type){LootSearch=T.ToString();LootPage=0;Rebuild();}));
     TArray<int32> Visible;for(int I=0;I<Rules.Num();++I)if(LootSearch.IsEmpty()||Str(Rules[I]->AsObject(),TEXT("label")).Contains(LootSearch))Visible.Add(I);
     LootPage=FMath::Clamp(LootPage,0,FMath::Max(0,(Visible.Num()-1)/50));
@@ -189,12 +189,12 @@ void LootPanel()
     Paging->AddSlot().AutoWidth()[SNew(SBox).IsEnabled((LootPage+1)*50<Visible.Num())[LootTool(TEXT(">"),[this](){++LootPage;Rebuild();})]];
     if(Visible.Num()>50)Add(Paging);
     else Add(Text(FString::Printf(TEXT("%d rules"),Visible.Num()),12,Muted));
-    auto Tools=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4,4));
+    auto Tools=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(3,4));
     Tools->AddSlot()[LootTool(TEXT("New"),[this](){NewLootRule();})];
     Tools->AddSlot()[SNew(SBox).IsEnabled(Rules.IsValidIndex(LootEditIndex))[LootTool(TEXT("Clone"),[this](){SelectLootRule(LootEditIndex,true);})]];
     Tools->AddSlot()[SNew(SBox).IsEnabled(Rules.IsValidIndex(LootEditIndex))[LootTool(TEXT("Delete"),[this](){if(!CanLeaveLootRule())return;auto R=CurrentLootRules();if(R.IsValidIndex(LootEditIndex)){R.RemoveAt(LootEditIndex);WriteLootRules(R);}})]];
     for(int Direction:{-1,1})Tools->AddSlot()[SNew(SBox).IsEnabled(Rules.IsValidIndex(LootEditIndex)&&Rules.IsValidIndex(LootEditIndex+Direction))
-        [LootTool(Direction<0?TEXT("Move up"):TEXT("Move down"),[this,Direction](){if(!CanLeaveLootRule())return;auto R=CurrentLootRules();if(!R.IsValidIndex(LootEditIndex+Direction))return;R.Swap(LootEditIndex,LootEditIndex+Direction);LootEditIndex+=Direction;WriteLootRules(R);})]];
+        [LootTool(Direction<0?TEXT("Up"):TEXT("Down"),[this,Direction](){if(!CanLeaveLootRule())return;auto R=CurrentLootRules();if(!R.IsValidIndex(LootEditIndex+Direction))return;R.Swap(LootEditIndex,LootEditIndex+Direction);LootEditIndex+=Direction;WriteLootRules(R);})]];
     Add(Tools);
     auto Detail=SNew(SVerticalBox).Tag(TEXT("LootRuleDetail"));Body=Detail;SectionBody.Reset();
     Add(Text(LootDraft?(LootEditIndex==INDEX_NONE?TEXT("New rule"):FString::Printf(TEXT("Rule %d"),LootEditIndex+1)):TEXT("Rule details"),18));

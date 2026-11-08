@@ -1,6 +1,6 @@
+#include "Mods/ACEPluginSubsystem.h"
 #include "Mods/ACEPluginStyle.h"
 #include "ACERuntimeOptions.h"
-#include "Mods/ACEPluginSubsystem.h"
 #include "ACEClientSubsystem.h"
 #include "ACEDatSubsystem.h"
 #include "ACEPlayerController.h"
@@ -214,16 +214,17 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMMicroPanel()
         .OnClicked_Lambda([Host](){if(Host.IsValid())Host->SetLedgerOption(TEXT("ucmmicro"),TEXT("condensed"),!Host->LedgerOption(TEXT("ucmmicro"),TEXT("condensed")));return FReply::Handled();})
         [SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",13)).Text_Lambda([Toggles](){return FText::FromString(Toggles->IsCondensed()?TEXT("More"):TEXT("Less"));})]];
     Rows->AddSlot().AutoHeight().Padding(2,2)[Header];
-    auto Quick=SNew(SVerticalBox).Tag(TEXT("MicroQuickControls"));
+    // Quick actions sit on their own wrapped row under the activities so labels never overlap.
+    auto Quick=SNew(SWrapBox).Tag(TEXT("MicroQuickControls")).UseAllottedSize(true).InnerSlotPadding(FVector2D(12,4));
     const auto QuickCheck=[&](const TCHAR* Key,const TCHAR* Label,const TCHAR* Short,const TCHAR* Help,TFunction<bool()> Read,TFunction<void(bool)> Write,TAttribute<bool> Enabled)
     {
-        Quick->AddSlot().AutoHeight().HAlign(HAlign_Right).Padding(0,1)[SNew(SCheckBox).Tag(FName(*(FString(TEXT("MicroQuick."))+Key)))
+        Quick->AddSlot()[SNew(SCheckBox).Tag(FName(*(FString(TEXT("MicroQuick."))+Key)))
             .Style(&FACEPluginStyle::Current()->Check).IsFocusable(false).IsEnabled(Enabled)
             .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(Help)))
             .IsChecked_Lambda([Read]{return Read()?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
             .OnCheckStateChanged_Lambda([Write](ECheckBoxState V){Write(V==ECheckBoxState::Checked);})
             [SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",13)).AutoWrapText(false)
-                .Text_Lambda([Root=TWeakPtr<SBorder>(Root),Label,Short]{auto P=Root.Pin();return FText::FromString(P&&P->GetCachedGeometry().GetLocalSize().X>=330?Label:Short);})]];
+                .Text_Lambda([Root=TWeakPtr<SBorder>(Root),Label,Short]{auto P=Root.Pin();return FText::FromString(P&&P->GetCachedGeometry().GetLocalSize().X>=240?Label:Short);})]];
     };
     QuickCheck(TEXT("ForceBuff"),TEXT("Force Buff"),TEXT("F"),TEXT("Force Buff: check to refresh enabled buffs. Uncheck to cancel after the current cast."),
         [Host]{return Host.IsValid()&&Host->IsForceBuffRequested();},
@@ -237,10 +238,9 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMMicroPanel()
     QuickCheck(TEXT("Corners"),TEXT("Corners"),TEXT("C"),TEXT("Follow the player's observed footsteps rather than heading directly toward them."),
         [UCM]{auto P=UCM();bool On=false;if(P)P->Profile->TryGetBoolField(TEXT("follow_corners"),On);return On;},
         [Host,UCM](bool On){if(auto P=UCM();P&&Host.IsValid()){P->Profile->SetBoolField(TEXT("follow_corners"),On);Host->SaveCurrentProfile(P->Id,false);}},true);
-    Rows->AddSlot().AutoHeight()[SNew(SHorizontalBox)
-        +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Top)[Toggles]
-        +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Top).Padding(4,0,0,0)[SNew(SBox)
-            .WidthOverride_Lambda([Root=TWeakPtr<SBorder>(Root)]{auto P=Root.Pin();return P&&P->GetCachedGeometry().GetLocalSize().X>=330?140.f:44.f;})[Quick]]];
+    Rows->AddSlot().AutoHeight()[Toggles];
+    Rows->AddSlot().AutoHeight().Padding(2,6,2,2)[SNew(SBox).HeightOverride(1)[SNew(SImage).Image(FCoreStyle::Get().GetBrush("WhiteBrush")).ColorAndOpacity(FLinearColor(.65f,.52f,.28f,.35f))]];
+    Rows->AddSlot().AutoHeight().Padding(2,2)[Quick];
     for(const auto& Entry:TArray<TPair<FString,FString>>{
         {TEXT("meta_enabled"),TEXT("Metas")},{TEXT("buffing"),TEXT("Buffing")},
         {TEXT("combat"),TEXT("Combat")},{TEXT("looting"),TEXT("Looting")},
