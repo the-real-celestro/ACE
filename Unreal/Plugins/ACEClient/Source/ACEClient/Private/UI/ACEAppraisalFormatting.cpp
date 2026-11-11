@@ -13,7 +13,7 @@ FString ACEAppraisalFormatting::SlayerProperty(UACEDatSubsystem* Dat, uint32 Cre
     return CreatureType==31 ? FString(TEXT("Bael'Zharon's Hate")) : Name+TEXT(" slayer");
 }
 
-TArray<FACEItemStatLine> ACEAppraisalFormatting::EquipmentStatLines(const FACEAppraisalInfo& Info)
+TArray<FACEItemStatLine> ACEAppraisalFormatting::EquipmentStatLines(const FACEAppraisalInfo& Info,UACEDatSubsystem* Dat)
 {
     TArray<FACEItemStatLine> Rows;
     if(!Info.bSuccess)return Rows;
@@ -30,7 +30,7 @@ TArray<FACEItemStatLine> ACEAppraisalFormatting::EquipmentStatLines(const FACEAp
         if(Launcher)
         {
             if(FMath::IsFinite(Info.WeaponDamageMod)&&Info.WeaponDamageMod>0)
-                Add(TEXT("Multiplier"),TEXT("Damage multiplier"),TEXT("×")+Number(Info.WeaponDamageMod));
+                Add(TEXT("Multiplier"),TEXT("Damage modifier"),Percent(Info.WeaponDamageMod-1));
             if(Info.Damage)Add(TEXT("Damage"),TEXT("Missile damage bonus"),FString::Printf(TEXT("%+d"),Info.Damage));
         }
         else if(FMath::IsFinite(Info.DamageVariance))
@@ -78,7 +78,158 @@ TArray<FACEItemStatLine> ACEAppraisalFormatting::EquipmentStatLines(const FACEAp
     if(const auto* V=Info.IntProperties.Find(107);V&&Info.IntProperties.Contains(108))
         Add(TEXT("Mana"),TEXT("Item mana"),FString::Printf(TEXT("%d / %d"),*V,Info.IntProperties.FindRef(108)));
     if(const auto* V=Info.IntProperties.Find(106))Add(TEXT("Spellcraft"),TEXT("Spellcraft"),FString::FromInt(*V));
+    // Appraisal weapon profiles and the defense/caster/armor property values
+    // already contain active spells. Never apply a spell to these totals again.
+    bool Known=false;
+    auto Base=UnbuffedItemStats(Info,Dat,Known);
+    if(!Known)Base.Reset();
+    auto RawInt=[&](const TCHAR* Key,uint32 Property)
+    {if(const auto* V=Info.IntProperties.Find(Property))Base.Add(Key,*V);};
+    auto RawFloat=[&](const TCHAR* Key,uint32 Property)
+    {if(const auto* V=Info.FloatProperties.Find(Property);V&&FMath::IsFinite(*V))Base.Add(Key,*V);};
+    // These instance properties are transmitted unmodified alongside the
+    // reflected weapon profile, so they work even without a known spell ID.
+    RawInt(TEXT("Damage"),44);RawInt(TEXT("Speed"),49);
+    RawFloat(TEXT("Variance"),22);RawFloat(TEXT("Attack"),62);RawFloat(TEXT("Multiplier"),63);
+    if(!Info.IntProperties.Contains(49)&&Info.WeaponTime==0&&(Info.WeaponEnchantments&4))Base.Remove(TEXT("Speed"));
+    if(!Info.IntProperties.Contains(44)&&Info.Damage==0&&(Info.WeaponEnchantments&8))Base.Remove(TEXT("Damage"));
+    if(!Base.Contains(TEXT("Variance"))&&!(Info.WeaponEnchantments&16))Base.Add(TEXT("Variance"),Info.DamageVariance);
+    if(!(Info.ArmorEnchantments&1)&&Info.IntProperties.Contains(28))Base.Add(TEXT("Armor"),Info.IntProperties.FindRef(28));
+    const uint32 ArmorKeys[]={13,14,15,16,17,18,165,19};
+    const uint32 ArmorBits[]={2,4,8,16,32,64,256,128};
+    for(int32 I=0;I<8;++I)
+    {
+        const FString Key=FString::Printf(TEXT("Armor%d"),ArmorKeys[I]);
+        if((Info.ArmorEnchantments&ArmorBits[I])&&Info.ArmorResistances.IsValidIndex(I)
+            &&FMath::Abs(Info.ArmorResistances[I])>=2)Base.Remove(Key); // clamped totals cannot be inverted
+        RawFloat(*Key,ArmorKeys[I]);
+    }
+    TMap<FString,double> Current;
+    if(Info.bHasWeaponProfile)
+    {
+        Current.Add(TEXT("Damage"),Info.Damage);Current.Add(TEXT("Speed"),Info.WeaponTime);
+        Current.Add(TEXT("Variance"),Info.DamageVariance);Current.Add(TEXT("Attack"),Info.WeaponOffense);
+        Current.Add(TEXT("Multiplier"),Info.WeaponDamageMod);
+    }
+    for(const auto& P:TArray<TPair<const TCHAR*,uint32>>{{TEXT("Defense"),29},{TEXT("MissileDefense"),149},
+        {TEXT("MagicDefense"),150},{TEXT("ManaConversion"),144},{TEXT("Element"),152}})
+        if(const auto* V=Info.FloatProperties.Find(P.Value);V&&FMath::IsFinite(*V))Current.Add(P.Key,*V);
+    if(const auto* AL=Info.IntProperties.Find(28))Current.Add(TEXT("Armor"),*AL);
+    auto Signed=[&](double V){return FString(V>=0?TEXT("+"):TEXT(""))+Number(V);};
+    for(auto& Row:Rows)
+    {
+        uint32 Flags=0,Bit=0;
+        const FString Key=Row.Key==TEXT("ElementPvP")?TEXT("Element"):Row.Key;
+        if(Key==TEXT("Damage")){Flags=Info.WeaponEnchantments;Bit=(Flags&8)?8:16;}
+        else if(Key==TEXT("Variance")){Flags=Info.WeaponEnchantments;Bit=16;}
+        else if(Key==TEXT("Speed")){Flags=Info.WeaponEnchantments;Bit=4;}
+        else if(Key==TEXT("Attack")){Flags=Info.WeaponEnchantments;Bit=1;}
+        else if(Key==TEXT("Defense")){Flags=Info.WeaponEnchantments;Bit=2;}
+        else if(Key==TEXT("Multiplier")){Flags=Info.WeaponEnchantments;Bit=32;}
+        else if(Key==TEXT("ManaConversion")){Flags=Info.ResistanceEnchantments;Bit=0x1000;}
+        else if(Key==TEXT("Element")){Flags=Info.ResistanceEnchantments;Bit=0x2000;}
+        else if(Key==TEXT("Armor")){Flags=Info.ArmorEnchantments;Bit=1;}
+        for(int32 I=0;I<8;++I)if(Key==FString::Printf(TEXT("Armor%d"),ArmorKeys[I]))
+        {Flags=Info.ArmorEnchantments;Bit=(Flags&ArmorBits[I])?ArmorBits[I]:1;}
+        Row.bSpellModified=(Flags&Bit)!=0;
+        Row.Color=!Row.bSpellModified?FLinearColor::White:(Flags&(Bit<<16))?FLinearColor::Green:FLinearColor(1.f,.2f,.15f);
+        double Now=Current.FindRef(Key),Before=Base.FindRef(Key);
+        bool HasDelta=Current.Contains(Key)&&Base.Contains(Key)&&FMath::IsFinite(Now)&&FMath::IsFinite(Before);
+        if(Key.StartsWith(TEXT("Armor"))&&Key!=TEXT("Armor"))
+        {
+            int32 Index=INDEX_NONE;
+            for(int32 I=0;I<8;++I)if(Key==FString::Printf(TEXT("Armor%d"),ArmorKeys[I]))Index=I;
+            HasDelta=Index!=INDEX_NONE&&Info.ArmorResistances.IsValidIndex(Index)&&Base.Contains(Key)&&Base.Contains(TEXT("Armor"));
+            if(HasDelta)
+            {
+                Now=FMath::TruncToDouble(Info.IntProperties.FindRef(28)*FMath::Clamp(double(Info.ArmorResistances[Index]),0.,2.));
+                Before=FMath::TruncToDouble(Base.FindRef(TEXT("Armor"))*FMath::Clamp(Base[Key],0.,2.));
+            }
+        }
+        if(!HasDelta)continue;
+        const double Delta=Now-Before;
+        const bool HitRange=Key==TEXT("Damage")&&!Launcher&&Base.Contains(TEXT("Variance"));
+        const double LowDelta=HitRange?Now*(1-FMath::Clamp(double(Info.DamageVariance),0.,1.))
+            -Before*(1-FMath::Clamp(Base[TEXT("Variance")],0.,1.)):Delta;
+        if(FMath::IsNearlyZero(Delta,1.e-5)&&FMath::IsNearlyZero(LowDelta,1.e-5))continue;
+        Row.bSpellModified=true;
+        const bool Lower=Key==TEXT("Speed")||Key==TEXT("Variance");
+        const bool Beneficial=Lower?Delta<0:(Delta>0||(FMath::IsNearlyZero(Delta,1.e-5)&&LowDelta>0));
+        Row.Color=Beneficial?FLinearColor::Green:FLinearColor(1.f,.2f,.15f);
+        FString Contribution;
+        if(HitRange)
+        {
+            Contribution=FMath::IsNearlyEqual(LowDelta,Delta,.05)?Signed(Delta)
+                :Signed(LowDelta)+TEXT("–")+(LowDelta>=0&&Delta>=0?Number(Delta):Signed(Delta));
+        }
+        else
+        {
+            const bool PercentStat=Key==TEXT("Attack")||Key==TEXT("Defense")||Key==TEXT("MissileDefense")
+                ||Key==TEXT("MagicDefense")||Key==TEXT("Variance")||Key==TEXT("Multiplier")
+                ||Key==TEXT("Element")||Key==TEXT("ManaConversion");
+            const double Scale=Row.Key==TEXT("ElementPvP")?50:PercentStat?100:1;
+            Contribution=Signed(Delta*Scale)+(PercentStat?TEXT("%"):Key==TEXT("Damage")&&!Launcher?TEXT(" max"):TEXT(""));
+        }
+        Row.SpellContribution=TEXT(" (")+Contribution+TEXT(" spells)");
+    }
     return Rows;
+}
+
+namespace
+{
+const TMap<FString,FString>& ExaminationStatKeys()
+{
+    static const TMap<FString,FString> Keys={{TEXT("Damage:"),TEXT("Damage")},{TEXT("Damage Bonus:"),TEXT("Damage")},
+        {TEXT("Damage Modifier:"),TEXT("Multiplier")},{TEXT("Speed:"),TEXT("Speed")},
+        {TEXT("Bonus to Attack Skill:"),TEXT("Attack")},{TEXT("Bonus to Melee Defense:"),TEXT("Defense")},
+        {TEXT("Bonus to Missile Defense:"),TEXT("MissileDefense")},{TEXT("Bonus to Magic Defense:"),TEXT("MagicDefense")},
+        {TEXT("Armor Level:"),TEXT("Armor")},{TEXT("Base Shield Level:"),TEXT("Armor")},
+        {TEXT("Slashing:"),TEXT("Armor13")},{TEXT("Piercing:"),TEXT("Armor14")},{TEXT("Bludgeoning:"),TEXT("Armor15")},
+        {TEXT("Cold:"),TEXT("Armor16")},{TEXT("Fire:"),TEXT("Armor17")},{TEXT("Acid:"),TEXT("Armor18")},
+        {TEXT("Electric:"),TEXT("Armor19")},{TEXT("Nether:"),TEXT("Armor165")},
+        {TEXT("Bonus to Mana Conversion:"),TEXT("ManaConversion")},
+        {TEXT(" vs. Monsters:"),TEXT("Element")},{TEXT(" vs. Players:"),TEXT("ElementPvP")}};
+    return Keys;
+}
+}
+
+void ACEAppraisalFormatting::ItemSpellColors(const FACEAppraisalInfo& Info,UACEDatSubsystem* Dat,const FString& Text,TArray<FLinearColor>& Colors)
+{
+    const auto Rows=EquipmentStatLines(Info,Dat);
+    int32 Start=0;
+    while(Start<Text.Len())
+    {
+        int32 End=Text.Find(TEXT("\n"),ESearchCase::CaseSensitive,ESearchDir::FromStart,Start);
+        if(End==INDEX_NONE)End=Text.Len();
+        const FString Line=Text.Mid(Start,End-Start);
+        for(const auto& Pair:ExaminationStatKeys())if(Line.StartsWith(Pair.Key))
+        {
+            const auto* Row=Rows.FindByPredicate([&](const FACEItemStatLine& R){return R.Key==Pair.Value;});
+            if(Row&&Row->bSpellModified)for(int32 I=Start;I<End;++I)Colors[I]=Row->Color;
+            break;
+        }
+        Start=End+1;
+    }
+}
+
+FString ACEAppraisalFormatting::ItemSpellContributions(const FACEAppraisalInfo& Info,UACEDatSubsystem* Dat,const FString& Text)
+{
+    const auto Rows=EquipmentStatLines(Info,Dat);
+    if(!Rows.ContainsByPredicate([](const FACEItemStatLine& R){return !R.SpellContribution.IsEmpty();}))return Text;
+    TArray<FString> Lines;Text.ParseIntoArrayLines(Lines,false);
+    for(auto& Line:Lines)for(const auto& Pair:ExaminationStatKeys())if(Line.StartsWith(Pair.Key))
+    {
+        const auto* Row=Rows.FindByPredicate([&](const FACEItemStatLine& R){return R.Key==Pair.Value;});
+        if(Row&&!Row->SpellContribution.IsEmpty())
+        {
+            const bool Period=Line.RemoveFromEnd(TEXT("."));
+            Line+=Row->SpellContribution;if(Period)Line+=TEXT(".");
+        }
+        break;
+    }
+    FString Result=FString::Join(Lines,TEXT("\n"));
+    if(Text.EndsWith(TEXT("\n"))&&!Result.EndsWith(TEXT("\n")))Result+=TEXT("\n");
+    return Result;
 }
 
 FString ACEAppraisalFormatting::ItemLevelDetails(const FACEAppraisalInfo& Info)

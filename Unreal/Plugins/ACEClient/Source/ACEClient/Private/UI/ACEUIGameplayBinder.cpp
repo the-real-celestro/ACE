@@ -11709,8 +11709,8 @@ void UACEUIGameplayBinder::RefreshExaminationOverlay()
 	for (UTextBlock* Text : ExamAttributeLabels) if (Text) Text->SetVisibility(ESlateVisibility::Collapsed);
 	for (UTextBlock* Text : ExamAttributeValues) if (Text) Text->SetVisibility(ESlateVisibility::Collapsed);
 	const FACEPlayerVitals Viewer = Client ? Client->GetPlayerVitals() : FACEPlayerVitals();
-	const FString Body = ACEAppraisalFormatting::ItemExaminationText(LastAppraisal,
-        Canvas->GetResourceResolver() ? Canvas->GetResourceResolver()->GetDatSubsystem() : nullptr,
+	auto* Dat=Canvas->GetResourceResolver() ? Canvas->GetResourceResolver()->GetDatSubsystem() : nullptr;
+	const FString Body = ACEAppraisalFormatting::ItemExaminationText(LastAppraisal, Dat,
         !Manager->FindElementUnder(TEXT("ItemExamineUI"), TEXT("ItemValueText")),
         !Manager->FindElementUnder(TEXT("ItemExamineUI"), TEXT("ItemBurdenText")), &Viewer);
 	const FString BodyEl = LastAppraisal.bIsCreature
@@ -11735,7 +11735,7 @@ void UACEUIGameplayBinder::RefreshExaminationOverlay()
 		if (auto* Retail = Cast<UACERetailTextBlock>(ExamBody))
 		{
 			Retail->SetRetailElement(Canvas->GetResourceResolver(), BodyTarget, Canvas->GetLastScale2D(), BodyTarget->Width, false);
-			Retail->SetTextColors(ACEAppraisalFormatting::ItemTextColors(LastAppraisal, Body));
+			Retail->SetTextColors(ACEAppraisalFormatting::ItemTextColors(LastAppraisal, Body, Dat));
 		}
 		ExamBody->SetAutoWrapText(true);
 		ExamBody->SetClipping(EWidgetClipping::Inherit);

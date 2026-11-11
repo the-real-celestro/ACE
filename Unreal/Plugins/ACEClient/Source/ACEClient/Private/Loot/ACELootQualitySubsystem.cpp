@@ -20,6 +20,7 @@ void UACELootQualitySubsystem::Initialize(FSubsystemCollectionBase& Collection)
     Client->OnAppraisalObserved.AddDynamic(this,&UACELootQualitySubsystem::ObserveAppraisal);
     Client->OnVitalsUpdated.AddDynamic(this,&UACELootQualitySubsystem::ObserveVitals);
     Client->OnItemRefreshed.AddDynamic(this,&UACELootQualitySubsystem::ObserveItemRefresh);
+    Client->OnEnchantmentsChanged.AddDynamic(this,&UACELootQualitySubsystem::ObserveEnchantments);
     bInitialized=true;
 }
 void UACELootQualitySubsystem::Deinitialize()
@@ -31,6 +32,7 @@ void UACELootQualitySubsystem::Deinitialize()
         C->OnAppraisalObserved.RemoveDynamic(this,&UACELootQualitySubsystem::ObserveAppraisal);
         C->OnVitalsUpdated.RemoveDynamic(this,&UACELootQualitySubsystem::ObserveVitals);
         C->OnItemRefreshed.RemoveDynamic(this,&UACELootQualitySubsystem::ObserveItemRefresh);
+        C->OnEnchantmentsChanged.RemoveDynamic(this,&UACELootQualitySubsystem::ObserveEnchantments);
     }
     Super::Deinitialize();
 }
@@ -79,6 +81,22 @@ void UACELootQualitySubsystem::ObserveVitals(const FACEPlayerVitals& V)
         for(const auto& E:Active){H=HashCombine(H,GetTypeHash(E.SpellId));H=HashCombine(H,GetTypeHash(E.CasterGuid));}
     }
     if(H==ProfileFingerprint)return;ProfileFingerprint=H;Reviews.Empty();++Revision;
+}
+void UACELootQualitySubsystem::ObserveEnchantments()
+{
+    CheckCharacter();
+    auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+    // Ask the server for fresh reflected totals when equipped-item auras change.
+    // Keep the last panel attached while its replacement appraisal is in flight.
+    if(C&&Player)for(const auto& P:Items)
+    {
+        FACEWorldObject Item=P.Value,Fresh;
+        if(C->GetWorldObject(P.Key,Fresh))Item=Fresh;
+        if(Item.WielderId!=Player)continue;
+        Requested.Remove(P.Key);
+        if(!Queue.Contains(P.Key)&&Queue.Num()<128)Queue.Add(P.Key);
+    }
+    Reviews.Empty();++Revision;
 }
 void UACELootQualitySubsystem::ObserveAppraisal(const FACEAppraisalInfo& A)
 {

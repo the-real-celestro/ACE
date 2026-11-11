@@ -171,7 +171,7 @@ void ACELootPresentation::Tooltip(UWidget* Owner,const FString& Name,const FACEW
             PvP=*S;PvP.Original*=.5;PvP.Permanent*=.5;PvP.WithCantrip*=.5;
             PvP.Bounds.Low*=.5;PvP.Bounds.High*=.5;S=&PvP;
         }
-        FString ValueText=Line.Value;
+        FString ValueText=Line.Value+Line.SpellContribution;
         // These are natural roll limits, not caps on a tinkered or buffed item.
         // Armor resistance rows display effective AL rather than multipliers.
         if(S&&S->Bounds.Variable()&&(!Line.Key.StartsWith(TEXT("Armor"))||Line.Key==TEXT("Armor")))
@@ -179,12 +179,12 @@ void ACELootPresentation::Tooltip(UWidget* Owner,const FString& Name,const FACEW
             const double Best=S->bLowerBetter?S->Bounds.Low:S->Bounds.High;
             FString Limit=ACELootQuality::FormatStat(Best,S->bPercent);
             if(S->bPercent&&!S->bLowerBetter&&Best>=0)Limit=TEXT("+")+Limit;
-            if(Line.Key==TEXT("Multiplier"))Limit=TEXT("×")+Limit;
+            if(Line.Key==TEXT("Multiplier"))Limit=(Best>=1?FString(TEXT("+")):FString())+ACELootQuality::FormatStat(Best-1,true);
             ValueText+=FString::Printf(TEXT(" (base %s %s)"),S->bLowerBetter?TEXT("best"):TEXT("max"),*Limit);
         }
         TSharedRef<SHorizontalBox> Row=SNew(SHorizontalBox);
-        Row->AddSlot().FillWidth(.43f)[Text(Line.Label+TEXT(":"),11,FLinearColor(.82,.83,.86),ContentWidth*.43f)];
-        Row->AddSlot().FillWidth(.57f)[Text(ValueText,11,FLinearColor(.96,.95,.9),ContentWidth*.57f)];
+        Row->AddSlot().FillWidth(.43f)[Text(Line.Label+TEXT(":"),11,Line.bSpellModified?Line.Color:FLinearColor(.82,.83,.86),ContentWidth*.43f)];
+        Row->AddSlot().FillWidth(.57f)[Text(ValueText,11,Line.bSpellModified?Line.Color:FLinearColor(.96,.95,.9),ContentWidth*.57f)];
         Rows->AddSlot().AutoHeight().Padding(0,1)[Row];
         if(!S||!S->bPermanentKnown)continue;
         auto Value=[&](double V){return ACELootQuality::FormatStat(V,S->bPercent);};
@@ -195,7 +195,7 @@ void ACELootPresentation::Tooltip(UWidget* Owner,const FString& Name,const FACEW
             const FString Base=Line.Key.StartsWith(TEXT("Armor"))&&Line.Key!=TEXT("Armor")?TEXT("  Base resistance ×"):TEXT("  Base ");
             Rows->AddSlot().AutoHeight()[T(Base+Value(S->Original)+TEXT(" · Tinkering ")+Change,9,TinkerColor)];
         }
-        if(FMath::Abs(S->WithCantrip-S->Permanent)>1.e-5)
+        if(S->bPotential&&FMath::Abs(S->WithCantrip-S->Permanent)>1.e-5)
         {
             const double Delta=S->WithCantrip-S->Permanent;
             Rows->AddSlot().AutoHeight()[T(FString(TEXT("  Cantrip "))+(Delta>=0?TEXT("+"):TEXT(""))+Value(Delta),9,CantripColor)];

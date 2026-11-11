@@ -163,6 +163,31 @@ non-finite values. Existing scoring and hover-refresh fixtures remain in place.
 
 ## Icon and hover stability
 
+### Active spell totals (v160)
+
+Hover and Examine use the server's spell-inclusive appraisal totals. Beneficial
+changes are green; harmful changes retain red. Verified active contributions
+appear inline, for example `Damage Bonus: 18 (+16 spells)` and
+`Melee defense: +41% (+29% spells)`. Melee damage retains its per-hit range and
+shows the change at both endpoints. Launcher damage modifiers use the same
+percentage notation as Examine. Tinkering remains a separate permanent change.
+
+Unbuffed values come from this instance's raw weapon properties or from the
+known, category-stacked active spell effects in its appraisal. Innate inactive
+spells do not change current totals. Already active cantrips are not repeated as
+an additional blue preview. Unknown effects and irreversible capped values keep
+the supplied total/highlight without inventing a spell amount. Speed at zero
+uses its actual reduction when a raw instance speed is available. The former
+verbose Buffed/Unbuffed footer is replaced by inline contributions.
+Enchantment updates queue fresh appraisals for tracked equipped items, using the
+existing throttled background path. The previous panel stays visible while the
+server supplies new totals.
+
+`ACE.RetailParity.ItemSpellTotals` checks final bow damage, clamped speed,
+ordinary/cantrip stacking, inactive and unknown effects, debuffs, caster PvE/PvP
+bonuses, multiplicative mana conversion, shared Examine colors and the rendered
+hover. Its native capture is `Saved/LootQuality-active-spells.png`.
+
 Quality uses an original beveled square frame inspired by WoW: a dark outer
 rim, rarity-colored faces, an upper-left highlight and a recessed inner seam.
 It scales with larger icons and leaves interior artwork and imbue backgrounds

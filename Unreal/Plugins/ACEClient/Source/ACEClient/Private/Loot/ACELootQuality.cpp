@@ -98,14 +98,15 @@ TMap<FString,double> PermanentStats(const FACEAppraisalInfo& A, UACEDatSubsystem
         Values.Add(TEXT("Variance"), F(A,22,A.DamageVariance));
         Values.Add(TEXT("Attack"), F(A,62,A.WeaponOffense));
         Values.Add(TEXT("Multiplier"), F(A,63,A.WeaponDamageMod));
+        Values.Add(TEXT("Speed"), A.IntProperties.Contains(49) ? A.IntProperties.FindRef(49) : A.WeaponTime);
     }
     if (A.FloatProperties.Contains(29)) Values.Add(TEXT("Defense"),F(A,29));
     if (A.FloatProperties.Contains(152)) Values.Add(TEXT("Element"),F(A,152));
     if (A.IntProperties.Contains(204)) Values.Add(TEXT("ElementBonus"),A.IntProperties.FindRef(204));
     if (A.IntProperties.Contains(28)) Values.Add(TEXT("Armor"),A.IntProperties.FindRef(28));
-    const int32 ResistanceIndices[]={3,4,5,7};
-    for(int32 I=0;I<4;++I)if(A.ArmorResistances.IsValidIndex(ResistanceIndices[I]))
-        Values.Add(FString::Printf(TEXT("Armor%d"),16+I),A.ArmorResistances[ResistanceIndices[I]]);
+    const int32 ResistanceKeys[]={13,14,15,16,17,18,165,19};
+    for(int32 I=0;I<8;++I)if(A.ArmorResistances.IsValidIndex(I))
+        Values.Add(FString::Printf(TEXT("Armor%d"),ResistanceKeys[I]),A.ArmorResistances[I]);
     if (A.FloatProperties.Contains(144)) Values.Add(TEXT("ManaConversion"),F(A,144));
     const auto Appraised=Values;
     const auto Effects = ActiveItemEffects(A,Dat,Known);
@@ -116,6 +117,7 @@ TMap<FString,double> PermanentStats(const FACEAppraisalInfo& A, UACEDatSubsystem
         FString Key;
         bool AlreadyRaw=false;
         if (Type==4 && (S->Key==44 || S->Key==360)) { Key=TEXT("Damage");AlreadyRaw=A.IntProperties.Contains(44); }
+        if (Type==4 && (S->Key==49 || S->Key==361)) { Key=TEXT("Speed");AlreadyRaw=A.IntProperties.Contains(49); }
         if (Type==8)
         {
             switch (S->Key)
@@ -126,7 +128,7 @@ TMap<FString,double> PermanentStats(const FACEAppraisalInfo& A, UACEDatSubsystem
             case 63:Key=TEXT("Multiplier");AlreadyRaw=A.FloatProperties.Contains(63);break;
             case 152:case 170:Key=TEXT("Element");break;
             case 144:case 171:Key=TEXT("ManaConversion");break;
-            case 16:case 17:case 18:case 19:Key=FString::Printf(TEXT("Armor%d"),S->Key);break;
+            case 13:case 14:case 15:case 16:case 17:case 18:case 19:case 165:Key=FString::Printf(TEXT("Armor%d"),S->Key);break;
             }
         }
         if (Type==4 && S->Key==28) Key=TEXT("Armor");
@@ -201,6 +203,11 @@ Role Relevance(const FLootSpell& S, int32 Skill, int32 Family, bool Atlatl,bool 
 }
 }
 
+TMap<FString,double> ACEAppraisalFormatting::UnbuffedItemStats(const FACEAppraisalInfo& Info,UACEDatSubsystem* Dat,bool& Known)
+{
+    return PermanentStats(Info,Dat,Known);
+}
+
 FLinearColor ACELootQuality::Color(ACELootScoring::Grade Grade)
 {
     const FColor Colors[]={FColor(157,157,157),FColor(255,255,255),FColor(30,255,0),FColor(0,112,221),FColor(163,53,238),FColor(255,128,0)};
@@ -266,7 +273,7 @@ FACEQualityReview ACELootQuality::Evaluate(const FACEWorldObject& Item,const FAC
     if(!A.bSuccess)return R;
     R.bIdentified=true;
     auto Display=A;Display.ItemType=Item.ItemType;
-    R.CurrentStats=ACEAppraisalFormatting::EquipmentStatLines(Display);
+    R.CurrentStats=ACEAppraisalFormatting::EquipmentStatLines(Display,Dat);
     R.Properties=ACEAppraisalFormatting::EquipmentProperties(A,Dat);
     for(int32 Entry:A.SpellBookEntries.IsEmpty()?A.SpellIds:A.SpellBookEntries)
     {
@@ -372,13 +379,15 @@ FACEQualityReview ACELootQuality::Evaluate(const FACEWorldObject& Item,const FAC
         if((S.Type&0xff)==4&&S.Key==28)NativeBonuses.Add(TEXT("Armor"),S.Amount);
         if((S.Type&0xff)==8&&S.Key>=16&&S.Key<=19)NativeBonuses.Add(FString::Printf(TEXT("Armor%d"),S.Key),S.Amount);
         if((S.Type&0xff)==8&&S.Key==171&&Multiply)NativeMultipliers.Add(TEXT("ManaConversion"),S.Amount);
-        if(Q.bActive)
+        if(Q.bActive||A.SpellBookEntries.Contains(int32(0x80000000u|uint32(S.Id))))
         {
             if((S.Type&0xff)==4&&S.Key==360)ActiveKeys.Add(TEXT("Damage"));
             if((S.Type&0xff)==8&&S.Key==168)ActiveKeys.Add(TEXT("Attack"));
             if((S.Type&0xff)==8&&S.Key==169)ActiveKeys.Add(TEXT("Defense"));
             if((S.Type&0xff)==8&&S.Key==170)ActiveKeys.Add(TEXT("Element"));
             if((S.Type&0xff)==8&&S.Key==171)ActiveKeys.Add(TEXT("ManaConversion"));
+            if((S.Type&0xff)==4&&S.Key==28)ActiveKeys.Add(TEXT("Armor"));
+            if((S.Type&0xff)==8&&S.Key>=13&&S.Key<=19)ActiveKeys.Add(FString::Printf(TEXT("Armor%d"),S.Key));
         }
         R.Spells.Add(MoveTemp(Q));
     }

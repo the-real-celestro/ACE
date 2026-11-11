@@ -1692,6 +1692,9 @@ inline int32 ACEPlacementFromParentLocation(int32 ParentLocation)
 struct FACEItemStatLine
 {
 	FString Key, Label, Value;
+	FString SpellContribution;
+	FLinearColor Color = FLinearColor::White;
+	bool bSpellModified = false;
 };
 
 /** Appraisal / identify result (GameEvent 0x00C9). */

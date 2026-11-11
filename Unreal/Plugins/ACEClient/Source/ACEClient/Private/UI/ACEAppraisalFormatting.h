@@ -13,7 +13,12 @@ FString EquipmentSetName(int32 Id);
 FString ItemLevelDetails(const FACEAppraisalInfo& Info);
 FString SlayerProperty(UACEDatSubsystem* Dat, uint32 CreatureType);
 FString RequirementEnumName(UACEDatSubsystem* Dat, uint32 Enum, int32 Value);
-TArray<FACEItemStatLine> EquipmentStatLines(const FACEAppraisalInfo& Info);
+TArray<FACEItemStatLine> EquipmentStatLines(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat = nullptr);
+// Uses the active appraisal spell markers and category stacking rules. These
+// values include permanent tinkering; they are not pre-tinkering original rolls.
+TMap<FString,double> UnbuffedItemStats(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat, bool& Known);
+FString ItemSpellContributions(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat, const FString& Text);
+void ItemSpellColors(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat, const FString& Text, TArray<FLinearColor>& Colors);
 TArray<FString> EquipmentProperties(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat);
 inline FString ManaStoneDetails(const FACEAppraisalInfo& Info)
 {
@@ -195,7 +200,7 @@ inline TArray<FCreatureDetailLine> CreatureDetailLines(const FACEAppraisalInfo& 
     return Lines;
 }
 
-inline TArray<FLinearColor> ItemTextColors(const FACEAppraisalInfo& Info, const FString& Text)
+inline TArray<FLinearColor> ItemTextColors(const FACEAppraisalInfo& Info, const FString& Text, UACEDatSubsystem* Dat = nullptr)
 {
     TArray<FLinearColor> Colors; Colors.Init(FLinearColor::White, Text.Len());
     // AppraisalProfile::InqInt/FloatEnchantmentMod: low word = changed,
@@ -230,6 +235,7 @@ inline TArray<FLinearColor> ItemTextColors(const FACEAppraisalInfo& Info, const 
     Stat(TEXT("Damage bonus for "), Info.ResistanceEnchantments, 0x2000);
     Stat(TEXT(" vs. Monsters:"), Info.ResistanceEnchantments, 0x2000);
     Stat(TEXT(" vs. Players:"), Info.ResistanceEnchantments, 0x2000);
+    ItemSpellColors(Info,Dat,Text,Colors);
     return Colors;
 }
 
@@ -560,7 +566,7 @@ inline FString ItemDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat 
     }
     if (!SpellDescriptions.IsEmpty()) AppendItemText(Text, TEXT("Spell Descriptions:\n") + SpellDescriptions, true);
     if (!EnchantmentDescriptions.IsEmpty()) AppendItemText(Text,TEXT("Enchantments:\n\n")+EnchantmentDescriptions,true);
-    return Text;
+    return ItemSpellContributions(Info,Dat,Text);
 }
 /** Compare only values actually supplied for this item instance. Never infer a
  * random item's base roll from its template or subtract guessed spell bonuses. */
@@ -604,7 +610,6 @@ inline FString ItemExaminationText(const FACEAppraisalInfo& Info,UACEDatSubsyste
     const bool HasTinkering=Info.IntProperties.Contains(171) || Info.IntProperties.Contains(105)
         || Info.StringProperties.Contains(39) || Info.StringProperties.Contains(40);
     AppendItemText(Body,ItemDetails(Info,Dat,Viewer),!HasTinkering);
-    AppendItemText(Body,ItemEnchantmentComparison(Info),true);
     // Appraisal_ShowDescription prefers LongDesc, falling back to ShortDesc.
     // The protocol Summary concatenates all strings in wire order, so it cannot
     // supply retail paragraph boundaries (and can repeat both descriptions).

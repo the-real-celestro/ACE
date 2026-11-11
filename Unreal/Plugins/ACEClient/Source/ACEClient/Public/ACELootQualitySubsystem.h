@@ -22,6 +22,7 @@ public:
     UFUNCTION() void ObserveAppraisal(const FACEAppraisalInfo& Info);
     UFUNCTION() void ObserveVitals(const FACEPlayerVitals& Vitals);
     UFUNCTION() void ObserveItemRefresh(int32 Guid);
+    UFUNCTION() void ObserveEnchantments();
 private:
     void CheckCharacter();
     void SaveOriginals();

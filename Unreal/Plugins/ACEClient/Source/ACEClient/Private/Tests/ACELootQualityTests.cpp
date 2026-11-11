@@ -203,6 +203,10 @@ bool FACELootQualityLifecycleTest::RunTest(const FString&)
     const auto& R=Loot->Review(Item);
     TestTrue(TEXT("A post-tinker appraisal retains its real observed original"),R.bRated&&R.bOriginalKnown&&FMath::IsNearlyEqual(R.Stats[0].Original,65.,.001));
     TestTrue(TEXT("The permanent value updates after tinkering"),FMath::IsNearlyEqual(R.Stats[0].Permanent,67.,.001));
+    const uint64 BeforeMagic=Loot->Revision;
+    Client->OnEnchantmentsChanged.Broadcast();
+    TestTrue(TEXT("Spell changes refresh the inventory presentation without discarding its current panel"),
+        Loot->Revision>BeforeMagic&&Loot->Review(Item).bRated);
     Item.Name=TEXT("Different item using the same GUID");
     TestFalse(TEXT("Changed item identity cannot inherit an old original or quality"),Loot->Review(Item).bRated);
     GI->Shutdown();Shutdown=true;
