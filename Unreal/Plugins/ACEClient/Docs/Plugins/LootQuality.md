@@ -55,6 +55,9 @@ promotions preserve the earlier legal AL support. Society/custom exceptions
 remain outside that baseline. Clothing, jewelry and armor without a verified
 original protection baseline explicitly report **combat spell-package quality**.
 They never pretend their armor/protection has been scored.
+Unknown armor protection retains the 80% spell weighting and reports a lower
+bound; losing original evidence cannot increase the item's rating. Missing or
+out-of-range resistance inputs cannot be silently dropped from protection quality.
 
 Wearable spell-package rank factors are Minor .25, Major .55, Epic .94 and
 Legendary 1.0, adjusted for the character's build. Contributions are sorted by

@@ -95,12 +95,20 @@ bool FACELootQualityTest::RunTest(const FString&)
     Item.WeenieClassId=25638;Item.Name=TEXT("Leather Breastplate");Item.ItemType=ACEItemType::Armor;
     Item.ValidLocations=ACEEquipMask::ChestArmor;
     A.IntProperties={{158,7},{159,1},{160,150},{171,0},{28,304}};A.FloatProperties.Empty();
-    A.ArmorResistances={1,1,1,.5,.5,.5,0,.5};A.SpellBookEntries={6107};R=Review();
+    A.ArmorResistances={1,1,1,.5,.5,.5,0,.6};A.SpellBookEntries={6107};R=Review();
     TestTrue(TEXT("Armor has its own verified protection and spell model"),R.bRated&&R.Class==TEXT("Armor")&&R.Points>=80);
+    const double KnownArmorScore=R.Points;
+    A.ArmorResistances[7]=.1;R=Review();
+    TestTrue(TEXT("An invalid resistance cannot be dropped to inflate armor quality"),R.Class.Contains(TEXT("spell package"))&&R.OriginalPoints==0&&R.Points<=KnownArmorScore);
+    A.ArmorResistances[7]=.6;
+    A.IntProperties.Remove(28);R=Review();
+    TestTrue(TEXT("Missing AL cannot reclassify armor into a higher-scored clothing package"),R.Class.Contains(TEXT("Armor"))&&R.Points<=KnownArmorScore);
+    A.IntProperties.Add(28,304);
     A.IntProperties[160]=180;A.IntProperties[28]=235;R=Review();
     TestTrue(TEXT("Legendary-promoted armor retains lower tier-eight AL support"),R.bRated);
     A.IntProperties[171]=2;R=Review();
     TestTrue(TEXT("Unknown original armor can still disclose spell-package quality"),R.bRated&&R.Class.Contains(TEXT("spell package")));
+    TestTrue(TEXT("Losing original armor evidence cannot increase its quality score"),R.Points<=KnownArmorScore);
     TestFalse(TEXT("An original armor level is not fabricated after tinkering"),R.bOriginalKnown);
     return !HasAnyErrors();
 }

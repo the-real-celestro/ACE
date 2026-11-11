@@ -425,12 +425,22 @@ FACEQualityReview ACELootQuality::Evaluate(const FACEWorldObject& Item,const FAC
         WearableBenefits.Sort(TGreater<double>());
         const double Weights[]={1,.20,.10,.05};double Package=0;
         for(int32 I=0;I<WearableBenefits.Num();++I)Package+=WearableBenefits[I]*(I<4?Weights[I]:.05*FMath::Pow(.5,I-3));
-        R.OriginalPoints=0;R.CantripPoints=100*Package;Valid=!R.Spells.IsEmpty();
-        R.Reason=TEXT("Combat spell quality · protection baseline unverified");
         const auto* Template=ArmorTemplate(Item.WeenieClassId);
+        const bool HasProtection=(Item.ItemType&ACEItemType::Armor)||Template||Permanent.FindRef(TEXT("Armor"))>0;
+        const double SpellScale=HasProtection?80:100;
+        R.OriginalPoints=0;R.CantripPoints=SpellScale*Package;Valid=!R.Spells.IsEmpty();
+        R.Reason=TEXT("Combat spell quality · protection baseline unverified");
         const auto* ArmorGroup=Template?ArmorCohort(*Template,A):nullptr;
-        const bool ArmorKnown=ArmorGroup&&RawKnown&&R.bOriginalKnown&&Base.Contains(TEXT("Armor"))
+        bool ArmorKnown=ArmorGroup&&RawKnown&&R.bOriginalKnown&&Base.Contains(TEXT("Armor"))
             &&ArmorGroup->Bounds.Contains(Base.FindRef(TEXT("Armor")));
+        const int32 ElementBits[]={2,8,1,4};
+        if(ArmorKnown)for(int32 I=0;I<4;++I)
+        {
+            if(!(Template->Mutates&ElementBits[I]))continue;
+            const FString Key=FString::Printf(TEXT("Armor%d"),16+I);
+            const Range Bounds{Template->Elements[I],FMath::Min(2.,Template->Elements[I]+.9)};
+            if(!Base.Contains(Key)||!Bounds.Contains(Base.FindRef(Key)))ArmorKnown=false;
+        }
         if(Permanent.FindRef(TEXT("Armor"))>0)
             Stat(TEXT("Armor"),TEXT("Armor level"),ArmorGroup?ArmorGroup->Bounds:Range{});
         if(ArmorKnown)
@@ -452,11 +462,12 @@ FACEQualityReview ACELootQuality::Evaluate(const FACEWorldObject& Item,const FAC
             R.Class=(Item.ValidLocations&0x200000)?TEXT("Shield"):TEXT("Armor");
             R.Reason=TEXT("20% original protection + 80% useful spell package · ACE baseline");
         }
-        else if(Permanent.FindRef(TEXT("Armor"))>0)R.Class=TEXT("Armor / combat spell package");
+        else if(HasProtection)
+        {R.Class=TEXT("Armor / combat spell package");R.Reason=TEXT("Spell-only lower bound · original protection unverified");}
         else R.Class=(Item.ItemType&ACEItemType::Jewelry)?TEXT("Jewelry / combat spell package"):TEXT("Clothing / combat spell package");
         R.Spells.Sort([](const auto& X,const auto& Y){return X.WearableBenefit==Y.WearableBenefit?X.SpellId<Y.SpellId:X.WearableBenefit>Y.WearableBenefit;});
         for(int32 I=0;I<R.Spells.Num();++I)
-            R.Spells[I].Points=(ArmorKnown?80:100)*R.Spells[I].WearableBenefit*(I<4?Weights[I]:.05*FMath::Pow(.5,I-3));
+            R.Spells[I].Points=SpellScale*R.Spells[I].WearableBenefit*(I<4?Weights[I]:.05*FMath::Pow(.5,I-3));
         // Native gear ratings are separate from spell skills and cannot be
         // manufactured from level or the item's display rarity.
         for(uint32 Key:{370u,371u,372u,373u,374u,375u,376u,377u,378u,379u})
