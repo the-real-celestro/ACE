@@ -249,6 +249,7 @@ public:
     class UACEUIGameplayBinder* GetActionDeckBinder() const { return DatGameplayBinder; }
     friend class FACEActionDeckTest;
     friend class FACERetailCursorTest;
+    friend class FACEItemHoverRoutingTest;
 protected:
 	bool bDesktopInterfaceHidden = false;
 	UPROPERTY()
@@ -256,6 +257,9 @@ protected:
 
 	UPROPERTY()
 	TObjectPtr<UACEHoverTooltipWidget> HoverTooltipWidget = nullptr;
+    UPROPERTY(Transient) TObjectPtr<UACEHoverTooltipWidget> ItemHoverTooltip;
+    bool UpdateItemHoverAt(FVector2D Absolute,FVector2D ViewportPixels);
+    void ClearItemHover();
 	UPROPERTY()
 	TObjectPtr<UACEMouseCursorWidget> MouseCursorWidget = nullptr;
 	bool bRetailCursorInstalled = false;

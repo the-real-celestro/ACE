@@ -140,17 +140,33 @@ monotonicity, grade boundaries, relevance and continued ordering above 100.
 Also run the existing item presentation, icon rendering, tooltip and inventory
 performance regression suites before distributing a build.
 
-## Icon and hover stability (v157)
+## Icon and hover stability (v158)
+
+Quality frames now use a three-pixel colored edge plus a dark inner edge at
+native 32-pixel size, scaling with larger icons. Class marks only use clear
+foreground pixels inside that frame. The hover uses a compact Base / Tinkered
+(or Current) / Cantrip table: totals and signed changes, short stat names,
+numeric bounds, useful spells and one requirements line. Repeated instructional
+paragraphs, color legends and scoring explanations stay out of the hover.
 
 Authored underlays and imbue/effect backgrounds retain their original DAT colors,
 including on items the character cannot wield. These items use a small pink
 lower-right corner marker instead of the unusable background tint; their quality
 edge remains independent. Ordinary unusable equipment retains its distinct tint.
 
-Inventory refreshes and new appraisals update the existing noninteractive tooltip
-content without replacing Slate's active popup identity. Equipment slots reused
-for ordinary items restore the normal text tooltip. Regression fixtures exercise
-100 repeated refreshes, live content/name changes, and background preservation.
+Desktop item hovers use one controller-managed, noninteractive viewport panel.
+The binder checks exposed item geometry directly, including HitTestInvisible
+paperdoll icons. Backpack, equipment, shortcuts, containers, vendors and both
+trade lists use the same route. Slate's automatic item popup is disabled on
+desktop; content updates retain the attached panel and its root. Other windows
+and menus covering the canvas suppress covered item hovers. VR/mobile retain
+their existing tooltip route.
+
+`ACE.LootQuality.HoverRouting` drives the native controller through all seven
+item surfaces and 100 rendered appraisal/refresh cycles, asserting stable panel
+attachment and no duplicate automatic popup. `ACE.LootQuality.IconBorders`
+renders both 32- and 64-pixel icons and checks frame coverage and clear artwork.
+The existing scoring, inventory, tooltip, icon and background fixtures also run.
 
 On macOS the retail cursor artwork is installed as native OS cursor shapes,
 including targeting, busy, move and resize states. Scaling updates artwork and

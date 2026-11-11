@@ -313,7 +313,7 @@ FVector2D UACEHoverTooltipWidget::CalculateTooltipPosition(const FVector2D& Curs
 
 void UACEHoverTooltipWidget::SetTooltipScreenPosition(const FVector2D& CursorPixels)
 {
-	EnsureDefaultLayout();
+	if(!CustomContent)EnsureDefaultLayout();
 	const float Dpi = FMath::Max(0.01f, UWidgetLayoutLibrary::GetViewportScale(this));
 	FVector2D SizePx = UWidgetLayoutLibrary::GetViewportSize(this);
 	ForceLayoutPrepass();

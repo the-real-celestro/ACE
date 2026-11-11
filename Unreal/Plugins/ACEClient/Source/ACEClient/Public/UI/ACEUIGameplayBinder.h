@@ -17,6 +17,7 @@ class UACERetailTextEntry;
 class UACEUIResourceResolver;
 class AACEPlayerController;
 class UBorder;
+class UACEHoverTooltipWidget;
 class UProgressBar;
 class UCanvasPanel;
 class USizeBox;
@@ -102,11 +103,13 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 	friend class FACEBarberTest;
 	friend class FACEItemPresentationTest;
 	friend class FACELootIconPreservationTest;
+	friend class FACEItemHoverRoutingTest;
 	friend class FACESelectionToolbarTest;
     friend class FACEActionDeckTest;
     friend class FACERetailCursorTest;
 
 public:
+    UACEHoverTooltipWidget* GetItemTooltipAt(FVector2D Absolute) const;
     void RefreshUIFontLayout();
     /** Shared attack mark used by desktop controls, VR and plugin commands. */
     void SetRequestedAttackPower(float Power) { RequestedAttackPower=FMath::Clamp(Power,0.f,1.f); }

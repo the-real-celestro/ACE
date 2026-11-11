@@ -80,6 +80,7 @@
 #include "Misc/Optional.h"
 #include "Algo/Sort.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Layout/WidgetPath.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/FileHelper.h"
 #include "HAL/FileManager.h"
@@ -12149,12 +12150,45 @@ void UACEUIGameplayBinder::SetItemSlotForeground(UBorder* Border, const FACEWorl
 
 void UACEUIGameplayBinder::SetItemTooltip(UWidget* Widget,const FACEWorldObject& Item)
 {
+    if(!Widget)return;
+    bool Applied=false;
     if(Client)if(auto* Loot=Client->GetGameInstance()->GetSubsystem<UACELootQualitySubsystem>())
     {
         ACELootPresentation::Tooltip(Widget,FormatItemStackName(Item),Item,Loot->Review(Item),Canvas?Canvas->GetResourceResolver():nullptr);
-        return;
+        Applied=true;
     }
-    SetRetailTooltip(Widget,FText::FromString(FormatItemStackName(Item)));
+    if(!Applied)SetRetailTooltip(Widget,FText::FromString(FormatItemStackName(Item)));
+    // Desktop item hovers use the controller's noninteractive viewport panel.
+    // Do not also let Slate create an OS popup for the same icon.
+    if(!PlayerController||(!PlayerController->IsVRActive()&&!PlayerController->IsMobileActive()))
+    {
+        auto Slate=Widget->TakeWidget();Slate->SetToolTip(nullptr);Slate->EnableToolTipForceField(false);
+    }
+}
+
+UACEHoverTooltipWidget* UACEUIGameplayBinder::GetItemTooltipAt(FVector2D Absolute) const
+{
+    if(!Canvas)return nullptr;
+    // Inventory geometry remains valid beneath plugin windows and native menus.
+    // Only expose its hover when the pointer's actual path reaches this canvas.
+    if(FSlateApplication::IsInitialized())if(auto Root=Canvas->GetCachedWidget())
+    {
+        auto& Slate=FSlateApplication::Get();
+        const auto Path=Slate.LocateWindowUnderMouse(Absolute,Slate.GetInteractiveTopLevelWindows(),false);
+        if(Path.IsValid()&&!Path.ContainsWidget(Root.Get()))return nullptr;
+    }
+    auto Probe=[&](UBorder* Icon)->UACEHoverTooltipWidget*
+    {
+        if(!Icon||!Canvas->IsWidgetExposedAt(Icon,Absolute))return nullptr;
+        auto* Tip=Cast<UACEHoverTooltipWidget>(Icon->GetToolTip());
+        if(Tip)if(auto Slate=Icon->GetCachedWidget())
+        {Slate->SetToolTip(nullptr);Slate->EnableToolTipForceField(false);}
+        return Tip;
+    };
+    for(const auto& Pair:PaperDollIcons)if(auto* Tip=Probe(Pair.Value))return Tip;
+    for(const auto* Icons:{&InventorySlots,&ShortcutIcons,&ExtItemSlots,&VendorItemSlots,&TradeSelfSlots,&TradeOtherSlots})
+        for(const auto& Icon:*Icons)if(auto* Tip=Probe(Icon))return Tip;
+    return nullptr;
 }
 
 bool UACEUIGameplayBinder::EnsurePaperDollPreviewRig()

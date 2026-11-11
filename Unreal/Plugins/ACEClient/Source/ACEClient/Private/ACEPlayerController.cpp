@@ -313,6 +313,7 @@ void AACEPlayerController::EnsureDatIntroCanvas()
 
 void AACEPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	ClearItemHover();
 	UpdateObjectHighlights(false);
 	KeyboardRouter.Reset();
 	DesktopDisplay.Reset();
@@ -8416,6 +8417,32 @@ void AACEPlayerController::UpdateObjectHighlights(bool bEnabled, bool bDesktop)
 	if (PlayerAppearance) PlayerAppearance->SetSelectionHighlight(1.f);
 }
 
+void AACEPlayerController::ClearItemHover()
+{
+    if(!ItemHoverTooltip)return;
+    ItemHoverTooltip->RemoveFromParent();
+    ItemHoverTooltip->SetVisibility(ESlateVisibility::Collapsed);
+    ItemHoverTooltip=nullptr;
+}
+
+bool AACEPlayerController::UpdateItemHoverAt(FVector2D Absolute,FVector2D ViewportPixels)
+{
+    auto* Tip=DatGameplayBinder?DatGameplayBinder->GetItemTooltipAt(Absolute):nullptr;
+    if(!Tip){ClearItemHover();return false;}
+    if(ItemHoverTooltip!=Tip)
+    {
+        ClearItemHover();ItemHoverTooltip=Tip;
+        Tip->SetOwningPlayer(this);Tip->AddToPlayerScreen(10060);
+    }
+    if(HoverTooltipWidget)HoverTooltipWidget->SetVisibility(ESlateVisibility::Collapsed);
+    Tip->SetTooltipScreenPosition(ViewportPixels);
+    Tip->SetVisibility(ESlateVisibility::HitTestInvisible);
+    const auto* Owner=Cast<UWidget>(Tip->GetOuter());
+    bHoverTooltipVisible=true;HoverTooltipText=Owner?Owner->GetToolTipText().ToString():TEXT("Item");
+    HoverCursorPixels=ViewportPixels;
+    return true;
+}
+
 void AACEPlayerController::PollObjectHover()
 {
 	DesktopHover.Reset();
@@ -8424,6 +8451,7 @@ void AACEPlayerController::PollObjectHover()
 
 	auto HideTip = [this]()
 	{
+		ClearItemHover();
 		if (HoverTooltipWidget)
 		{
 			HoverTooltipWidget->SetVisibility(ESlateVisibility::Collapsed);
@@ -8457,6 +8485,13 @@ void AACEPlayerController::PollObjectHover()
 		return;
 	}
 	HoverCursorPixels = FVector2D(MouseX, MouseY);
+    if(!IsVRActive()&&!IsMobileActive()&&!IsDesktopInterfaceHidden()&&FSlateApplication::IsInitialized()
+        &&UpdateItemHoverAt(FSlateApplication::Get().GetCursorPos(),HoverCursorPixels))
+    {
+        if(bRetailCursorInstalled)ApplyRetailMouseCursor(false);
+        return;
+    }
+    ClearItemHover();
 	uint32 TooltipTemplate = UACEHoverTooltipWidget::OptionsTemplate;
 	if (!IsDesktopInterfaceHidden() && DatGameplayBinder && FSlateApplication::IsInitialized()
 		&& DatGameplayBinder->GetStatTooltipAt(FSlateApplication::Get().GetCursorPos(), HoverTooltipText, &TooltipTemplate))
