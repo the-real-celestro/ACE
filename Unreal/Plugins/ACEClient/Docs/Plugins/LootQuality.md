@@ -140,7 +140,7 @@ monotonicity, grade boundaries, relevance and continued ordering above 100.
 Also run the existing item presentation, icon rendering, tooltip and inventory
 performance regression suites before distributing a build.
 
-## Icon and hover stability (v156)
+## Icon and hover stability (v157)
 
 Authored underlays and imbue/effect backgrounds retain their original DAT colors,
 including on items the character cannot wield. These items use a small pink
@@ -161,7 +161,7 @@ the previous cursor mapping policy. `ACE.RetailParity.MacNativeCursor` checks
 native color/alpha, hotspots, scaling, reuse, and cleanup. Notification interaction
 itself requires a desktop check; offscreen tests do not simulate Notification Center.
 
-The v156 shutdown fix drains cached loot-filter ICU patterns on the engine's
+The v157 shutdown fix drains cached loot-filter ICU patterns on the engine's
 pre-exit event, before ICU resets its allocator. Compiled templates have shared,
 synchronized ownership; shutdown waits for in-flight matching and blocks late
 calls. Thread-local text-only validation/predicate caches hold no ICU objects.
