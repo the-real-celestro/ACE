@@ -1688,6 +1688,12 @@ inline int32 ACEPlacementFromParentLocation(int32 ParentLocation)
 	}
 }
 
+/** A reported item stat, independent of any loot-generation rating. */
+struct FACEItemStatLine
+{
+	FString Key, Label, Value;
+};
+
 /** Appraisal / identify result (GameEvent 0x00C9). */
 USTRUCT(BlueprintType)
 struct ACECLIENT_API FACEAppraisalInfo

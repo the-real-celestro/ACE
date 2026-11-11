@@ -29,13 +29,31 @@ public:
         if(Rated)
         {
             const float Scale=FMath::Min(Size.X,Size.Y)/32.f;
-            auto Frame=[&](float Width,FLinearColor Color)
+            // A beveled slot frame: dark outer rim, quality-colored metal,
+            // light on the upper/left faces and a recessed inner seam.
+            // Nothing is painted over the interior artwork or its background.
+            auto Loop=[&](float Inset,float Corner)
             {
-                Box({0,0},{Size.X,Width},Color);Box({0,Size.Y-Width},{Size.X,Width},Color);
-                Box({0,Width},{Width,Size.Y-2*Width},Color);Box({Size.X-Width,Width},{Width,Size.Y-2*Width},Color);
+                const float A=Inset*Scale,B=Corner*Scale;
+                return TArray<FVector2D>{{A+B,A},{Size.X-A-B,A},{Size.X-A,A+B},
+                    {Size.X-A,Size.Y-A-B},{Size.X-A-B,Size.Y-A},{A+B,Size.Y-A},
+                    {A,Size.Y-A-B},{A,A+B},{A+B,A}};
             };
-            Frame(4*Scale,FLinearColor(.005,.008,.012,.95));
-            Frame(3*Scale,Tint);
+            auto Line=[&](const TArray<FVector2D>& Points,float Width,FLinearColor Color)
+            {FSlateDrawElement::MakeLines(E,L,G.ToPaintGeometry(),Points,ESlateDrawEffect::None,Color,true,Width*Scale);};
+            E.PushClip(FSlateClippingZone(G.GetLayoutBoundingRect()));
+            Line(Loop(2,1.5f),4,Tint.CopyWithNewOpacity(.14f));
+            Line(Loop(1.1f,1.8f),2.1f,FLinearColor(.004f,.006f,.009f,.98f));
+            Line(Loop(1.35f,1.6f),1.1f,(Tint*.72f).CopyWithNewOpacity(.98f));
+            Line(Loop(2.1f,1.1f),1.2f,Tint.CopyWithNewOpacity(.96f));
+            const FLinearColor Light=(Tint+FLinearColor(.12f,.12f,.12f,0)).CopyWithNewOpacity(.92f);
+            const FLinearColor Shade=(Tint*.32f).CopyWithNewOpacity(.9f);
+            Line({{1.4f*Scale,Size.Y-3.2f*Scale},{1.4f*Scale,3.2f*Scale},
+                {3.2f*Scale,1.4f*Scale},{Size.X-3.2f*Scale,1.4f*Scale}},.85f,Light);
+            Line({{Size.X-1.25f*Scale,3.3f*Scale},{Size.X-1.25f*Scale,Size.Y-3.3f*Scale},
+                {Size.X-3.3f*Scale,Size.Y-1.25f*Scale},{3.3f*Scale,Size.Y-1.25f*Scale}},.85f,Shade);
+            Line(Loop(3.15f,.8f),.65f,FLinearColor(.008f,.01f,.015f,.7f));
+            E.PopClip();
         }
         // A small corner marker replaces the unusable background tint on imbued
         // items. Keep the quality edge and authored effect artwork intact.
@@ -102,55 +120,6 @@ public:
     {FSlateDrawElement::MakeBox(E,L,G.ToPaintGeometry(),&Bg);FSlateDrawElement::MakeBox(E,L+1,G.ToPaintGeometry(),&Fg);return L+1;}
     FSlateBrush Bg,Fg;
 };
-class SACELootBar : public SLeafWidget
-{
-public:
-    SLATE_BEGIN_ARGS(SACELootBar){}SLATE_ARGUMENT(FACEQualityStat,Stat)SLATE_END_ARGS()
-    void Construct(const FArguments& A){Stat=A._Stat;}
-    virtual FVector2D ComputeDesiredSize(float)const override{return {200,18};}
-    virtual int32 OnPaint(const FPaintArgs&,const FGeometry& G,const FSlateRect&,FSlateWindowElementList& E,
-        int32 L,const FWidgetStyle&,bool)const override
-    {
-        if(!Stat.Bounds.Variable())return L;
-        const auto* White=FCoreStyle::Get().GetBrush(TEXT("WhiteBrush"));const double W=G.GetLocalSize().X;
-        auto Position=[&](double V){const double P=(V-Stat.Bounds.Low)/(Stat.Bounds.High-Stat.Bounds.Low);return Stat.bLowerBetter?1-P:P;};
-        const double Original=Position(Stat.Original),Current=Position(Stat.Permanent),Magic=Position(Stat.WithCantrip);
-        const double Max=FMath::Max(1.,FMath::Max(Current,Magic));
-        const double Span=Stat.Bounds.High-Stat.Bounds.Low;
-        const double Best=Stat.bLowerBetter?Stat.Bounds.Low:Stat.Bounds.High;
-        const double ExtraRatio=Max>1?(Max-1)*Span/FMath::Max(FMath::Abs(Best),Span):0;
-        const double NaturalWidth=Max>1?FMath::Min((W-6)/(1+ExtraRatio),W-26):W-6;
-        const double Tail=W-6-NaturalWidth;
-        auto X=[&](double P)
-        {
-            P=FMath::Clamp(P,0.,Max);
-            return 3+(P<=1?P*NaturalWidth:NaturalWidth+(P-1)/(Max-1)*Tail);
-        };
-        auto Box=[&](double PX,double Y,double SX,double SY,FLinearColor C,int32 Depth=0)
-        {FSlateDrawElement::MakeBox(E,L+Depth,G.ToPaintGeometry(FVector2D(SX,SY),FSlateLayoutTransform(FVector2D(PX,Y))),White,ESlateDrawEffect::None,C);};
-        const double Cuts[]={0,.2,.5,.75,.9,.97,1};
-        for(int32 I=0;I<6;++I)Box(X(Cuts[I]),7,X(Cuts[I+1])-X(Cuts[I]),4,ACELootQuality::Color(static_cast<ACELootScoring::Grade>(I)).CopyWithNewOpacity(.65));
-        if(Max>1)Box(X(1),7,X(Max)-X(1),4,FLinearColor(.12,.14,.18));
-        if(FMath::Abs(Current-Magic)>1.e-5)Box(X(FMath::Min(Current,Magic)),6,FMath::Abs(X(Magic)-X(Current)),6,FLinearColor(.15,.63,1),1);
-        if(Max>1)
-        {
-            const double Break=X(1)+7;
-            for(double Offset:{0.,4.})
-            {
-                TArray<FVector2D> Slash{{Break+Offset-2,12},{Break+Offset+2,4}};
-                FSlateDrawElement::MakeLines(E,L+2,G.ToPaintGeometry(),Slash,ESlateDrawEffect::None,FLinearColor(.018,.022,.033),true,2);
-            }
-        }
-        if(Stat.bOriginalKnown)
-        {Box(X(Original)-4,1,8,16,FLinearColor(.02,.02,.02),2);Box(X(Original)-2,3,4,12,FLinearColor(1,.97,.83),3);}
-        if(!Stat.bOriginalKnown||FMath::Abs(Original-Current)>1.e-5)
-        {Box(X(Current)-3,0,6,18,FLinearColor(.01,.015,.02),4);Box(X(Current)-1.5,1,3,16,FLinearColor(1,.64,.18),5);}
-        if(FMath::Abs(Current-Magic)>1.e-5)
-        {Box(X(Magic)-3,1,6,16,FLinearColor(.01,.015,.02),4);Box(X(Magic)-1.5,2,3,14,FLinearColor(.25,.75,1),5);}
-        return L+5;
-    }
-    FACEQualityStat Stat;
-};
 TSharedRef<STextBlock> Text(const FString& Value,int32 Size,FLinearColor Color,float Wrap)
 {
     return SNew(STextBlock).Text(FText::FromString(Value)).Font(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"),Size))
@@ -163,23 +132,11 @@ void ACELootPresentation::Tooltip(UWidget* Owner,const FString& Name,const FACEW
     if(!R.bEquipment){UACEHoverTooltipWidget::SetWidgetTooltip(Owner,FText::FromString(Name),UACEHoverTooltipWidget::ObjectTemplate);return;}
     const FVector2D View=Owner&&Owner->GetWorld()?UWidgetLayoutLibrary::GetViewportSize(Owner):FVector2D::ZeroVector;
     const float Dpi=Owner&&Owner->GetWorld()?UWidgetLayoutLibrary::GetViewportScale(Owner):1.f;
-    const float Width=View.X>1?FMath::Clamp(float(View.X/FMath::Max(Dpi,.1f)-24),220.f,360.f):360.f;
-    const float ContentWidth=Width-20,ValueWidth=ContentWidth*.20f,LabelWidth=ContentWidth-3*ValueWidth;
-    const FLinearColor BaseColor(1,.97,.83),TinkerColor(1,.68,.25),CantripColor(.45,.78,1);
-    auto T=[&](const FString& Value,int32 Size=11,FLinearColor Color=FLinearColor(.84,.85,.88))
+    const float Width=View.X>1?FMath::Clamp(float(View.X/FMath::Max(Dpi,.1f)-24),220.f,380.f):380.f;
+    const float ContentWidth=Width-20;
+    const FLinearColor BaseColor(.8,.81,.83),TinkerColor(1,.68,.25),CantripColor(.45,.78,1);
+    auto T=[&](const FString& Value,int32 Size=11,FLinearColor Color=FLinearColor(.9,.91,.93))
         {return Text(Value,Size,Color,ContentWidth);};
-    // Build aligned numeric columns once; source labels do not repeat per stat.
-    auto AddValues=[&](TSharedRef<SVerticalBox> Rows,const FString& Label,const FString& Base,const FString& Current,const FString& Magic)
-    {
-        TSharedRef<SHorizontalBox> Row=SNew(SHorizontalBox);
-        Row->AddSlot().FillWidth(1).VAlign(VAlign_Center)[Text(Label,11,FLinearColor(.95,.92,.8),LabelWidth)];
-        for(const auto& Entry:TArray<TPair<FString,FLinearColor>>{{Base,BaseColor},{Current,TinkerColor},{Magic,CantripColor}})
-        {
-            auto Value=Text(Entry.Key,10,Entry.Value,ValueWidth);Value->SetJustification(ETextJustify::Right);
-            Row->AddSlot().AutoWidth().VAlign(VAlign_Center)[SNew(SBox).WidthOverride(ValueWidth)[Value]];
-        }
-        Rows->AddSlot().AutoHeight()[Row];
-    };
     TSharedRef<SVerticalBox> Rows=SNew(SVerticalBox);
     TSharedRef<SHorizontalBox> Header=SNew(SHorizontalBox);
     if(Resources)Header->AddSlot().AutoWidth().Padding(0,0,8,0)
@@ -202,60 +159,65 @@ void ACELootPresentation::Tooltip(UWidget* Owner,const FString& Name,const FACEW
     }
     Rows->AddSlot().AutoHeight().Padding(0,3)[TypeLine];
     FString Status=R.bRated?FString::Printf(TEXT("%s · %.1f"),*ACELootQuality::Name(R.Grade),R.Points):
-        (!R.bOriginalKnown&&R.Tinkers>0?TEXT("Base unknown"):TEXT("Unrated"));
-    if(R.bRated&&R.Class.Contains(TEXT("spell package"))&&R.Class.Contains(TEXT("Armor")))Status+=TEXT(" · spells");
-    if(R.Stats.ContainsByPredicate([](const FACEQualityStat& S){return !S.bPermanentKnown;}))Status=TEXT("Unverified");
-    Rows->AddSlot().AutoHeight().Padding(0,2,0,5)[T(Status,12,R.bRated?ACELootQuality::Color(R.Grade):FLinearColor(.72,.74,.8))];
-    if(!R.Stats.IsEmpty())AddValues(Rows,TEXT(""),TEXT("Base"),R.Tinkers>0?TEXT("Tinkered"):TEXT("Current"),TEXT("Cantrip"));
-    if(R.Stats.Num()>=2&&R.Stats[0].Label==TEXT("Maximum damage")&&R.Stats[1].Label==TEXT("Damage variance"))
+        !R.bIdentified?TEXT("Identify"):R.Tinkers>0&&!R.bOriginalKnown?TEXT("Original not recorded"):TEXT("");
+    if(R.bRated&&R.Class.Contains(TEXT("spell package")))Status+=TEXT(" · spells");
+    if(!Status.IsEmpty())Rows->AddSlot().AutoHeight().Padding(0,1,0,5)[T(Status,11,R.bRated?ACELootQuality::Color(R.Grade):BaseColor)];
+    for(const auto& Line:R.CurrentStats)
     {
-        const auto& D=R.Stats[0];const auto& V=R.Stats[1];
-        auto Hit=[](double Damage,double Variance){return FString::Printf(TEXT("%.1f–%.1f"),Damage*(1-Variance),Damage);};
-        AddValues(Rows,TEXT("Per hit"),D.bOriginalKnown&&V.bOriginalKnown?Hit(D.Original,V.Original):TEXT("—"),
-            Hit(D.Permanent,V.Permanent),FMath::Abs(D.WithCantrip-D.Permanent)>1.e-5?Hit(D.WithCantrip,V.Permanent):TEXT("—"));
-    }
-    for(const auto& S:R.Stats)
-    {
-        FString Label=S.Label;
-        if(Label==TEXT("Maximum damage"))Label=TEXT("Max damage");
-        else if(Label==TEXT("Damage variance"))Label=TEXT("Variance");
-        else if(Label==TEXT("Melee attack bonus"))Label=TEXT("Attack");
-        else if(Label==TEXT("Weapon melee-defense bonus"))Label=TEXT("Melee defense");
-        else if(Label==TEXT("Matching spell-damage bonus"))Label=TEXT("Spell damage");
-        else if(Label==TEXT("Item mana-conversion bonus"))Label=TEXT("Mana conversion");
-        if(S.Bounds.Variable())Label+=TEXT("\n")+ACELootQuality::FormatStat(S.Bounds.Low,S.bPercent)+TEXT("–")+ACELootQuality::FormatStat(S.Bounds.High,S.bPercent);
-        auto Stage=[&](double Value,double From,bool Delta)
+        const auto* S=R.Stats.FindByPredicate([&](const FACEQualityStat& Stat){return Stat.Key==(Line.Key==TEXT("ElementPvP")?TEXT("Element"):Line.Key);});
+        FACEQualityStat PvP;
+        if(S&&Line.Key==TEXT("ElementPvP"))
         {
-            FString Result=ACELootQuality::FormatStat(Value,S.bPercent);
-            if(Delta&&FMath::Abs(Value-From)>1.e-5)Result+=S.bPercent?FString::Printf(TEXT("\n%+.1f pp"),(Value-From)*100):FString::Printf(TEXT("\n%+.1f"),Value-From);
-            return Result;
-        };
-        Rows->AddSlot().AutoHeight().Padding(0,5,0,0)[SNullWidget::NullWidget];
-        AddValues(Rows,Label,S.bOriginalKnown?Stage(S.Original,0,false):TEXT("—"),Stage(S.Permanent,S.Original,S.bOriginalKnown&&S.bPermanentKnown),
-            S.bPermanentKnown&&FMath::Abs(S.WithCantrip-S.Permanent)>1.e-5?Stage(S.WithCantrip,S.Permanent,true):TEXT("—"));
-        if(S.Bounds.Variable())Rows->AddSlot().AutoHeight()[SNew(SACELootBar).Stat(S)];
+            PvP=*S;PvP.Original*=.5;PvP.Permanent*=.5;PvP.WithCantrip*=.5;
+            PvP.Bounds.Low*=.5;PvP.Bounds.High*=.5;S=&PvP;
+        }
+        FString ValueText=Line.Value;
+        // These are natural roll limits, not caps on a tinkered or buffed item.
+        // Armor resistance rows display effective AL rather than multipliers.
+        if(S&&S->Bounds.Variable()&&(!Line.Key.StartsWith(TEXT("Armor"))||Line.Key==TEXT("Armor")))
+        {
+            const double Best=S->bLowerBetter?S->Bounds.Low:S->Bounds.High;
+            FString Limit=ACELootQuality::FormatStat(Best,S->bPercent);
+            if(S->bPercent&&!S->bLowerBetter&&Best>=0)Limit=TEXT("+")+Limit;
+            if(Line.Key==TEXT("Multiplier"))Limit=TEXT("×")+Limit;
+            ValueText+=FString::Printf(TEXT(" (base %s %s)"),S->bLowerBetter?TEXT("best"):TEXT("max"),*Limit);
+        }
+        TSharedRef<SHorizontalBox> Row=SNew(SHorizontalBox);
+        Row->AddSlot().FillWidth(.43f)[Text(Line.Label+TEXT(":"),11,FLinearColor(.82,.83,.86),ContentWidth*.43f)];
+        Row->AddSlot().FillWidth(.57f)[Text(ValueText,11,FLinearColor(.96,.95,.9),ContentWidth*.57f)];
+        Rows->AddSlot().AutoHeight().Padding(0,1)[Row];
+        if(!S||!S->bPermanentKnown)continue;
+        auto Value=[&](double V){return ACELootQuality::FormatStat(V,S->bPercent);};
+        if(S->bOriginalKnown&&FMath::Abs(S->Original-S->Permanent)>1.e-5)
+        {
+            const double Delta=S->Permanent-S->Original;
+            const FString Change=S->bPercent?FString::Printf(TEXT("%+.1f pp"),Delta*100):FString::Printf(TEXT("%+.1f"),Delta);
+            const FString Base=Line.Key.StartsWith(TEXT("Armor"))&&Line.Key!=TEXT("Armor")?TEXT("  Base resistance ×"):TEXT("  Base ");
+            Rows->AddSlot().AutoHeight()[T(Base+Value(S->Original)+TEXT(" · Tinkering ")+Change,9,TinkerColor)];
+        }
+        if(FMath::Abs(S->WithCantrip-S->Permanent)>1.e-5)
+        {
+            const double Delta=S->WithCantrip-S->Permanent;
+            Rows->AddSlot().AutoHeight()[T(FString(TEXT("  Cantrip "))+(Delta>=0?TEXT("+"):TEXT(""))+Value(Delta),9,CantripColor)];
+        }
     }
-    if(!R.Spells.IsEmpty())
-    {
-        TArray<FString> Names;for(const auto& Spell:R.Spells)Names.Add(Spell.Name);
-        Rows->AddSlot().AutoHeight().Padding(0,4,0,0)[T(FString::Join(Names,TEXT(" · ")),10,CantripColor)];
-    }
+    if(!R.Properties.IsEmpty())Rows->AddSlot().AutoHeight().Padding(0,5,0,0)[T(FString::Join(R.Properties,TEXT(" · ")),10)];
+    if(!R.SpellNames.IsEmpty())Rows->AddSlot().AutoHeight().Padding(0,5,0,0)[T(TEXT("Spells: ")+FString::Join(R.SpellNames,TEXT(" · ")),10,CantripColor)];
     TArray<FString> Checks;R.Requirements.ParseIntoArrayLines(Checks,true);
     if(Checks.Num()>1&&Checks[0].Contains(TEXT("skill ")))Checks.RemoveAt(0);
     for(auto& Check:Checks)
     {
         if(Check==TEXT("Wield requirements met")){Check.Empty();continue;}
         Check=Check.Replace(TEXT("Wield requirements: server check needed"),TEXT("Server check"))
-            .Replace(TEXT(" base"),TEXT("")).Replace(TEXT("War Magic"),TEXT("War"))
             .Replace(TEXT("Heavy Weapons"),TEXT("Heavy")).Replace(TEXT("Light Weapons"),TEXT("Light"))
             .Replace(TEXT("Finesse Weapons"),TEXT("Finesse")).Replace(TEXT("Two Handed Combat"),TEXT("Two-handed"));
     }
     Checks.RemoveAll([](const FString& S){return S.IsEmpty();});
-    FString Requirements=FString::Join(Checks,TEXT(" · "));
+    FString Requirements=Checks.IsEmpty()?FString():TEXT("Wield: ")+FString::Join(Checks,TEXT(" · "));
     if(!R.Activation.IsEmpty()&&!R.Activation.StartsWith(TEXT("No Arcane Lore")))
     {
         if(!Requirements.IsEmpty())Requirements+=TEXT(" · ");
-        Requirements+=R.Activation.Replace(TEXT("Arcane Lore"),TEXT("Lore"));
+        Requirements+=R.Activation;
     }
     if(!Requirements.IsEmpty())Rows->AddSlot().AutoHeight().Padding(0,5,0,0)[T(Requirements,10,
         R.bCannotWield||R.bActivationBlocked?FLinearColor(1,.55,.55):FLinearColor(.7,.82,.7))];

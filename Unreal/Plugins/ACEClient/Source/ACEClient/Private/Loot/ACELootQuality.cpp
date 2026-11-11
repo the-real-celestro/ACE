@@ -1,6 +1,7 @@
 #include "ACELootQuality.h"
 #include "ACEDatSubsystem.h"
 #include "Mods/ACEPluginEquipment.h"
+#include "UI/ACEAppraisalFormatting.h"
 
 namespace
 {
@@ -28,7 +29,7 @@ FString SkillName(int32 Id)
 {
     switch (Id) { case 44:return TEXT("Heavy Weapons"); case 45:return TEXT("Light Weapons");
     case 46:return TEXT("Finesse Weapons");case 41:return TEXT("Two-Handed");case 47:return TEXT("Missile Weapons");
-    case 34:return TEXT("War Magic");case 43:return TEXT("Void Magic");case 6:return TEXT("Melee Defense");
+    case 33:return TEXT("Life Magic");case 34:return TEXT("War Magic");case 43:return TEXT("Void Magic");case 6:return TEXT("Melee Defense");
     case 7:return TEXT("Missile Defense");case 15:return TEXT("Magic Defense");case 14:return TEXT("Arcane Lore");
     case 16:return TEXT("Mana Conversion");default:return FString::Printf(TEXT("Skill %d"),Id); }
 }
@@ -263,6 +264,17 @@ FACEQualityReview ACELootQuality::Evaluate(const FACEWorldObject& Item,const FAC
     R.bEquipment=Weapon||Wearable;if(!R.bEquipment)return R;
     R.Class=Weapon?TEXT("Weapon"):TEXT("Wearable");R.Reason=TEXT("Identify to reveal quality");
     if(!A.bSuccess)return R;
+    R.bIdentified=true;
+    auto Display=A;Display.ItemType=Item.ItemType;
+    R.CurrentStats=ACEAppraisalFormatting::EquipmentStatLines(Display);
+    R.Properties=ACEAppraisalFormatting::EquipmentProperties(A,Dat);
+    for(int32 Entry:A.SpellBookEntries.IsEmpty()?A.SpellIds:A.SpellBookEntries)
+    {
+        if(uint32(Entry)&0x80000000u)continue;
+        FString Name;uint32 Icon=0;
+        if(!Dat||!Dat->TryGetSpellInfo(Entry,Name,Icon))Name=FString::Printf(TEXT("Spell %d"),Entry);
+        R.SpellNames.AddUnique(Name);
+    }
     R.Tinkers=A.IntProperties.FindRef(171);
     bool RawKnown=false;const auto Permanent=PermanentStats(A,Dat,RawKnown);
     const bool Match=Original&&Original->WCID==Item.WeenieClassId&&Original->Setup==Item.SetupId
@@ -271,7 +283,8 @@ FACEQualityReview ACELootQuality::Evaluate(const FACEWorldObject& Item,const FAC
     const auto& Base=Match?Original->Stats:Permanent;
     const auto* Group=Cohort(Item,A);const auto* Variant=Group?&LootVariants[Group->Variant]:nullptr;
     int32 Family=Variant?Variant->Family:(Item.ItemType&ACEItemType::Caster)?3:(Item.ItemType&ACEItemType::MissileWeapon)?2:1;
-    int32 RelevantSkill=Variant?Variant->Skill:A.WeaponSkill;
+    int32 RelevantSkill=Variant?Variant->Skill:A.WeaponSkill?A.WeaponSkill:A.IntProperties.FindRef(48);
+    if(!RelevantSkill&&A.IntProperties.FindRef(158)==2)RelevantSkill=A.IntProperties.FindRef(159);
     if(!Weapon)
     {
         int32 Best=0;
@@ -279,7 +292,9 @@ FACEQualityReview ACELootQuality::Evaluate(const FACEWorldObject& Item,const FAC
         { Best=SkillValue(Character,Id);RelevantSkill=Id; }
         Family=RelevantSkill==34||RelevantSkill==43?3:RelevantSkill==47?2:1;
     }
-    R.Class=Variant?Variant->Label:Wearable?TEXT("Wearable / combat spell package"):TEXT("Uncatalogued weapon");
+    R.Class=Variant?Variant->Label:Wearable?TEXT("Wearable / combat spell package"):
+        RelevantSkill?SkillName(RelevantSkill):(Item.ItemType&ACEItemType::Caster)?TEXT("Caster"):
+        (Item.ItemType&ACEItemType::MissileWeapon)?TEXT("Missile weapon"):TEXT("Melee weapon");
     R.ClassMark=RelevantSkill==44?TEXT("H"):RelevantSkill==45?TEXT("L"):RelevantSkill==46?TEXT("F"):RelevantSkill==41?TEXT("2H"):TEXT("");
     if(!Weapon)R.ClassMark.Empty();
     switch(A.DamageType?A.DamageType:A.IntProperties.FindRef(45))
@@ -371,7 +386,7 @@ FACEQualityReview ACELootQuality::Evaluate(const FACEWorldObject& Item,const FAC
     auto Stat=[&](const TCHAR* Key,const TCHAR* Label,Range Bounds,bool Percent=false,bool Lower=false)
     {
         if(!Permanent.Contains(Key))return;
-        FACEQualityStat S;S.Label=Label;S.Bounds=Bounds;S.Original=Base.FindRef(Key);S.Permanent=Permanent.FindRef(Key);
+        FACEQualityStat S;S.Key=Key;S.Label=Label;S.Bounds=Bounds;S.Original=Base.FindRef(Key);S.Permanent=Permanent.FindRef(Key);
         const auto* Multiplier=NativeMultipliers.Find(Key);
         S.WithCantrip=RawKnown?S.Permanent*(Multiplier?*Multiplier:1)+NativeBonuses.FindRef(Key):S.Permanent;
         S.bOriginalKnown=R.bOriginalKnown;S.bPermanentKnown=RawKnown;S.bPercent=Percent;S.bLowerBetter=Lower;
@@ -417,6 +432,23 @@ FACEQualityReview ACELootQuality::Evaluate(const FACEWorldObject& Item,const FAC
         }
         else Valid=false;
         Stat(TEXT("ManaConversion"),TEXT("Item mana-conversion bonus"),B[8],true);
+    }
+    else if(Weapon)
+    {
+        // Fixed and custom weapons still retain observed modification stages.
+        // Empty bounds deliberately provide neither roll limits nor a grade.
+        Stat(TEXT("Damage"),TEXT("Maximum damage"),{});
+        Stat(TEXT("Variance"),TEXT("Damage variance"),{},true,true);
+        for(const auto& P:TArray<TPair<const TCHAR*,const TCHAR*>>{
+            {TEXT("Attack"),TEXT("Melee attack bonus")},{TEXT("Defense"),TEXT("Weapon melee-defense bonus")},
+            {TEXT("Element"),TEXT("Matching spell-damage bonus")}})
+        {
+            const int32 Before=R.Stats.Num();Stat(P.Key,P.Value,{},true);
+            if(R.Stats.Num()>Before){auto& S=R.Stats.Last();S.Original-=1;S.Permanent-=1;S.WithCantrip-=1;}
+        }
+        Stat(TEXT("Multiplier"),TEXT("Launcher damage multiplier"),{});
+        Stat(TEXT("ElementBonus"),TEXT("Elemental damage bonus"),{});
+        Stat(TEXT("ManaConversion"),TEXT("Item mana-conversion bonus"),{},true);
     }
     if(!Weapon)
     {

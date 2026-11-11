@@ -23,6 +23,15 @@
 #include "Slate/WidgetRenderer.h"
 #include "Input/HittestGrid.h"
 #include "RenderingThread.h"
+#include "Widgets/SOverlay.h"
+#include "Widgets/Layout/SBox.h"
+#include "Widgets/SBoxPanel.h"
+#include "Widgets/Images/SImage.h"
+#include "Widgets/Text/STextBlock.h"
+#include "ImageUtils.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
+#include "Styling/CoreStyle.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEItemHoverRoutingTest,"ACE.LootQuality.HoverRouting",
     EAutomationTestFlags::ClientContext|EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
@@ -98,11 +107,42 @@ bool FACEQualityBorderTest::RunTest(const FString&)
         auto* Target=FWidgetRenderer::CreateTargetFor(FVector2D(Size,Size),TF_Nearest,false);
         ++GFrameCounter;Renderer.DrawWidget(Target,Overlay->TakeWidget(),FVector2D(Size,Size),.016f);FlushRenderingCommands();
         TArray<FColor> Pixels;FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags);
-        const int32 Inside=Size==32?2:5;
-        const auto Left=Pixels[(Size/2)*Size+Inside],Top=Pixels[Inside*Size+Size/2],Center=Pixels[(Size/2)*Size+Size/2];
-        TestTrue(TEXT("Thick quality color is visible across the icon edge at both scales"),Left.A>240&&Top.A>240&&Left.R>80&&Left.B>100&&Top.R>80&&Top.B>100);
-        TestEqual(TEXT("Quality frame leaves the center artwork unobscured"),Center.A,uint8(0));
+        const int32 Inset=Size==32?2:4;
+        const auto Bottom=Pixels[(Size-1-Inset)*Size+Size/2],Left=Pixels[(Size/2)*Size+Inset],Top=Pixels[Inset*Size+Size/2],Center=Pixels[(Size/2)*Size+Size/2];
+        TestTrue(TEXT("Quality-colored frame is visible on all four sides at both icon sizes"),Bottom.A>100&&Left.A>100&&Top.A>100&&Left.B>Left.G&&Top.B>Top.G&&Bottom.B>Bottom.G);
+        const auto UpperBevel=Pixels[(Size==32?1:2)*Size+Size/2],LowerBevel=Pixels[(Size-1-(Size==32?1:2))*Size+Size/2];
+        TestTrue(TEXT("Beveled frame has a brighter upper face and shaded lower face"),int32(UpperBevel.R)+UpperBevel.G+UpperBevel.B>int32(LowerBevel.R)+LowerBevel.G+LowerBevel.B);
+        TestEqual(TEXT("Frame leaves interior artwork and imbue background untouched"),Center.A,uint8(0));
         Target->ReleaseResource();
+    }
+    // Capture the actual DAT artwork with each native quality indicator for
+    // visual review. These six grades are deliberate test examples.
+    auto* GI=NewObject<UGameInstance>();auto* Dat=NewObject<UACEDatSubsystem>(GI);
+    if(TestTrue(TEXT("Retail artwork is available for the quality capture"),Dat->LoadDatDirectory(ACETestDatDirectory())))
+    {
+        auto* Resources=NewObject<UACEUIResourceResolver>(GI);Resources->Initialize(Dat);
+        FSlateBrush Background,Foreground;Background.DrawAs=Foreground.DrawAs=ESlateBrushDrawType::Image;
+        Background.SetResourceObject(Resources->ResolveItemBackground(ACEItemType::MeleeWeapon,0));
+        auto* Art=Resources->ResolveItemForeground(0x06001661,0,0,false,0,0);Foreground.SetResourceObject(Art);
+        auto Row=SNew(SHorizontalBox);TArray<UACELootIconOverlay*> Samples;
+        for(int32 I=0;I<6;++I)
+        {
+            auto* Sample=NewObject<UACELootIconOverlay>(GI);auto Review=R;Review.Grade=static_cast<ACELootScoring::Grade>(I);
+            Sample->SetReview(Review,Art);Samples.Add(Sample);
+            Row->AddSlot().AutoWidth().Padding(4)[SNew(SVerticalBox)
+                +SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)[SNew(STextBlock).Text(FText::FromString(ACELootQuality::Name(Review.Grade))).Font(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"),8)).ColorAndOpacity(ACELootQuality::Color(Review.Grade))]
+                +SVerticalBox::Slot().AutoHeight()[SNew(SBox).WidthOverride(64).HeightOverride(64)[SNew(SOverlay)
+                    +SOverlay::Slot()[SNew(SImage).Image(&Background)]
+                    +SOverlay::Slot()[SNew(SImage).Image(&Foreground)]
+                    +SOverlay::Slot()[Sample->TakeWidget()]]]];
+        }
+        Row->SlatePrepass();const FIntPoint Size(FMath::CeilToInt(Row->GetDesiredSize().X),FMath::CeilToInt(Row->GetDesiredSize().Y));
+        auto* Target=FWidgetRenderer::CreateTargetFor(FVector2D(Size),TF_Nearest,false);
+        ++GFrameCounter;Renderer.DrawWidget(Target,Row,FVector2D(Size),.016f);FlushRenderingCommands();
+        TArray<FColor> Pixels;FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags);
+        for(auto& Pixel:Pixels)Pixel=Pixel.ReinterpretAsLinear().ToFColor(true);
+        TArray64<uint8> PNG;FImageUtils::PNGCompressImageArray(Size.X,Size.Y,Pixels,PNG);
+        FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/TEXT("LootQuality-frames.png")));Target->ReleaseResource();
     }
     return !HasAnyErrors();
 }

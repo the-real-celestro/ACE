@@ -13,6 +13,74 @@ FString ACEAppraisalFormatting::SlayerProperty(UACEDatSubsystem* Dat, uint32 Cre
     return CreatureType==31 ? FString(TEXT("Bael'Zharon's Hate")) : Name+TEXT(" slayer");
 }
 
+TArray<FACEItemStatLine> ACEAppraisalFormatting::EquipmentStatLines(const FACEAppraisalInfo& Info)
+{
+    TArray<FACEItemStatLine> Rows;
+    if(!Info.bSuccess)return Rows;
+    auto Number=[](double V)
+    {
+        return FMath::IsNearlyEqual(V,FMath::RoundToDouble(V),.0001)?FString::Printf(TEXT("%.0f"),V):FString::Printf(TEXT("%.1f"),V);
+    };
+    auto Percent=[&](double V){return (V>=0?TEXT("+"):TEXT(""))+Number(V*100)+TEXT("%");};
+    auto Add=[&](const TCHAR* Key,const TCHAR* Label,const FString& Value){Rows.Add({Key,Label,Value});};
+    const bool Caster=(Info.ItemType&ACEItemType::Caster)!=0;
+    const bool Launcher=(Info.ItemType&ACEItemType::MissileWeapon)!=0;
+    if(Info.bHasWeaponProfile&&!Caster)
+    {
+        if(Launcher)
+        {
+            if(FMath::IsFinite(Info.WeaponDamageMod)&&Info.WeaponDamageMod>0)
+                Add(TEXT("Multiplier"),TEXT("Damage multiplier"),TEXT("×")+Number(Info.WeaponDamageMod));
+            if(Info.Damage)Add(TEXT("Damage"),TEXT("Missile damage bonus"),FString::Printf(TEXT("%+d"),Info.Damage));
+        }
+        else if(FMath::IsFinite(Info.DamageVariance))
+        {
+            Add(TEXT("Damage"),TEXT("Damage per hit"),Number(Info.Damage*(1-Info.DamageVariance))+TEXT("–")+Number(Info.Damage));
+            Add(TEXT("Variance"),TEXT("Damage variance"),Number(Info.DamageVariance*100)+TEXT("%"));
+        }
+        if(FMath::IsFinite(Info.WeaponOffense)&&Info.WeaponOffense>0)
+            Add(TEXT("Attack"),TEXT("Attack"),Percent(Info.WeaponOffense-1));
+        Add(TEXT("Speed"),TEXT("Speed"),FString::FromInt(Info.WeaponTime));
+    }
+    if(const auto* V=Info.IntProperties.Find(204))Add(TEXT("ElementBonus"),TEXT("Elemental damage bonus"),FString::Printf(TEXT("%+d"),*V));
+    if(const auto* V=Info.FloatProperties.Find(152);V&&FMath::IsFinite(*V))
+    {
+        Add(TEXT("Element"),TEXT("Spell damage (PvE)"),Percent(*V-1));
+        Add(TEXT("ElementPvP"),TEXT("Spell damage (PvP)"),Percent((*V-1)*.5));
+    }
+    for(const auto& P:TArray<TPair<uint32,const TCHAR*>>{{29,TEXT("Melee defense")},{149,TEXT("Missile defense")},{150,TEXT("Magic defense")}})
+        if(const auto* V=Info.FloatProperties.Find(P.Key);V&&FMath::IsFinite(*V))
+            Add(P.Key==29?TEXT("Defense"):P.Key==149?TEXT("MissileDefense"):TEXT("MagicDefense"),P.Value,Percent(*V-1));
+    if(const auto* V=Info.FloatProperties.Find(144);V&&FMath::IsFinite(*V))Add(TEXT("ManaConversion"),TEXT("Mana conversion"),Percent(*V));
+    if(const auto* V=Info.FloatProperties.Find(147);V&&FMath::IsFinite(*V))Add(TEXT("Critical"),TEXT("Critical chance"),Number(*V*100)+TEXT("%"));
+    if(const auto* V=Info.FloatProperties.Find(136);V&&FMath::IsFinite(*V))Add(TEXT("CritDamage"),TEXT("Critical damage bonus"),Percent(*V));
+    if(const auto* V=Info.FloatProperties.Find(138);V&&FMath::IsFinite(*V))Add(TEXT("Slayer"),TEXT("Slayer damage"),TEXT("×")+Number(*V));
+    if(const auto* AL=Info.IntProperties.Find(28))
+    {
+        Add(TEXT("Armor"),TEXT("Armor level"),FString::FromInt(*AL));
+        const TCHAR* Names[]={TEXT("Slashing armor"),TEXT("Piercing armor"),TEXT("Bludgeoning armor"),TEXT("Cold armor"),TEXT("Fire armor"),TEXT("Acid armor"),TEXT("Nether armor"),TEXT("Electric armor")};
+        const int32 Keys[]={13,14,15,16,17,18,165,19};
+        for(int32 I:{0,1,2,4,3,5,7,6})if(Info.ArmorResistances.IsValidIndex(I)&&FMath::IsFinite(Info.ArmorResistances[I]))
+            Rows.Add({FString::Printf(TEXT("Armor%d"),Keys[I]),Names[I],FString::FromInt(FMath::TruncToInt(*AL*FMath::Clamp(Info.ArmorResistances[I],0.f,2.f)))});
+    }
+    for(uint32 Key:{370u,371u,372u,373u,374u,375u,376u,377u,378u,379u})
+    {
+        const TCHAR* Names[]={TEXT("Damage rating"),TEXT("Damage resistance"),TEXT("Critical rating"),TEXT("Critical resistance"),TEXT("Critical damage rating"),TEXT("Critical damage resistance"),TEXT("Healing boost"),TEXT("Nether resistance"),TEXT("Life resistance"),TEXT("Maximum health rating")};
+        if(const auto* V=Info.IntProperties.Find(Key);V&&*V)Add(TEXT("Rating"),Names[Key-370],FString::Printf(TEXT("%+d"),*V));
+    }
+    if(const int32 Set=Info.IntProperties.FindRef(265))
+    {
+        const FString Name=EquipmentSetName(Set);
+        Add(TEXT("Set"),TEXT("Set"),Name.IsEmpty()?FString::FromInt(Set):Name);
+    }
+    if(Info.IntProperties.FindRef(171)>0)Add(TEXT("Tinkers"),TEXT("Tinkers"),FString::FromInt(Info.IntProperties.FindRef(171)));
+    if(const auto* V=Info.IntProperties.Find(105))Add(TEXT("Work"),TEXT("Workmanship"),FString::FromInt(*V));
+    if(const auto* V=Info.IntProperties.Find(107);V&&Info.IntProperties.Contains(108))
+        Add(TEXT("Mana"),TEXT("Item mana"),FString::Printf(TEXT("%d / %d"),*V,Info.IntProperties.FindRef(108)));
+    if(const auto* V=Info.IntProperties.Find(106))Add(TEXT("Spellcraft"),TEXT("Spellcraft"),FString::FromInt(*V));
+    return Rows;
+}
+
 FString ACEAppraisalFormatting::ItemLevelDetails(const FACEAppraisalInfo& Info)
 {
     FString Text;
@@ -216,4 +284,47 @@ FString ACEAppraisalFormatting::EquipmentSetName(int32 Id)
     case 130: return TEXT("Shimmering Shadows");
     default: return FString();
     }
+}
+
+TArray<FString> ACEAppraisalFormatting::EquipmentProperties(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat)
+{
+    uint32 Imbued = 0;
+    for (uint32 Id : {179u,303u,304u,305u,306u}) Imbued |= Info.IntProperties.FindRef(Id);
+    TArray<FString> Properties;
+    if (Info.IntProperties.FindRef(33)) Properties.Add(TEXT("Bonded"));
+    if (Info.IntProperties.FindRef(114)) Properties.Add(TEXT("Attuned"));
+    if (const int32* Slayer=Info.IntProperties.Find(166))
+    {
+        const FString Name=SlayerProperty(Dat,uint32(*Slayer));
+        if (!Name.IsEmpty()) Properties.Add(Name);
+    }
+    for (const auto& E : {TPair<uint32,const TCHAR*>(1,TEXT("Critical Strike")),{2,TEXT("Crippling Blow")},{4,TEXT("Armor Rending")},
+        {8,TEXT("Slash Rending")},{16,TEXT("Pierce Rending")},{32,TEXT("Bludgeon Rending")},{64,TEXT("Acid Rending")},
+        {128,TEXT("Cold Rending")},{256,TEXT("Lightning Rending")},{512,TEXT("Fire Rending")},{16384,TEXT("Nether Rending")},
+        {1024,TEXT("+1 Melee Defense")},{2048,TEXT("+1 Missile Defense")},{4096,TEXT("+1 Magic Defense")},{0x80000000u,TEXT("Phantasmal")}})
+        if (Imbued & E.Key) Properties.Add(E.Value);
+    // ItemExamineUI::Appraisal_ShowSpecialProperties reads ResistMagic (int 36),
+    // including fields supplied by a partially successful appraisal.
+    if (Info.IntProperties.FindRef(36) >= 9999) Properties.Add(TEXT("Unenchantable"));
+    if (Info.BoolProperties.FindRef(91)) Properties.Add(TEXT("Retained"));
+    for (const auto& Property : {TPair<uint32,const TCHAR*>(136,TEXT("Crushing Blow")),
+        {147,TEXT("Biting Strike")},{155,TEXT("Armor Cleaving")}})
+        if (Info.FloatProperties.Contains(Property.Key)) Properties.Add(Property.Value);
+    // Retail ItemExamineUI::Appraisal_ShowSpecialProperties checks presence of
+    // ResistanceModifier (float 157) and ResistanceModifierType (int 263).
+    // This is independent of imbued/rending flags and the weapon's damage type.
+    if (Info.FloatProperties.Contains(157))
+    {
+        if (const int32* ResistanceType = Info.IntProperties.Find(263))
+        {
+            TArray<FString> Names;
+            for (const auto& E : {TPair<uint32,const TCHAR*>(1,TEXT("Slashing")),{2,TEXT("Piercing")},{4,TEXT("Bludgeoning")},
+                {8,TEXT("Cold")},{16,TEXT("Fire")},{32,TEXT("Acid")},{64,TEXT("Electrical")},{1024,TEXT("Nether")},{0x10000000u,TEXT("Prismatic")}})
+                if (uint32(*ResistanceType) & E.Key) Names.Add(E.Value);
+            Properties.Add(TEXT("Resistance Cleaving: ") + FString::Join(Names,TEXT("/")));
+        }
+    }
+    if (Info.BoolProperties.FindRef(99)) Properties.Add(TEXT("Ivoryable"));
+    if (Info.BoolProperties.FindRef(100)) Properties.Add(TEXT("Dyeable"));
+    return Properties;
 }

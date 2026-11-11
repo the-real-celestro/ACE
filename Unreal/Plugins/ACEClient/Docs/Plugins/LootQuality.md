@@ -1,15 +1,18 @@
 # Loot quality and hover breakdown
 
 The inventory, equipment, container, trade and vendor views use the original DAT
-artwork. An assessed item gets a WoW-style quality edge: gray, white, green, blue,
+artwork. A rated item gets a WoW-style beveled quality frame around its square slot: gray, white, green, blue,
 purple or orange. Failed wield requirements change the background to plum without
 changing the quality edge. Small H/L/F/2H marks are drawn only where the actual
 foreground artwork leaves room. The complete class name is always in the hover.
 
-The hover separates original rolls, permanent tinkering and the item's own
-cantrip effects. Ivory marks the original value, amber the permanent value, and
-blue the cantrip continuation. The natural limits remain visible in native units;
-there is no misleading percentage-of-maximum damage label. A hit interval such
+The hover uses concise Examine-style stat lines, without sliders. The main
+values come directly from the appraisal, including active spell effects.
+Verified natural limits appear inline, for example `+18% (base max +20%)`.
+Variance uses `base best` because lower is better. These limits do not claim
+to cap tinkering or spells. Observed original/tinkering changes appear below
+the affected stat in amber; intrinsic cantrip contributions appear in blue.
+There is no misleading percentage-of-maximum damage label. A hit interval such
 as 34.5–65 describes that weapon's damage distribution, not the distribution of
 possible weapon rolls. Damage-type text samples the same DAT effect palette as
 the existing item icons; it does not falsely mark an untinkered item as rended.
@@ -79,8 +82,8 @@ Set points do not claim that an incomplete set's effects are active.
 
 The named top tier is an entry threshold. Quality points have no global ceiling,
 so exceptional combinations continue to rank above ordinary Legendary items.
-The individual stat bars depict actual stat values, independently of these
-heuristic overall quality points.
+The individual stat lines show actual values, independently of these heuristic
+overall quality points.
 
 ## Evidence, requirements and stacking
 
@@ -140,14 +143,32 @@ monotonicity, grade boundaries, relevance and continued ordering above 100.
 Also run the existing item presentation, icon rendering, tooltip and inventory
 performance regression suites before distributing a build.
 
-## Icon and hover stability (v158)
+## Concise stats and special items (v159)
 
-Quality frames now use a three-pixel colored edge plus a dark inner edge at
-native 32-pixel size, scaling with larger icons. Class marks only use clear
-foreground pixels inside that frame. The hover uses a compact Base / Tinkered
-(or Current) / Cantrip table: totals and signed changes, short stat names,
-numeric bounds, useful spells and one requirements line. Repeated instructional
-paragraphs, color legends and scoring explanations stay out of the hover.
+Stat display is independent of random-loot rating eligibility. Quest and custom
+weapons show their reported damage, defense, mana conversion, critical chance,
+slayer modifier, item mana, spellcraft and other supplied combat properties.
+All intrinsic spell names are retained, including ordinary auras and activated
+spells. Active high-bit spell entries do not duplicate those names. Missing or
+non-finite properties are omitted. Fixed/special weapons without a verified
+generation cohort do not receive invented comparison limits or roll grades.
+
+Examine and the hover share the same special-property formatter for slayers,
+imbues/rending, bonding, attunement and other flags. Armor shows all supplied
+effective resistance levels rather than only the dimensions used in its score.
+`ACE.LootQuality.SpecialItems` exercises the reported Rynthid Tentacle Wand case,
+compares current totals with Examine, checks ordinary spells and properties,
+and renders `Saved/LootQuality-quest-hover.png`. It also checks missing and
+non-finite values. Existing scoring and hover-refresh fixtures remain in place.
+
+## Icon and hover stability
+
+Quality uses an original beveled square frame inspired by WoW: a dark outer
+rim, rarity-colored faces, an upper-left highlight and a recessed inner seam.
+It scales with larger icons and leaves interior artwork and imbue backgrounds
+untinted. Class marks only use clear foreground pixels inside the frame.
+Repeated instructional paragraphs, color
+legends and scoring explanations stay out of the hover.
 
 Authored underlays and imbue/effect backgrounds retain their original DAT colors,
 including on items the character cannot wield. These items use a small pink
@@ -165,7 +186,7 @@ their existing tooltip route.
 `ACE.LootQuality.HoverRouting` drives the native controller through all seven
 item surfaces and 100 rendered appraisal/refresh cycles, asserting stable panel
 attachment and no duplicate automatic popup. `ACE.LootQuality.IconBorders`
-renders both 32- and 64-pixel icons and checks frame coverage and clear artwork.
+renders both 32- and 64-pixel icons and checks four-sided color, bevel shading and clear interior artwork.
 The existing scoring, inventory, tooltip, icon and background fixtures also run.
 
 On macOS the retail cursor artwork is installed as native OS cursor shapes,

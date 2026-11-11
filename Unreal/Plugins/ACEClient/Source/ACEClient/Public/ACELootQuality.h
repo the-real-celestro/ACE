@@ -8,7 +8,7 @@ class UACEDatSubsystem;
 
 struct FACEQualityStat
 {
-    FString Label;
+    FString Key, Label;
     double Original = 0, Permanent = 0, WithCantrip = 0;
     ACELootScoring::Range Bounds;
     bool bOriginalKnown = false, bPermanentKnown = true, bPercent = false, bLowerBetter = false;
@@ -30,7 +30,7 @@ struct FACEQualityOriginal
 };
 struct FACEQualityReview
 {
-    bool bEquipment = false, bRated = false, bOriginalKnown = false;
+    bool bEquipment = false, bRated = false, bOriginalKnown = false, bIdentified = false;
     bool bCannotWield = false, bActivationBlocked = false;
     FString Class, ClassMark, Reason, Requirements, Activation, DamageType;
     double OriginalPoints = 0, CantripPoints = 0, PropertyPoints = 0, Points = 0;
@@ -38,6 +38,8 @@ struct FACEQualityReview
     ACELootScoring::Grade Grade = ACELootScoring::Grade::Poor;
     TArray<FACEQualityStat> Stats;
     TArray<FACEQualitySpell> Spells;
+    TArray<FACEItemStatLine> CurrentStats;
+    TArray<FString> Properties, SpellNames;
     int32 Tinkers = 0;
 };
 

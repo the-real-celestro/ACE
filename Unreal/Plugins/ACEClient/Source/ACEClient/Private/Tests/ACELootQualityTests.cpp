@@ -78,20 +78,23 @@ bool FACELootQualityTest::RunTest(const FString&)
         TestTrue(TEXT("Stationary hover retains Slate popup identity across 100 inventory refreshes"),SlateOwner->GetToolTip()==InitialTooltip);
         TestTrue(TEXT("Stationary hover retains content root"),InitialTooltip->AsWidget()==InitialContent);
         auto Widget=CastChecked<UACEHoverTooltipWidget>(Owner->GetToolTip())->TakeWidget();Widget->SlatePrepass();
-        TArray<FString> Labels;
+        TArray<FString> Labels;bool HasSlider=false;
         TFunction<void(TSharedRef<SWidget>)> Collect=[&](TSharedRef<SWidget> Node)
         {
+            HasSlider|=Node->GetType()==FName(TEXT("SACELootBar"));
             if(Node->GetType()==TEXT("STextBlock"))Labels.Add(StaticCastSharedRef<STextBlock>(Node)->GetText().ToString());
             auto* Children=Node->GetChildren();for(int32 I=0;I<Children->Num();++I)Collect(Children->GetChildAt(I));
         };
         Collect(Widget);
         const FString Copy=FString::Join(Labels,TEXT(" "));
-        TestTrue(TEXT("Compact panel retains labeled source columns"),Labels.Contains(TEXT("Base"))&&Labels.Contains(TEXT("Tinkered"))&&Labels.Contains(TEXT("Cantrip")));
+        TestTrue(TEXT("Examine-style lines retain current values and concise provenance"),Copy.Contains(TEXT("Damage per hit:"))&&Copy.Contains(TEXT("Base 65"))&&Copy.Contains(TEXT("Tinkering +2"))&&Copy.Contains(TEXT("Cantrip +10")));
+        TestFalse(TEXT("No slider widget remains in the hover"),HasSlider);
         for(const TCHAR* Extra:{TEXT("quality points"),TEXT("Original per hit"),TEXT("Wield requirements met"),TEXT("Ivory:"),TEXT("compressed extension"),TEXT("ACE baseline"),TEXT("No tinkering")})
             TestFalse(FString(TEXT("No repetitive explanation: "))+Extra,Copy.Contains(Extra));
-        TestTrue(TEXT("Compact panel keeps original, permanent and cantrip values"),Copy.Contains(TEXT("65"))&&Copy.Contains(TEXT("67"))&&Copy.Contains(TEXT("77")));
+        TestTrue(TEXT("Compact panel keeps current, original and cantrip contributions"),Copy.Contains(TEXT("65"))&&Copy.Contains(TEXT("67"))&&Copy.Contains(TEXT("Cantrip +10")));
+        TestTrue(TEXT("Natural roll limits use concise inline text"),Copy.Contains(TEXT("base max +20%"))&&Copy.Contains(TEXT("base best 47%")));
         const FIntPoint Size(FMath::CeilToInt(Widget->GetDesiredSize().X),FMath::CeilToInt(Widget->GetDesiredSize().Y));
-        TestTrue(TEXT("Single-cantrip hover is compact"),Size.X<=360&&Size.Y<=440);
+        TestTrue(TEXT("Single-cantrip hover is compact"),Size.X<=380&&Size.Y<=380);
         FWidgetRenderer Renderer(false,true);auto* Target=FWidgetRenderer::CreateTargetFor(FVector2D(Size),TF_Nearest,false);
         ++GFrameCounter;Renderer.DrawWidget(Target,Widget,FVector2D(Size),.016f);FlushRenderingCommands();
         TArray<FColor> Pixels;FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags);
@@ -104,7 +107,7 @@ bool FACELootQualityTest::RunTest(const FString&)
         TestFalse(TEXT("Loot popup cannot steal mouse hover hit tests"),Owner->GetToolTip()->GetVisibility()==ESlateVisibility::Visible);
         auto FourWidget=CastChecked<UACEHoverTooltipWidget>(Owner->GetToolTip())->TakeWidget();FourWidget->SlatePrepass();
         AddInfo(FString::Printf(TEXT("Four-cantrip hover size: %.0f x %.0f"),FourWidget->GetDesiredSize().X,FourWidget->GetDesiredSize().Y));
-        TestTrue(TEXT("Four-cantrip hover remains compact"),FourWidget->GetDesiredSize().Y<=500);
+        TestTrue(TEXT("Four-cantrip hover remains compact"),FourWidget->GetDesiredSize().Y<=440);
         UACEHoverTooltipWidget::SetWidgetContentTooltip(Owner,FText::FromString(TEXT("Renamed item")),SNew(STextBlock).Text(FText::FromString(TEXT("Changed"))));
         TestTrue(TEXT("Renaming an item retains its active popup"),SlateOwner->GetToolTip()==InitialTooltip);
         UACEHoverTooltipWidget::SetWidgetTooltip(Owner,FText::FromString(TEXT("Ordinary item")));

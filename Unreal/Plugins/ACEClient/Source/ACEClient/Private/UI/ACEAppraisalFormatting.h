@@ -13,6 +13,8 @@ FString EquipmentSetName(int32 Id);
 FString ItemLevelDetails(const FACEAppraisalInfo& Info);
 FString SlayerProperty(UACEDatSubsystem* Dat, uint32 CreatureType);
 FString RequirementEnumName(UACEDatSubsystem* Dat, uint32 Enum, int32 Value);
+TArray<FACEItemStatLine> EquipmentStatLines(const FACEAppraisalInfo& Info);
+TArray<FString> EquipmentProperties(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat);
 inline FString ManaStoneDetails(const FACEAppraisalInfo& Info)
 {
     // ItemExamineUI::Appraisal_ShowManaStoneInfo: property presence (including
@@ -422,42 +424,7 @@ inline FString ItemDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat 
         AppendItemText(Text,TEXT("Spells: unknown."),true);
     uint32 Imbued = 0;
     for (uint32 Id : {179u,303u,304u,305u,306u}) Imbued |= Info.IntProperties.FindRef(Id);
-    TArray<FString> Properties;
-    if (Info.IntProperties.FindRef(33)) Properties.Add(TEXT("Bonded"));
-    if (Info.IntProperties.FindRef(114)) Properties.Add(TEXT("Attuned"));
-    if (const int32* Slayer=Info.IntProperties.Find(166))
-    {
-        const FString Name=SlayerProperty(Dat,uint32(*Slayer));
-        if (!Name.IsEmpty()) Properties.Add(Name);
-    }
-    for (const auto& E : {TPair<uint32,const TCHAR*>(1,TEXT("Critical Strike")),{2,TEXT("Crippling Blow")},{4,TEXT("Armor Rending")},
-        {8,TEXT("Slash Rending")},{16,TEXT("Pierce Rending")},{32,TEXT("Bludgeon Rending")},{64,TEXT("Acid Rending")},
-        {128,TEXT("Cold Rending")},{256,TEXT("Lightning Rending")},{512,TEXT("Fire Rending")},{16384,TEXT("Nether Rending")},
-        {1024,TEXT("+1 Melee Defense")},{2048,TEXT("+1 Missile Defense")},{4096,TEXT("+1 Magic Defense")},{0x80000000u,TEXT("Phantasmal")}})
-        if (Imbued & E.Key) Properties.Add(E.Value);
-    // ItemExamineUI::Appraisal_ShowSpecialProperties reads ResistMagic (int 36),
-    // including fields supplied by a partially successful appraisal.
-    if (Info.IntProperties.FindRef(36) >= 9999) Properties.Add(TEXT("Unenchantable"));
-    if (Info.BoolProperties.FindRef(91)) Properties.Add(TEXT("Retained"));
-    for (const auto& Property : {TPair<uint32,const TCHAR*>(136,TEXT("Crushing Blow")),
-        {147,TEXT("Biting Strike")},{155,TEXT("Armor Cleaving")}})
-        if (Info.FloatProperties.Contains(Property.Key)) Properties.Add(Property.Value);
-    // Retail ItemExamineUI::Appraisal_ShowSpecialProperties checks presence of
-    // ResistanceModifier (float 157) and ResistanceModifierType (int 263).
-    // This is independent of imbued/rending flags and the weapon's damage type.
-    if (Info.FloatProperties.Contains(157))
-    {
-        if (const int32* ResistanceType = Info.IntProperties.Find(263))
-        {
-            TArray<FString> Names;
-            for (const auto& E : {TPair<uint32,const TCHAR*>(1,TEXT("Slashing")),{2,TEXT("Piercing")},{4,TEXT("Bludgeoning")},
-                {8,TEXT("Cold")},{16,TEXT("Fire")},{32,TEXT("Acid")},{64,TEXT("Electrical")},{1024,TEXT("Nether")},{0x10000000u,TEXT("Prismatic")}})
-                if (uint32(*ResistanceType) & E.Key) Names.Add(E.Value);
-            Properties.Add(TEXT("Resistance Cleaving: ") + FString::Join(Names,TEXT("/")));
-        }
-    }
-    if (Info.BoolProperties.FindRef(99)) Properties.Add(TEXT("Ivoryable"));
-    if (Info.BoolProperties.FindRef(100)) Properties.Add(TEXT("Dyeable"));
+    const auto Properties=EquipmentProperties(Info,Dat);
     if (!Properties.IsEmpty()) AppendItemText(Text, TEXT("Properties: ") + FString::Join(Properties,TEXT(", ")), true);
     if (Imbued) AppendItemText(Text, TEXT("This item cannot be further imbued."));
     const bool Tethered=Info.BoolProperties.FindRef(130);
