@@ -80,8 +80,13 @@ private:
  UPROPERTY() TObjectPtr<UTextBlock> ScreenBrightnessLabel;
  UPROPERTY() TObjectPtr<UTextBlock> EffectLightLimitLabel;
  UPROPERTY() TObjectPtr<UTextBlock> ScreenContrastLabel;
+ UPROPERTY() TObjectPtr<UComboBoxString> UIFontFace;
+ UPROPERTY() TObjectPtr<UComboBoxString> UIFontSize;
  UPROPERTY() TObjectPtr<UComboBoxString> ChatFontFace;
  UPROPERTY() TObjectPtr<UComboBoxString> ChatFontSize;
     UPROPERTY() TObjectPtr<UComboBoxString> PluginTextScale;
  UPROPERTY() TObjectPtr<UEditableTextBox> ScreenshotDirectory;
+ TMap<TWeakObjectPtr<class USizeBox>,FVector2D> FixedControlSizes;
+ float LastFontLayoutScale=0.f;
+
 };

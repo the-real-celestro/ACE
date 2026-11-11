@@ -1,4 +1,5 @@
 #include "UI/ACEUIGameplayBinder.h"
+#include "ACERuntimeOptions.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "Mods/ACEActionDeckSubsystem.h"
 #include "UI/ACERetailVendorCategories.h"
@@ -585,7 +586,7 @@ void UACEUIGameplayBinder::Shutdown()
 	ReleaseExamPaperDollPreview();
 	if (ExamCreatureDetailsScroll) ExamCreatureDetailsScroll->RemoveFromParent();
 	ExamCreatureDetailsScroll = nullptr; ExamCreatureDetailsCanvas = nullptr; ExamCreatureDetailsSize = nullptr;
-	ExamMiscLabels.Reset(); ExamMiscValues.Reset(); ExamMiscRows.Reset(); ExamCreatureScrolledGuid = 0;
+	ExamMiscLabels.Reset(); ExamMiscValues.Reset(); ExamMiscIcons.Reset(); ExamMiscRows.Reset(); ExamCreatureScrolledGuid = 0;
 	for (UTextBlock* Text : ExamAttributeLabels) if (Text) Text->RemoveFromParent();
 	for (UTextBlock* Text : ExamAttributeValues) if (Text) Text->RemoveFromParent();
 	if (ExamLevel) ExamLevel->RemoveFromParent();
@@ -6680,6 +6681,20 @@ void UACEUIGameplayBinder::HandleAppraisal(const FACEAppraisalInfo& Appraisal)
 	ExaminedSpellId = 0;
 	ShowExamination(true);
 	RefreshExaminationOverlay();
+    FACEWorldObject Subject;
+    const bool Player=Client&&Client->GetWorldObject(Appraisal.ObjectGuid,Subject)&&Subject.bIsPlayer;
+    if(!Player&&Client&&Client->GetGameInstance())
+    {
+        if(auto* Host=Client->GetGameInstance()->GetSubsystem<UACEPluginSubsystem>())
+        {
+            const int32 Guid=Appraisal.ObjectGuid;
+            const auto Weak=TWeakObjectPtr<UACEUIGameplayBinder>(this);
+            Host->OpenWikiExamination(Appraisal.Name,Appraisal.bSuccess,
+                [Weak,Guid]() -> UTextureRenderTarget2D* {auto* B=Weak.Get();return B&&B->ExamPaperDollAppliedGuid==Guid?B->ExamPaperDollRenderTarget.Get():nullptr;},
+                [Weak,Guid](){auto* B=Weak.Get();return B&&!B->bExaminationDismissed&&B->LastAppraisal.ObjectGuid==Guid;},
+                [Weak](){if(auto* B=Weak.Get()){B->ShowExamination(false);B->RefreshExaminationOverlay();}});
+        }
+    }
 }
 
 void UACEUIGameplayBinder::HandleSelectionChanged(const FACESelectedObject& Selection)
@@ -7911,6 +7926,12 @@ bool UACEUIGameplayBinder::ScrollSpellbook(float WheelDelta)
 	return true;
 }
 
+void UACEUIGameplayBinder::RefreshUIFontLayout()
+{
+    if(!Canvas||!Manager)return;
+    RefreshAttributeOverlays();RefreshSkillOverlays();RefreshExaminationOverlay();
+}
+
 void UACEUIGameplayBinder::SyncStatListScrollbar()
 {
 	if (!Manager || ActivePanelPage != TEXT("SkillManagementPanel_Field"))
@@ -7927,7 +7948,7 @@ void UACEUIGameplayBinder::SyncStatListScrollbar()
 	Bar->Height = ListEl->Height;
 	Bar->Y = ListEl->Y;
 	const int32 Count = PageName == TEXT("SkillPage") ? SkillListContentCount : 9;
-	const int32 PageSize = FMath::Max(1, ListEl->Height / 18);
+	const int32 PageSize = FMath::Max(1, ListEl->Height / ACERuntimeOptions::StatRowHeight());
 	const int32 MaxOff = FMath::Max(0, Count - PageSize);
 	int32& Offset = PageName == TEXT("SkillPage") ? SkillListScrollOffset : AttributeScrollOffset;
 	Offset = FMath::Clamp(Offset, 0, MaxOff);
@@ -8765,7 +8786,7 @@ void UACEUIGameplayBinder::RefreshAttributeOverlays()
 		return;
 	}
 	const FIntPoint Origin = ListEl->GetScreenOrigin();
-	constexpr int32 RowH = 18;
+	const int32 RowH = ACERuntimeOptions::StatRowHeight();
 	const int32 MaxRows = FMath::Min(static_cast<int32>(UE_ARRAY_COUNT(Rows)), FMath::Max(1, ListEl->Height / RowH));
 	AttributeScrollOffset = FMath::Clamp(AttributeScrollOffset, 0, int32(UE_ARRAY_COUNT(Rows)) - MaxRows);
 	SyncStatListScrollbar();
@@ -8782,6 +8803,7 @@ void UACEUIGameplayBinder::RefreshAttributeOverlays()
 			Row->SetVisibility(ESlateVisibility::HitTestInvisible);
 			FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 9);
 			Row->SetFont(Font);
+			CastChecked<UACERetailTextBlock>(Row)->SetSmoothFont(10.f,Font.TypefaceFontName==TEXT("Bold"));
 			Row->SetJustification(Justify);
 			Arr.Add(Row);
 		}
@@ -9130,7 +9152,7 @@ void UACEUIGameplayBinder::RefreshSkillOverlays()
 		}
 	}
 
-	constexpr int32 RowH = 18;
+	const int32 RowH = ACERuntimeOptions::StatRowHeight();
 	const int32 PageSize = FMath::Max(1, ListEl->Height / RowH);
 	SkillListContentCount = Lines.Num();
 	const int32 MaxScroll = FMath::Max(0, Lines.Num() - PageSize);
@@ -9146,6 +9168,7 @@ void UACEUIGameplayBinder::RefreshSkillOverlays()
 		Row->SetJustification(ETextJustify::Left);
 		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 9);
 		Row->SetFont(Font);
+			CastChecked<UACERetailTextBlock>(Row)->SetSmoothFont(10.f,Font.TypefaceFontName==TEXT("Bold"));
 		SkillRows.Add(Row);
 	}
 	while (SkillRowValues.Num() < PageSize && Canvas->WidgetTree)
@@ -9155,6 +9178,7 @@ void UACEUIGameplayBinder::RefreshSkillOverlays()
 		Row->SetJustification(ETextJustify::Right);
 		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 9);
 		Row->SetFont(Font);
+			CastChecked<UACERetailTextBlock>(Row)->SetSmoothFont(10.f,Font.TypefaceFontName==TEXT("Bold"));
 		SkillRowValues.Add(Row);
 	}
 	while (SkillSectionHeaders.Num() < PageSize && Canvas->WidgetTree)
@@ -9164,6 +9188,7 @@ void UACEUIGameplayBinder::RefreshSkillOverlays()
 		Row->SetJustification(ETextJustify::Left);
 		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Bold"), 9);
 		Row->SetFont(Font);
+			CastChecked<UACERetailTextBlock>(Row)->SetSmoothFont(10.f,Font.TypefaceFontName==TEXT("Bold"));
 		Row->SetColorAndOpacity(FSlateColor(TextGold));
 		SkillSectionHeaders.Add(Row);
 	}
@@ -9509,6 +9534,7 @@ void UACEUIGameplayBinder::RefreshTitleOverlays()
 		Row->SetAutoWrapText(false);
 		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 9);
 		Row->SetFont(Font);
+			CastChecked<UACERetailTextBlock>(Row)->SetSmoothFont(10.f,Font.TypefaceFontName==TEXT("Bold"));
 		TitleRows.Add(Row);
 	}
 
@@ -11731,7 +11757,7 @@ void UACEUIGameplayBinder::RefreshExaminationOverlay()
 				ExamScrolledObjectGuid = LastAppraisal.ObjectGuid;
 			}
 			ExamScroll->SetVisibility(ESlateVisibility::Visible);
-			Canvas->PlaceWidgetAtElement(ExamScroll, BodyTarget, ExamOverlayZ + 1);
+			Canvas->PlaceWidgetAtElement(ExamScroll, BodyTarget, ExamOverlayZ + 1, FMargin(0,0,0,24));
 		}
 	}
 
@@ -13860,7 +13886,7 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D ViewportPos)
 	{
 		TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(TEXT("SkillPage"), TEXT("StatManagement_List"));
 		TSharedPtr<FACEUIElement> Bar = Manager->FindElementUnder(TEXT("SkillPage"), TEXT("StatManagement_List_Scrollbar"));
-		const int32 PageSize = ListEl.IsValid() ? FMath::Max(1, ListEl->Height / 18) : 1;
+		const int32 PageSize = ListEl.IsValid() ? FMath::Max(1, ListEl->Height / ACERuntimeOptions::StatRowHeight()) : 1;
 		if (TryBar(Bar, EACEUIScrollTarget::StatList, FMath::Max(0, SkillListContentCount - PageSize), false))
 		{
 			return true;
@@ -13870,7 +13896,7 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D ViewportPos)
 	{
 		const auto List = Manager->FindElementUnder(ActiveSkillTab, TEXT("StatManagement_List"));
 		if (List && TryBar(Manager->FindElementUnder(ActiveSkillTab, TEXT("StatManagement_List_Scrollbar")),
-			EACEUIScrollTarget::Attributes, FMath::Max(0, 9-FMath::Max(1,List->Height/18)), false)) return true;
+			EACEUIScrollTarget::Attributes, FMath::Max(0, 9-FMath::Max(1,List->Height/ACERuntimeOptions::StatRowHeight())), false)) return true;
 	}
 	if (ActivePanelPage == TEXT("PositiveEffectsPanel_Field")
 		|| ActivePanelPage == TEXT("NegativeEffectsPanel_Field"))

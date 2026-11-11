@@ -20,6 +20,7 @@ class SWidget;
 struct FACEWikiState;
 class AACEPlayerController;
 class UGameViewportClient;
+class UTextureRenderTarget2D;
 struct FACEWaypointLandmark { FVector2D Coordinates; FString Name, Type; };
 struct FACEPluginRouteSegment { FVector Start,End; FLinearColor Color; float Thickness; };
 struct FACEPluginMarker { int32 Id=0; FString Shape; FLinearColor Color; bool World=true, Map=true; };
@@ -134,6 +135,7 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
     friend class FACEPluginCompanionTest;
     friend class FACEPluginWorldPlateTest;
     friend class UACEPluginWorldPlateComponent;
+    friend class FACEWikiExaminePreferenceTest;
     friend class FACEThirdEyeTest;
     friend class FACEDerethLensTest;
     friend class FACEPluginPublicAPITest;
@@ -252,8 +254,11 @@ public:
     /** Native, read-only ACPedia reference panel. Independent of Examine selection. */
     TSharedPtr<FACEWikiState> WikiState;
     TSharedRef<SWidget> MakeWikiPanel();
-    TSharedRef<SWidget> MakeWikiLink(const FString& ObjectName);
-    void OpenWiki(const FString& Title);
+    TSharedRef<SWidget> MakeWikiLink(const FString& ObjectName,bool bIdentified=false,TFunction<UTextureRenderTarget2D*()> Portrait={});
+    void OpenWiki(const FString& Title,bool bIdentified=false);
+    void CacheWikiExamination(const FACEAppraisalInfo& Info,const FACEWorldObject* Subject);
+    void OpenWikiExamination(const FString& Name,bool Identified,TFunction<UTextureRenderTarget2D*()> Portrait,
+        TFunction<bool()> StillCurrent,TFunction<void()> OnOpened);
     bool IsPluginWindowOpen(const FString& Id) const;
     bool IsPointInsidePluginWindow(const FString& Id, FVector2D Absolute) const;
     bool WasPluginWindowOpen(const FString& Id) const;

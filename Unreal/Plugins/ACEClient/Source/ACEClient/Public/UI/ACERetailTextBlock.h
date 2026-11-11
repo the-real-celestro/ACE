@@ -16,7 +16,7 @@ class ACECLIENT_API UACERetailTextBlock : public UTextBlock
 	GENERATED_BODY()
 public:
 	void SetRetailElement(UACEUIResourceResolver* Resources, const TSharedPtr<FACEUIElement>& Element,
-		FVector2D Scale, float NativeWidth, bool bFlattenedOnCanvas = true);
+		FVector2D Scale, float NativeWidth, bool bFlattenedOnCanvas = true, bool bIncludesGameUIScale = false);
 	void SetFontOverride(uint32 FontId) { FontOverride = FontId; }
 	/** Color just the signed modifier in a stat footer, preserving bitmap advances. */
 	void SetModifierSuffix(int32 Begin, FLinearColor Color) { ModifierBegin=Begin; ModifierColor=Color; InvalidateLayoutAndVolatility(); }
@@ -31,7 +31,10 @@ public:
 		return ModifierBegin >= 0 && Index >= ModifierBegin ? ModifierColor : Default;
 	}
 	bool UsesDatAncestorClipping() const { return bApplyDatAncestorClip; }
-	const FACEDatFont* GetBitmapFont() const { return ForegroundAtlas ? &BitmapFont : nullptr; }
+	const FACEDatFont* GetBitmapFont() const { return !bSmoothFont && ForegroundAtlas ? &BitmapFont : nullptr; }
+    /** Use Slate's antialiased scalable font while retaining the retail layout. */
+    void SetSmoothFont(float PointSize, bool bBold=false);
+    void RefreshUIFont();
 	UTexture2D* GetGlyphAtlas(bool bBackground) const;
 	bool ShouldTintAtlas(bool bBackground) const { return bBackground ? bTintBackground : bTintForeground; }
 	FVector2D GetBitmapScale() const { return BitmapScale; }
@@ -71,6 +74,11 @@ private:
 	FVector2D BitmapScale = FVector2D(1, 1);
 	float NativeWidth = 0;
 	bool bTintForeground = true;
+    bool bSmoothFont = false;
+    bool bLayoutIncludesGameUIScale=false;
+    bool bForcedSmoothFont=false,bSmoothBold=false,bLayoutBound=false;
+    float SmoothPointSize=11.f,LayoutNativeWidth=0;
+    FVector2D LayoutScale=FVector2D(1,1);
 	bool bSelectable = false;
 	bool bApplyDatAncestorClip = true;
 	bool bTintBackground = true;

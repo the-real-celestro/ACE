@@ -51,6 +51,12 @@ struct FCreatureDetailLine
     FString Label;
     FString Value;
     FLinearColor Color = FLinearColor::White;
+    bool bFullWidth = false;
+    // Compact desktop presentation; Value remains the accessible full description.
+    FString DisplayValue;
+    uint32 IconDid = 0;
+    int32 TileGroup = 0;
+    FString Tooltip;
 };
 
 struct FCreatureHeadings
@@ -589,6 +595,40 @@ inline FString ItemDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat 
     if (!EnchantmentDescriptions.IsEmpty()) AppendItemText(Text,TEXT("Enchantments:\n\n")+EnchantmentDescriptions,true);
     return Text;
 }
+/** Compare only values actually supplied for this item instance. Never infer a
+ * random item's base roll from its template or subtract guessed spell bonuses. */
+inline FString ItemEnchantmentComparison(const FACEAppraisalInfo& Info)
+{
+    if(!Info.bSuccess||Info.bIsCreature)return FString();
+    const bool Active=Info.SpellBookEntries.ContainsByPredicate([](int32 V){return (uint32(V)&0x80000000u)!=0;});
+    if(!Active&&!((Info.WeaponEnchantments|Info.ArmorEnchantments|Info.ResistanceEnchantments)&0xffff))return FString();
+    TArray<FString> Rows;bool Missing=false;
+    auto Row=[&](const TCHAR* Name,const FString& Current,const FString& Base)
+    {Rows.Add(FString(Name)+TEXT(": ")+Current+TEXT(" -> ")+(Base.IsEmpty()?TEXT("Not supplied"):Base));Missing|=Base.IsEmpty();};
+    auto RawInt=[&](uint32 Key){const auto* V=Info.IntProperties.Find(Key);return V?FString::FromInt(*V):FString();};
+    auto RawFloat=[&](uint32 Key){const auto* V=Info.FloatProperties.Find(Key);return V&&FMath::IsFinite(*V)?FString::Printf(TEXT("%.3f"),*V):FString();};
+    if(Info.bHasWeaponProfile)
+    {
+        if(Info.WeaponEnchantments&8)Row(TEXT("Damage"),FString::FromInt(Info.Damage),RawInt(44));
+        if(Info.WeaponEnchantments&4)Row(TEXT("Speed"),FString::FromInt(Info.WeaponTime),RawInt(49));
+        if(Info.WeaponEnchantments&16)Row(TEXT("Damage variance"),FString::Printf(TEXT("%.3f"),Info.DamageVariance),RawFloat(22));
+        if(Info.WeaponEnchantments&32)Row(TEXT("Damage multiplier"),FString::Printf(TEXT("%.3f"),Info.WeaponDamageMod),RawFloat(63));
+        if(Info.WeaponEnchantments&1)Row(TEXT("Attack multiplier"),FString::Printf(TEXT("%.3f"),Info.WeaponOffense),RawFloat(62));
+    }
+    if((Info.ArmorEnchantments&1)&&Info.IntProperties.Contains(28))Row(TEXT("Armor level"),FString::FromInt(Info.IntProperties[28]),FString());
+    if((Info.WeaponEnchantments&2)&&Info.FloatProperties.Contains(29))Row(TEXT("Defense multiplier"),RawFloat(29),FString());
+    const TCHAR* Names[]={TEXT("Slashing armor"),TEXT("Piercing armor"),TEXT("Bludgeoning armor"),TEXT("Cold armor"),TEXT("Fire armor"),TEXT("Acid armor"),TEXT("Nether armor"),TEXT("Lightning armor")};
+    const uint32 Bits[]={2,4,8,16,32,64,256,128};
+    for(int32 I=0;I<8;++I)if((Info.ArmorEnchantments&Bits[I])&&Info.ArmorResistances.IsValidIndex(I))
+        Row(Names[I],FString::Printf(TEXT("%.3f"),Info.ArmorResistances[I]),FString());
+    if((Info.ResistanceEnchantments&0x1000)&&Info.FloatProperties.Contains(144))Row(TEXT("Mana conversion multiplier"),RawFloat(144),FString());
+    if((Info.ResistanceEnchantments&0x2000)&&Info.FloatProperties.Contains(152))Row(TEXT("Elemental damage multiplier"),RawFloat(152),FString());
+    FString Text=TEXT("Buffed / Unbuffed\nCurrent -> Unbuffed\n");
+    Text+=Rows.IsEmpty()?TEXT("No comparable numeric changes were supplied."):FString::Join(Rows,TEXT("\n"));
+    if(Missing)Text+=TEXT("\nExact unbuffed values are not included in this appraisal. No template estimates are used.");
+    return Text;
+}
+
 inline FString ItemExaminationText(const FACEAppraisalInfo& Info,UACEDatSubsystem* Dat,bool IncludeValue=true,bool IncludeBurden=true,const FACEPlayerVitals* Viewer=nullptr)
 {
     FString Body;
@@ -597,6 +637,7 @@ inline FString ItemExaminationText(const FACEAppraisalInfo& Info,UACEDatSubsyste
     const bool HasTinkering=Info.IntProperties.Contains(171) || Info.IntProperties.Contains(105)
         || Info.StringProperties.Contains(39) || Info.StringProperties.Contains(40);
     AppendItemText(Body,ItemDetails(Info,Dat,Viewer),!HasTinkering);
+    AppendItemText(Body,ItemEnchantmentComparison(Info),true);
     // Appraisal_ShowDescription prefers LongDesc, falling back to ShortDesc.
     // The protocol Summary concatenates all strings in wire order, so it cannot
     // supply retail paragraph boundaries (and can repeat both descriptions).

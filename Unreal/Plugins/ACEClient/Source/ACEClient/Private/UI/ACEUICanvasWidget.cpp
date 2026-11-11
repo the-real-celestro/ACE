@@ -335,7 +335,7 @@ void UACEUICanvasWidget::PlaceWidgetAtElement(UWidget* Widget, const TSharedPtr<
 	const FIntPoint Origin = Element->GetScreenOrigin();
 	if (UACERetailTextBlock* Text = Cast<UACERetailTextBlock>(Widget))
 		Text->SetRetailElement(ResourceResolver, Element, FVector2D(LastScaleX, LastScaleY),
-			FMath::Max(1.f, Element->Width - Inset.Left - Inset.Right));
+			FMath::Max(1.f, Element->Width - Inset.Left - Inset.Right),true,IsGameplayCanvas());
 	if (UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(Widget->Slot))
 	{
 		CanvasSlot->SetAnchors(FAnchors(0.f, 0.f));
@@ -356,7 +356,7 @@ void UACEUICanvasWidget::SetOverlayOrder(UWidget* Widget,
 {
     if (!Widget) return;
     if (auto* Text = Cast<UACERetailTextBlock>(Widget); Text && !Text->GetRetailElement())
-        Text->SetRetailElement(ResourceResolver, nullptr, FVector2D(LastScaleX, LastScaleY), 0, false);
+        Text->SetRetailElement(ResourceResolver, nullptr, FVector2D(LastScaleX, LastScaleY), 0, false,IsGameplayCanvas());
     FOverlayOrder& Order = OverlayOrders.FindOrAdd(Widget);
     const auto Window = RetailWindow(OwnerElement);
     Order.Owner = OwnerElement;

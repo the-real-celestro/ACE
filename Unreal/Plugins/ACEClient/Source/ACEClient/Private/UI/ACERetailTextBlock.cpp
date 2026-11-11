@@ -1,4 +1,7 @@
 #include "UI/ACERetailTextBlock.h"
+#include "ACERuntimeOptions.h"
+#include "ACEHoverTooltipWidget.h"
+#include "Misc/Paths.h"
 #include "UI/ACEUIResourceResolver.h"
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACEUIFontStyles.h"
@@ -401,9 +404,52 @@ private:
 	mutable TArray<FACEBitmapTextLine> Lines;
 };
 
-void UACERetailTextBlock::SetRetailElement(UACEUIResourceResolver* InResources,
-	const TSharedPtr<FACEUIElement>& Element, FVector2D Scale, float InNativeWidth, bool bFlattenedOnCanvas)
+void UACERetailTextBlock::SetSmoothFont(float PointSize, bool bBold)
 {
+    bForcedSmoothFont=true;SmoothPointSize=PointSize;bSmoothBold=bBold;
+    RefreshUIFont();
+}
+
+void UACERetailTextBlock::RefreshUIFont()
+{
+    if(!bLayoutBound||IsTemplate())return;
+    // Chat keeps its own face/size controls. Retail tooltips keep authored styling.
+    bool CharacterSelection=false;
+    for(auto Element=RetailElement.Pin();Element;Element=Element->Parent.Pin())
+        if(Element->ElementName==TEXT("CharacterManagementField")){CharacterSelection=true;break;}
+    // Character selection uses authored bitmap baselines and button alignment.
+    // Game UI typography applies after entering the world, not to this screen.
+    const bool Eligible=!bSelectable&&!FontOverride&&!CharacterSelection&&!GetTypedOuter<UACEHoverTooltipWidget>();
+    const float Factor=Eligible?ACERuntimeOptions::UIFontScale():1.f;
+    const int32 Face=Eligible?FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("UIFontFace"))):0;
+    const float TextFactor=bLayoutIncludesGameUIScale?1.f:Factor;
+    BitmapScale=LayoutScale*TextFactor;NativeWidth=LayoutNativeWidth/TextFactor;
+    // Keep one scalable face across every game UI size; changing renderers at Large
+    // changes apparent glyph size as well as scale and creates a misleading jump.
+    bSmoothFont=bForcedSmoothFont||Eligible;
+    if(bSmoothFont)
+    {
+        const auto Element=RetailElement.Pin();
+        const float BodyPoints=Element?ACEUIFontStyles::ResolveForElement(Element,10).SlateSize:10.f;
+        const float NativeScale=LayoutScale.Y/(bLayoutIncludesGameUIScale?ACERuntimeOptions::UIFontScale():1.f);
+        const float Points=(bForcedSmoothFont?SmoothPointSize:BodyPoints)*NativeScale;
+        const int32 Size=FMath::Max(7,FMath::RoundToInt(Points*Factor));
+        auto Smooth=FCoreStyle::GetDefaultFontStyle(bSmoothBold?"Bold":"Regular",Size);
+        if(Face==0)
+            Smooth=FSlateFontInfo(FPaths::ProjectPluginsDir()/TEXT("ACEClient/Resources/Fonts")/
+                (bSmoothBold?TEXT("NotoSerif-Bold.ttf"):TEXT("NotoSerif-Regular.ttf")),Size);
+        else if(Face==2)Smooth=FSlateFontInfo(FPaths::EngineContentDir()/TEXT("Slate/Fonts/DroidSansMono.ttf"),Size);
+        if(Element&&Element->bTextOutline){Smooth.OutlineSettings.OutlineSize=1;Smooth.OutlineSettings.OutlineColor=FLinearColor::Black;}
+        if(GetFont()!=Smooth)SetFont(Smooth);
+        SetShadowOffset(FVector2D::ZeroVector);
+    }
+    InvalidateLayoutAndVolatility();
+}
+
+void UACERetailTextBlock::SetRetailElement(UACEUIResourceResolver* InResources,
+	const TSharedPtr<FACEUIElement>& Element, FVector2D Scale, float InNativeWidth, bool bFlattenedOnCanvas, bool bIncludesGameUIScale)
+{
+    bLayoutIncludesGameUIScale=bIncludesGameUIScale;
 	const FACEUIStateMedia* State = Element ? Element->States.Find(Element->PaintState) : nullptr;
 	uint32 FontId = State && State->FontId ? State->FontId : Element ? Element->FontId : 0;
 	if (!FontId) FontId = ACEUIFontStyles::ResolveForElement(Element, GetFont().Size).FontId;
@@ -432,6 +478,11 @@ void UACERetailTextBlock::SetRetailElement(UACEUIResourceResolver* InResources,
 	RetailElement = Element;
 	BitmapScale = Scale.ComponentMax(FVector2D(KINDA_SMALL_NUMBER, KINDA_SMALL_NUMBER));
 	NativeWidth = InNativeWidth;
+    LayoutScale=BitmapScale;LayoutNativeWidth=InNativeWidth;bLayoutBound=true;
+    RefreshUIFont();
+    for(auto Parent=Element;Parent;Parent=Parent->Parent.Pin())
+        if(Parent->ElementName==TEXT("RootGameplay_FloatyExamination_Field"))
+        {SetSmoothFont(10.f,Element&&Element->ElementName==TEXT("DisplayedNameText"));break;}
 	if (bChanged) InvalidateLayoutAndVolatility();
 }
 
@@ -445,11 +496,11 @@ TSharedRef<SWidget> UACERetailTextBlock::RebuildWidget()
 	if (!ForegroundAtlas)
 	{
 		if (auto* Canvas = GetTypedOuter<UACEUICanvasWidget>())
-			SetRetailElement(Canvas->GetResourceResolver(), RetailElement.Pin(), BitmapScale, NativeWidth, bApplyDatAncestorClip);
+			SetRetailElement(Canvas->GetResourceResolver(), RetailElement.Pin(), LayoutScale, LayoutNativeWidth, bApplyDatAncestorClip, bLayoutIncludesGameUIScale);
 		else if (const UWorld* World = GetWorld())
 			if (const UGameInstance* GI = World->GetGameInstance())
 				if (auto* Dat = GI->GetSubsystem<UACEDatSubsystem>())
-					SetRetailElement(Dat->GetUiResources(), RetailElement.Pin(), BitmapScale, NativeWidth, bApplyDatAncestorClip);
+					SetRetailElement(Dat->GetUiResources(), RetailElement.Pin(), LayoutScale, LayoutNativeWidth, bApplyDatAncestorClip, bLayoutIncludesGameUIScale);
 	}
 	MyTextBlock = SNew(SACERetailTextBlock, this);
 	return MyTextBlock.ToSharedRef();

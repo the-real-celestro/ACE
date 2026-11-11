@@ -36,6 +36,7 @@
 #include "UI/ACEVideoSettingsWidget.h"
 #include "Components/ComboBoxString.h"
 #include "Components/ScrollBox.h"
+#include "Components/Image.h"
 #include "Components/SizeBox.h"
 #include "Blueprint/WidgetTree.h"
 #include "UI/ACEUICanvasWidget.h"
@@ -499,8 +500,8 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
     const float VitalsBottom = Canvas->LayoutToViewport(FVector2D(VitalsPanel->GetScreenOrigin())
         + FVector2D(0, VitalsPanel->GetLayoutHeight())).Y;
     TestTrue(TEXT("Top-center vitals cannot hide the newest failure notices"), NoticeOrigin.Y >= VitalsBottom);
-    auto* NoticeFont = CastChecked<UACERetailTextBlock>(Binder->TransientInfoText)->GetBitmapFont();
-    TestTrue(TEXT("Notice text uses the native retail font atlas"), NoticeFont && NoticeFont->Id == 0x40000001u);
+    auto* NoticeText = CastChecked<UACERetailTextBlock>(Binder->TransientInfoText);
+    TestTrue(TEXT("Notice text follows scalable game UI typography"), !NoticeText->GetBitmapFont() && NoticeText->GetFont().Size >= 7);
     for (double& Time : Binder->TransientInfoTimes) Time -= 6.0;
     Binder->TickTransientInfo();
     for (const auto& Line : Binder->TransientInfoLines) TestFalse(TEXT("Expired notices leave the viewport"), Line->IsVisible());
@@ -1026,6 +1027,67 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
         TestEqual(TEXT("Defaults restore plugin scale independently"),ACERuntimeOptions::PluginTextScale(),1.f);
     }
 
+    auto* GameFace=Video?Cast<UComboBoxString>(Video->WidgetTree->FindWidget(TEXT("UIFontFace"))):nullptr;
+    auto* GameSize=Video?Cast<UComboBoxString>(Video->WidgetTree->FindWidget(TEXT("UIFontSize"))):nullptr;
+    if(TestNotNull(TEXT("Separate game UI font control"),GameFace)&&TestNotNull(TEXT("Separate game UI size control"),GameSize))
+    {
+        auto Element=MakeShared<FACEUIElement>();Element->FontId=0x40000000;
+        auto* Label=NewObject<UACERetailTextBlock>(Canvas);
+        Label->SetText(FText::FromString(TEXT("Skill and Examine text")));
+        Label->SetRetailElement(Canvas->GetResourceResolver(),Element,FVector2D(1,1),240,false);
+        GameFace->SetSelectedIndex(0);GameSize->SetSelectedIndex(0);Video->ApplyInterfaceOptions();
+        const float Tiny=Label->GetBitmapScale().Y;
+        TestNull(TEXT("Tiny classic UI uses the same scalable face as larger sizes"),Label->GetBitmapFont());
+        auto* SkillLabel=NewObject<UACERetailTextBlock>(Canvas);SkillLabel->SetRetailElement(Canvas->GetResourceResolver(),Element,FVector2D(1,1),240,false);SkillLabel->SetSmoothFont(10.f);
+        auto ExamineRoot=MakeShared<FACEUIElement>();ExamineRoot->ElementName=TEXT("RootGameplay_FloatyExamination_Field");
+        auto ExamineElement=MakeShared<FACEUIElement>();ExamineElement->FontId=0x40000000;ExamineElement->Parent=ExamineRoot;
+        auto* ExamineLabel=NewObject<UACERetailTextBlock>(Canvas);ExamineLabel->SetRetailElement(Canvas->GetResourceResolver(),ExamineElement,FVector2D(1,1),240,false);
+        auto CharacterRoot=MakeShared<FACEUIElement>();CharacterRoot->ElementName=TEXT("CharacterManagementField");
+        auto CharacterButton=MakeShared<FACEUIElement>();CharacterButton->FontId=0x40000000;CharacterButton->Parent=CharacterRoot;
+        auto* CharacterLabel=NewObject<UACERetailTextBlock>(Canvas);CharacterLabel->SetRetailElement(Canvas->GetResourceResolver(),CharacterButton,FVector2D(1,1),240,false);
+        int32 PreviousPointSize=0;
+        for(int32 Size=0;Size<=4;++Size){GameSize->SetSelectedIndex(Size);Video->ApplyInterfaceOptions();
+            TestNull(TEXT("Every classic UI size uses scalable glyphs"),Label->GetBitmapFont());
+            TestNotNull(TEXT("Character selection keeps authored bitmap baselines at every game font size"),CharacterLabel->GetBitmapFont());
+            TestEqual(TEXT("Game UI sizes cannot move character-selection labels"),CharacterLabel->GetBitmapScale(),FVector2D(1,1));
+            const int32 PointSize=Label->GetFont().Size;
+            if(PreviousPointSize>0)TestTrue(TEXT("Adjacent UI sizes increase gradually"),PointSize>=PreviousPointSize&&PointSize<=FMath::CeilToInt(PreviousPointSize*1.2f));
+            PreviousPointSize=PointSize;
+            TestEqual(TEXT("Skills and Examine share body typography at Medium, Large and Extra Large"),SkillLabel->GetFont(),ExamineLabel->GetFont());
+            TestTrue(TEXT("Stat row leaves room for the selected font size"),ACERuntimeOptions::StatRowHeight()>=22);
+            if(Size>2)TestNull(TEXT("Enlarged classic UI avoids bitmap stretching"),Label->GetBitmapFont());
+            Binder->ShowPanelPage(TEXT("SkillManagementPanel_Field"));Binder->SyncSkillPanelTab(TEXT("AttributePage"));
+            if(Size>=2)
+            {
+                Draw(Size==2?TEXT("GameUIFontMedium"):Size==3?TEXT("GameUIFontLarge"):TEXT("GameUIFontExtraLarge"));
+                const auto Scale=Manager->GetCanvasScale(FVector2D(1600,900));
+                TestTrue(TEXT("Panel geometry grows with the selected text size"),FMath::IsNearlyEqual(float(Scale.X),ACERuntimeOptions::UIFontScale()));
+                int32 X=0,Y=0;const FVector2D Point(400*Scale.X,200*Scale.Y);
+                TestTrue(TEXT("Scaled UI retains matching pointer coordinates"),Manager->ViewportToCanvas(Point,FVector2D(1600,900),X,Y)&&X==400&&Y==200);
+                if(Size==4)
+                {
+                    Binder->ShowPanelPage(TEXT("OptionsPanel_Field"));Binder->SyncOptionsPanelTab(TEXT("ConfigPage"));
+                    Draw(TEXT("GameUIFontExtraLargeControls"));
+                }
+            }
+        }
+        GameSize->SetSelectedIndex(4);Video->ApplyInterfaceOptions();
+        TestTrue(TEXT("Game text size changes existing non-chat labels"),Label->GetBitmapScale().Y>Tiny);
+        TestNull(TEXT("Large classic UI text uses scalable glyphs instead of enlarged bitmap glyphs"),Label->GetBitmapFont());
+        TestTrue(TEXT("Classic face comes from the bundled serif font"),IFileManager::Get().FileExists(*(FPaths::ProjectPluginsDir()/TEXT("ACEClient/Resources/Fonts/NotoSerif-Regular.ttf"))));
+        GameFace->SetSelectedIndex(1);Video->ApplyInterfaceOptions();
+        TestNull(TEXT("Sans serif uses smooth scalable text"),Label->GetBitmapFont());
+        const auto Sans=Label->GetFont();
+        GameFace->SetSelectedIndex(2);Video->ApplyInterfaceOptions();
+        TestTrue(TEXT("Monospace changes the game UI typeface"),Label->GetFont()!=Sans);
+        Label->SetSmoothFont(11,true);
+        const int32 LargeSmooth=Label->GetFont().Size;
+        GameSize->SetSelectedIndex(0);Video->ApplyInterfaceOptions();
+        TestTrue(TEXT("Smooth Examine headings also follow the UI size control"),Label->GetFont().Size<LargeSmooth);
+        TestEqual(TEXT("Game font settings do not change chat font choice"),ACERuntimeOptions::ChatFontId(),uint32(0x40000000));
+        Video->DefaultsVideo();Video->ApplyInterfaceOptions();
+    }
+
     // Retail separates skill-credit training from XP advancement, including the
     // authored footer and its hit targets (gmSkillUI::DisplaySelectionFooter_Untrained).
     {
@@ -1090,7 +1152,7 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
     Floaty->UserResizeH=360-(Floaty->AuthoredHeight>=0?Floaty->AuthoredHeight:Floaty->Height);
     UACEUIElementManager::ApplyFloatyResizeLayout(Floaty);
     Draw(TEXT("AttributesSmall"));
-    const int32 Page=FMath::Max(1,List->Height/18),MaxOffset=FMath::Max(0,9-Page);
+    const int32 Page=FMath::Max(1,List->Height/ACERuntimeOptions::StatRowHeight()),MaxOffset=FMath::Max(0,9-Page);
     TestTrue(TEXT("Small attribute panel needs scrolling"),MaxOffset>0);
     Binder->ScrollStatList(-1); Draw(TEXT("AttributesScrolled"));
     TestTrue(TEXT("Wheel changes attribute offset"),Binder->AttributeScrollOffset>0);
@@ -1246,6 +1308,26 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
         TestTrue(TEXT("New creature appraisal switches desktop panel type"),Binder->LastAppraisal.bIsCreature);
         TestEqual(TEXT("VR accepts new target appraisal"),Menu->InspectionAppraisal.ObjectGuid,B.Guid);
         Draw(TEXT("InspectionFollowsTarget"));
+        // Exercise actual reference rows and wrapping in the native panel,
+        // then restore the ordinary target used by selection-lifecycle checks.
+        {
+            auto Root=Manager->FindElementByName(TEXT("RootGameplay_FloatyExamination_Field"));
+            TGuardValue<int32> X(Root->X,550),Y(Root->Y,40),Width(Root->Width,440),Height(Root->Height,760);
+            FACEWorldObject Monster=B;Monster.Name=TEXT("Hoary Mattekar");Monster.WeenieClassId=5890;
+            Monster.ObjectDescriptionFlags|=ACEObjectDescFlag::Attackable;
+            Session.WorldObjects[B.Guid]=Monster;
+            FACEAppraisalInfo Reference=Second;Reference.Name=Monster.Name;Reference.Level=100;
+            Reference.Strength=Reference.Endurance=Reference.Coordination=Reference.Quickness=Reference.Focus=Reference.Self=100;
+            Reference.Health=Reference.MaxHealth=Reference.Stamina=Reference.MaxStamina=Reference.Mana=Reference.MaxMana=250;
+            Client->OnAppraisal.Broadcast(Reference);
+            Draw(TEXT("MonsterKnowledge"));
+            TestTrue(TEXT("Monster catalog drop rows reach the desktop panel"),Binder->ExamMiscIcons.ContainsByPredicate([](const auto& T)
+                {return T&&T->GetToolTipText().ToString().Contains(TEXT("Hoary Mattekar Hide — baseline 3.00%"));}));
+            TestTrue(TEXT("Native monster attack and weakness icons are visible"),Binder->ExamMiscIcons.ContainsByPredicate([](const auto& Icon){return Icon&&Icon->GetVisibility()==ESlateVisibility::Visible;}));
+            Binder->ExamCreatureDetailsScroll->ScrollToEnd();Draw(TEXT("MonsterKnowledgeDrops"));
+            Session.WorldObjects[B.Guid]=B;Client->OnAppraisal.Broadcast(Second);
+        }
+        Binder->RefreshExaminationOverlay();
         SelectForInspection(FACESelectedObject{});
         TestFalse(TEXT("Clearing selection closes desktop inspection"),Manager->FindElementByName(TEXT("RootGameplay_FloatyExamination_Field"))->bVisible);
         TestFalse(TEXT("Clearing selection closes VR inspection"),Menu->IsInspectionOpen());

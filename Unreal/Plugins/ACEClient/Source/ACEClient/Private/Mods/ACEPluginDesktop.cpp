@@ -397,7 +397,7 @@ FVector2D SACEPluginDesktop::DisplaySize(const FWindow& W) const
             Size.Y=FMath::Max(Size.Y,P->PanelSize.Y+ACELedger::ChromeHeaderHeight());
     if(W.Id==TEXT("ucmmicro"))Size.X=FMath::Max(160.,Size.X);
     if(W.Id==TEXT("ucmmicro")&&Size.X<312&&Host.IsValid()&&Host->LedgerOption(TEXT("ucmmicro"),TEXT("condensed")))
-        Size.Y=FMath::Max(220.,Size.Y*.5);
+        Size.Y=FMath::Max(250.,Size.Y*.5);
     if(W.Id==TEXT("actiondeck")&&Host.IsValid())
     {
         const auto* Deck=Host->GetGameInstance()->GetSubsystem<UACEActionDeckSubsystem>();
@@ -496,7 +496,7 @@ void SACEPluginDesktop::Resize(const FString& Id,FVector2D Delta,bool Save)
          Layout(*W);if(Save)Host->SavePluginWindowPosition(SizeKey(Id),W->Size);return;
      }
      if(Id==TEXT("ucmmicro")&&W->Size.X<312&&Host.IsValid()&&Host->LedgerOption(Id,TEXT("condensed"))&&!FMath::IsNearlyZero(Delta.Y))
-         Delta.Y=2*(FMath::Max(220.,W->Size.Y*.5)+Delta.Y)-W->Size.Y;
+         Delta.Y=2*(FMath::Max(250.,W->Size.Y*.5)+Delta.Y)-W->Size.Y;
      if(Id==TEXT("thirdeye"))W->Size=DisplaySize(*W);
      W->Size+=Delta;const double MinWidth=Id==TEXT("actiondeck")?360.:Id==TEXT("itemtools")?380.:Id==TEXT("ucmmicro")?160.:96.,MinHeight=64.;W->Size.X=FMath::Clamp(W->Size.X,MinWidth,FMath::Max(MinWidth,ViewSize.X));W->Size.Y=FMath::Clamp(W->Size.Y,MinHeight,FMath::Max(MinHeight,ViewSize.Y));Layout(*W);
      if(Save&&Host.IsValid())Host->SavePluginWindowPosition(PanelSizeKey(Id),W->Size);}

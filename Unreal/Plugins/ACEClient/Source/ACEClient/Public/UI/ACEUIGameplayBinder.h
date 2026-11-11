@@ -107,6 +107,7 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
     friend class FACERetailCursorTest;
 
 public:
+    void RefreshUIFontLayout();
     /** Shared attack mark used by desktop controls, VR and plugin commands. */
     void SetRequestedAttackPower(float Power) { RequestedAttackPower=FMath::Clamp(Power,0.f,1.f); }
     void ShowPluginAttack(int32 Target, uint32 Height, float Power);
@@ -627,6 +628,7 @@ private:
 	UPROPERTY() TObjectPtr<UCanvasPanel> ExamCreatureDetailsCanvas;
 	UPROPERTY() TArray<TObjectPtr<UTextBlock>> ExamMiscLabels;
 	UPROPERTY() TArray<TObjectPtr<UTextBlock>> ExamMiscValues;
+    UPROPERTY() TArray<TObjectPtr<UImage>> ExamMiscIcons;
 	TArray<TSharedPtr<FACEUIElement>> ExamMiscRows;
 	int32 ExamCreatureScrolledGuid = 0;
 	TArray<TSharedPtr<FACEUIElement>> ExamAttributeRows;
@@ -1681,6 +1683,7 @@ private:
     void RefreshExaminationWikiLink(bool bShow);
     UPROPERTY(Transient) TObjectPtr<UNativeWidgetHost> ExamWikiLink;
     FString ExamWikiName;
+    bool bExamWikiIdentified=false;
     TSharedPtr<FACEUIElement> ExamWikiRegion;
 	void RefreshInventoryOverlays();
 	uint64 HashInventoryOverlayState() const;

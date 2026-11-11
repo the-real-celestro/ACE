@@ -19,6 +19,8 @@ inline constexpr FOption Values[] = {
  {TEXT("ChatFontFace"),TEXT("Chat Font"),2,0,4},
  {TEXT("ChatFontSize"),TEXT("Chat Font Size"),1,0,4},
  {TEXT("PluginTextScale"),TEXT("Lua Plugin Text Scale"),1,.75f,2},
+ {TEXT("UIFontFace"),TEXT("Game UI Font"),0,0,2},
+ {TEXT("UIFontSize"),TEXT("Game UI Text Size"),2,0,4},
  {TEXT("CursorScale"),TEXT("Cursor size"),1,.5f,3},
  {TEXT("ObjectGlow"),TEXT("Custom object highlighting"),1,0,1},
  {TEXT("ConstrainUIWindows"),TEXT("Keep UI windows on screen"),1,0,1},
@@ -37,6 +39,8 @@ ACECLIENT_API float SoundGain(bool bAmbient);
 ACECLIENT_API uint32 ChatFontId();
 /** Shared by plugin labels and editable controls; at most one config read per frame. */
 ACECLIENT_API float PluginTextScale();
+ACECLIENT_API float UIFontScale();
+ACECLIENT_API int32 StatRowHeight();
 ACECLIENT_API float DesktopUIScale(FIntPoint ViewportSize, bool bVR);
 ACECLIENT_API void ApplyDesktopUIScale(FIntPoint ViewportSize, bool bVR);
 }

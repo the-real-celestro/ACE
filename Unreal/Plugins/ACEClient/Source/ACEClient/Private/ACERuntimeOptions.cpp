@@ -1,4 +1,6 @@
 #include "ACERuntimeOptions.h"
+#include "UI/ACERetailTextBlock.h"
+#include "UI/ACEUIGameplayBinder.h"
 #include "Misc/ConfigCacheIni.h"
 #include "HAL/IConsoleManager.h"
 #include "Framework/Application/SlateApplication.h"
@@ -80,6 +82,8 @@ void Apply()
  if (auto* C=IConsoleManager::Get().FindConsoleVariable(TEXT("ace.Display.Brightness"))) C->Set(Get(TEXT("ScreenBrightness")),ECVF_SetByGameSetting);
  if (auto* C=IConsoleManager::Get().FindConsoleVariable(TEXT("ace.Display.Contrast"))) C->Set(Get(TEXT("Contrast")),ECVF_SetByGameSetting);
  if (auto* C=IConsoleManager::Get().FindConsoleVariable(TEXT("r.MaxAnisotropy"))) C->Set(FMath::RoundToInt(Get(TEXT("Anisotropy"))),ECVF_SetByGameSetting);
+ for(TObjectIterator<UACERetailTextBlock> It;It;++It)if(IsValid(*It))It->RefreshUIFont();
+ for(TObjectIterator<UACEUIGameplayBinder> It;It;++It)if(IsValid(*It)&&!It->IsTemplate())It->RefreshUIFontLayout();
  if (GConfig) GConfig->Flush(false,GGameUserSettingsIni);
 }
 float SoundGain(bool bAmbient)
@@ -95,6 +99,10 @@ float SoundGain(bool bAmbient)
  }
  return bAmbient?AmbientGain:EffectsGain;
 }
+float UIFontScale()
+{static constexpr float Scales[]={.75f,.875f,1.f,1.125f,1.25f};return Scales[FMath::Clamp(FMath::RoundToInt(Get(TEXT("UIFontSize"))),0,4)];}
+int32 StatRowHeight()
+{return 22;}
 uint32 ChatFontId()
 {
  // gmClient exposes these five faces/sizes; ChatInterface changes existing

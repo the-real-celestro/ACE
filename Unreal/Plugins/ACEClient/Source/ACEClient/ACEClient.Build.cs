@@ -58,6 +58,8 @@ public class ACEClient : ModuleRules
 			PrivateDependencyModuleNames.Add("UnrealEd");
 		}
 		RuntimeDependencies.Add("$(PluginDir)/Docs/UI/Resolved/*.json", StagedFileType.NonUFS);
+        RuntimeDependencies.Add("$(EngineDir)/Content/Slate/Fonts/DroidSansMono.ttf", StagedFileType.UFS);
+        RuntimeDependencies.Add("$(PluginDir)/Resources/Fonts/...", StagedFileType.UFS);
         RuntimeDependencies.Add("$(PluginDir)/ClientMods/...", StagedFileType.UFS);
         RuntimeDependencies.Add("$(PluginDir)/Docs/Plugins/...", StagedFileType.NonUFS);
 	}

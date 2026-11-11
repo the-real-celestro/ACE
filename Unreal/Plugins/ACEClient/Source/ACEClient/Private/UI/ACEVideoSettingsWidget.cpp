@@ -45,12 +45,12 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  auto Label=[&](const TCHAR* Text, int32 Size=8)
  {
   auto* L=WidgetTree->ConstructWidget<UACERetailTextBlock>();
-  L->SetText(FText::FromString(Text)); L->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"),Size));
+  L->SetText(FText::FromString(Text)); L->SetAutoWrapText(true); L->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"),Size));
   L->SetColorAndOpacity(FLinearColor::White); return L;
  };
  auto Fixed=[&](UWidget* Widget,float W,float H)
  {
-  auto* S=WidgetTree->ConstructWidget<USizeBox>(); S->SetWidthOverride(W); S->SetHeightOverride(H); S->SetContent(Widget); return S;
+  auto* S=WidgetTree->ConstructWidget<USizeBox>(); S->SetWidthOverride(W*ACERuntimeOptions::UIFontScale()); S->SetMinDesiredHeight(H*ACERuntimeOptions::UIFontScale()); FixedControlSizes.Add(S,FVector2D(W,H)); S->SetContent(Widget); return S;
  };
  auto Section=[&](const TCHAR* Name)
  {
@@ -62,8 +62,8 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  {
   auto* R=WidgetTree->ConstructWidget<UHorizontalBox>();
   auto* Caption=Label(Name); Caption->SetJustification(ETextJustify::Right);
-  R->AddChildToHorizontalBox(Fixed(Caption,130,14))->SetVerticalAlignment(VAlign_Center);
-  R->AddChildToHorizontalBox(Fixed(Widget,120,18))->SetVerticalAlignment(VAlign_Center);
+  R->AddChildToHorizontalBox(Fixed(Caption,158,18))->SetVerticalAlignment(VAlign_Center);
+  R->AddChildToHorizontalBox(Fixed(Widget,104,18))->SetVerticalAlignment(VAlign_Center);
   Box->AddChild(Fixed(R,272,Height));
  };
  auto Combo=[&](const TCHAR* Name)
@@ -219,6 +219,10 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  PluginTextScale=Combo(TEXT("Lua Plugin Text Scale")); PluginTextScale->Rename(TEXT("PluginTextScale"));
  for(int32 Percent=75;Percent<=200;Percent+=25)PluginTextScale->AddOption(FString::Printf(TEXT("%d%%"),Percent));
  UACEHoverTooltipWidget::SetWidgetTooltip(PluginTextScale,FText::FromString(TEXT("Scales plugin labels, buttons and editable text independently of chat. Applies to bundled and third-party Lua plugins, including open windows. Saved with Apply.")));
+ UIFontFace=Combo(TEXT("Game UI Font"));UIFontFace->Rename(TEXT("UIFontFace"));
+ for(const TCHAR* Name:{TEXT("Classic serif"),TEXT("Sans serif"),TEXT("Monospace")})UIFontFace->AddOption(Name);
+ UIFontSize=Combo(TEXT("Game UI Text Size"));UIFontSize->Rename(TEXT("UIFontSize"));
+ for(const TCHAR* Name:{TEXT("Tiny"),TEXT("Small"),TEXT("Medium"),TEXT("Large"),TEXT("Extra Large")})UIFontSize->AddOption(Name);
  Section(TEXT("Screenshots"));
  Box->AddChild(Fixed(Label(TEXT("Save screenshots to:")),272,18));
  ScreenshotDirectory=WidgetTree->ConstructWidget<UEditableTextBox>(UEditableTextBox::StaticClass(),TEXT("ScreenshotDirectory"));
@@ -239,6 +243,15 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
 void UACEVideoSettingsWidget::NativeTick(const FGeometry& Geometry, float DeltaTime)
 {
  Super::NativeTick(Geometry,DeltaTime);
+ const float FontScale=ACERuntimeOptions::UIFontScale();
+ if(!FMath::IsNearlyEqual(LastFontLayoutScale,FontScale))
+ {
+  LastFontLayoutScale=FontScale;
+  for(const auto& Entry:FixedControlSizes)if(auto* Size=Entry.Key.Get())
+  {Size->SetWidthOverride(Entry.Value.X*FontScale);Size->SetMinDesiredHeight(Entry.Value.Y*FontScale);}
+  InvalidateLayoutAndVolatility();
+ }
+
  auto* S=UGameUserSettings::GetGameUserSettings();
  if (!S || !Resolution || !WindowMode) return;
  // Alt+Enter changes only the display controls; preserve unapplied quality edits.
@@ -305,6 +318,8 @@ void UACEVideoSettingsWidget::ResetVideo()
  ChatFontFace->SetSelectedIndex(FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("ChatFontFace"))));
  ChatFontSize->SetSelectedIndex(FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("ChatFontSize"))));
  PluginTextScale->SetSelectedIndex(FMath::RoundToInt((ACERuntimeOptions::Get(TEXT("PluginTextScale"))-.75f)*4.f));
+ UIFontFace->SetSelectedIndex(FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("UIFontFace"))));
+ UIFontSize->SetSelectedIndex(FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("UIFontSize"))));
  ScreenshotDirectory->SetText(FText::FromString(ACEScreenshotSettings::GetDirectory()));
 }
 void UACEVideoSettingsWidget::RefreshFrameRateOption()
@@ -368,6 +383,8 @@ bool UACEVideoSettingsWidget::HasPendingChanges() const
   || ChatFontFace->GetSelectedIndex()!=FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("ChatFontFace")))
   || ChatFontSize->GetSelectedIndex()!=FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("ChatFontSize")))
   || PluginTextScale->GetSelectedIndex()!=FMath::RoundToInt((ACERuntimeOptions::Get(TEXT("PluginTextScale"))-.75f)*4.f)
+  || UIFontFace->GetSelectedIndex()!=FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("UIFontFace")))
+  || UIFontSize->GetSelectedIndex()!=FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("UIFontSize")))
   || ScreenshotDirectory->GetText().ToString()!=ACEScreenshotSettings::GetDirectory();
 }
 
@@ -435,6 +452,8 @@ void UACEVideoSettingsWidget::ApplyInterfaceOptions()
  if(ChatFontFace->GetSelectedIndex()>=0) ACERuntimeOptions::Set(TEXT("ChatFontFace"),ChatFontFace->GetSelectedIndex());
  if(ChatFontSize->GetSelectedIndex()>=0) ACERuntimeOptions::Set(TEXT("ChatFontSize"),ChatFontSize->GetSelectedIndex());
  if(PluginTextScale->GetSelectedIndex()>=0) ACERuntimeOptions::Set(TEXT("PluginTextScale"),.75f+PluginTextScale->GetSelectedIndex()*.25f);
+ if(UIFontFace->GetSelectedIndex()>=0)ACERuntimeOptions::Set(TEXT("UIFontFace"),UIFontFace->GetSelectedIndex());
+ if(UIFontSize->GetSelectedIndex()>=0)ACERuntimeOptions::Set(TEXT("UIFontSize"),UIFontSize->GetSelectedIndex());
  ACERuntimeOptions::Apply();
 }
 
@@ -514,6 +533,7 @@ void UACEVideoSettingsWidget::DefaultsVideo()
  ShowFrameRate->SetIsChecked(false);
  ChatFontFace->SetSelectedIndex(2); ChatFontSize->SetSelectedIndex(1);
  PluginTextScale->SetSelectedIndex(1);
+ UIFontFace->SetSelectedIndex(0);UIFontSize->SetSelectedIndex(2);
  ScreenshotDirectory->SetText(FText::FromString(ACEScreenshotSettings::DefaultDirectory()));
 }
 

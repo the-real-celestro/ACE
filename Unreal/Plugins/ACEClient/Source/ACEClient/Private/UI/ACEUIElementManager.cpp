@@ -1,4 +1,5 @@
 #include "UI/ACEUIElementManager.h"
+#include "ACERuntimeOptions.h"
 #include "ACEDesktopDisplay.h"
 #include "UI/ACEUIResourceResolver.h"
 #include "ACERuntimeOptions.h"
@@ -227,7 +228,10 @@ FVector2D UACEUIElementManager::GetCanvasScale(FVector2D ViewportSize) const
 			return FVector2D(S, S);
 		}
 	}
-	return FVector2D(1.f, 1.f);
+    for(const auto& Root:Roots)
+        if(Root&&Root->ElementName.Contains(TEXT("RootGameplay")))
+            return FVector2D(ACERuntimeOptions::UIFontScale());
+    return FVector2D(1.f, 1.f);
 }
 
 namespace
@@ -360,11 +364,12 @@ int32 UACEUIElementManager::CharacterSelectColumnShift(const FString& ElementNam
 
 void UACEUIElementManager::ApplyEdgeAnchoredLayout(int32 ViewportWidth, int32 ViewportHeight)
 {
-	const int32 Vw = FMath::Max(ACEUI::ReferenceWidth, ViewportWidth);
-	const int32 Vh = FMath::Max(ACEUI::ReferenceHeight, ViewportHeight);
+
 	const FVector2D CharScale = GetCanvasScale(FVector2D(
 		static_cast<float>(ViewportWidth), static_cast<float>(ViewportHeight)));
 	const float CharS = FMath::Max(KINDA_SMALL_NUMBER, CharScale.X);
+    const int32 Vw=FMath::Max(ACEUI::ReferenceWidth,FMath::FloorToInt(ViewportWidth/CharS));
+    const int32 Vh=FMath::Max(ACEUI::ReferenceHeight,FMath::FloorToInt(ViewportHeight/CharS));
 
 
 	for (const TSharedPtr<FACEUIElement>& Root : Roots)
