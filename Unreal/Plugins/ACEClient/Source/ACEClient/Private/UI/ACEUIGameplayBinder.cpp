@@ -12077,7 +12077,7 @@ void UACEUIGameplayBinder::SetItemSlotBackground(UBorder* Border, const FACEWorl
     UTexture2D* Texture = Canvas->GetResourceResolver()->ResolveItemBackground(Item->ItemType, Item->IconUnderlayId);
     FLinearColor Tint=FLinearColor::White;
     if(Client)if(auto* Loot=Client->GetGameInstance()->GetSubsystem<UACELootQualitySubsystem>())
-        if(Loot->Review(*Item).bCannotWield)Tint=FLinearColor(.52f,.13f,.48f,1.f);
+        if(Loot->Review(*Item).bCannotWield&&!ACELootPresentation::PreserveBackground(*Item))Tint=FLinearColor(.52f,.13f,.48f,1.f);
     Border->SetBrushColor(Tint);
     if (Border->Background.GetResourceObject() == Texture && Texture) return;
     FSlateBrush Brush;
@@ -12105,7 +12105,7 @@ void UACEUIGameplayBinder::SetItemSlotForeground(UBorder* Border, const FACEWorl
         {
             auto* Mark=Cast<UACELootIconOverlay>(Border->GetContent());
             if(!Mark){Mark=NewObject<UACELootIconOverlay>(Border);Mark->SetVisibility(ESlateVisibility::HitTestInvisible);Border->SetContent(Mark);Border->SetPadding(FMargin(0));}
-            Mark->SetReview(Review,Texture);
+            Mark->SetReview(Review,Texture,ACELootPresentation::PreserveBackground(*Item));
         }
         else Border->ClearChildren();
     }

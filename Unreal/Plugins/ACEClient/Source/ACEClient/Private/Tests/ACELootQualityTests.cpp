@@ -4,12 +4,18 @@
 #include "ACELootQuality.h"
 #include "ACELootQualitySubsystem.h"
 #include "ACEClientSubsystem.h"
+#include "ACESession.h"
 #include "ACEDatSubsystem.h"
 #include "Engine/GameInstance.h"
 #include "ACETestDatDirectory.h"
 #include "UI/ACELootPresentation.h"
 #include "UI/ACEUIResourceResolver.h"
 #include "ACEHoverTooltipWidget.h"
+#include "UI/ACEUICanvasWidget.h"
+#include "UI/ACEUIGameplayBinder.h"
+#include "Widgets/IToolTip.h"
+#include "Widgets/Layout/SBox.h"
+#include "Widgets/Text/STextBlock.h"
 #include "Components/Border.h"
 #include "Slate/WidgetRenderer.h"
 #include "Engine/TextureRenderTarget2D.h"
@@ -64,6 +70,13 @@ bool FACELootQualityTest::RunTest(const FString&)
         auto* Resources=NewObject<UACEUIResourceResolver>(GI);Resources->Initialize(Dat);
         auto* Owner=NewObject<UBorder>(GI);
         ACELootPresentation::Tooltip(Owner,Item.Name,Item,R,Resources);
+        auto SlateOwner=Owner->TakeWidget();
+        const auto InitialTooltip=SlateOwner->GetToolTip();
+        const auto InitialContent=InitialTooltip->AsWidget();
+        for(int32 Refresh=0;Refresh<100;++Refresh)
+            ACELootPresentation::Tooltip(Owner,Item.Name,Item,R,Resources);
+        TestTrue(TEXT("Stationary hover retains Slate popup identity across 100 inventory refreshes"),SlateOwner->GetToolTip()==InitialTooltip);
+        TestTrue(TEXT("Stationary hover retains content root"),InitialTooltip->AsWidget()==InitialContent);
         auto Widget=CastChecked<UACEHoverTooltipWidget>(Owner->GetToolTip())->TakeWidget();Widget->SlatePrepass();
         const FIntPoint Size(FMath::CeilToInt(Widget->GetDesiredSize().X),FMath::CeilToInt(Widget->GetDesiredSize().Y));
         TestTrue(TEXT("Hover remains readable in a desktop viewport"),Size.X<=360&&Size.Y<=800);
@@ -75,9 +88,15 @@ bool FACELootQualityTest::RunTest(const FString&)
         FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/TEXT("LootQuality-hover.png")));Target->ReleaseResource();
         A.SpellBookEntries={6089,6091,6055,6063};const auto Four=Review(&Original);A.SpellBookEntries={6089};
         ACELootPresentation::Tooltip(Owner,Item.Name,Item,Four,Resources);
+        TestTrue(TEXT("New appraisal updates an open tooltip without closing it"),SlateOwner->GetToolTip()==InitialTooltip);
+        TestFalse(TEXT("Loot popup cannot steal mouse hover hit tests"),Owner->GetToolTip()->GetVisibility()==ESlateVisibility::Visible);
         auto FourWidget=CastChecked<UACEHoverTooltipWidget>(Owner->GetToolTip())->TakeWidget();FourWidget->SlatePrepass();
         AddInfo(FString::Printf(TEXT("Four-cantrip hover size: %.0f x %.0f"),FourWidget->GetDesiredSize().X,FourWidget->GetDesiredSize().Y));
         TestTrue(TEXT("Four-cantrip hover fits the standard 720-pixel viewport"),FourWidget->GetDesiredSize().Y<=720);
+        UACEHoverTooltipWidget::SetWidgetContentTooltip(Owner,FText::FromString(TEXT("Renamed item")),SNew(STextBlock).Text(FText::FromString(TEXT("Changed"))));
+        TestTrue(TEXT("Renaming an item retains its active popup"),SlateOwner->GetToolTip()==InitialTooltip);
+        UACEHoverTooltipWidget::SetWidgetTooltip(Owner,FText::FromString(TEXT("Ordinary item")));
+        TestTrue(TEXT("Reused equipment slot can switch to ordinary tooltip"),SlateOwner->GetToolTip()!=InitialTooltip);
     }
     TestFalse(TEXT("Tinker count alone cannot reconstruct an original"),Review().bRated);
     A.IntProperties[171]=0;A.Damage=65;A.DamageVariance=.47;A.IntProperties.Add(109,1000);R=Review();
@@ -110,6 +129,42 @@ bool FACELootQualityTest::RunTest(const FString&)
     TestTrue(TEXT("Unknown original armor can still disclose spell-package quality"),R.bRated&&R.Class.Contains(TEXT("spell package")));
     TestTrue(TEXT("Losing original armor evidence cannot increase its quality score"),R.Points<=KnownArmorScore);
     TestFalse(TEXT("An original armor level is not fabricated after tinkering"),R.bOriginalKnown);
+    return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACELootIconPreservationTest,"ACE.LootQuality.ImbuedBackground",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACELootIconPreservationTest::RunTest(const FString&)
+{
+    auto* GI=NewObject<UGameInstance>();GI->Init();ON_SCOPE_EXIT{GI->Shutdown();};
+    auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
+    if(!TestTrue(TEXT("Retail DAT opens"),Dat->LoadDatDirectory(ACETestDatDirectory())))return false;
+    auto* Resources=NewObject<UACEUIResourceResolver>(GI);Resources->Initialize(Dat);
+    auto* Canvas=NewObject<UACEUICanvasWidget>(GI);Canvas->Initialize();Canvas->SetResourceResolver(Resources);
+    auto* Binder=NewObject<UACEUIGameplayBinder>(GI);Binder->Client=GI->GetSubsystem<UACEClientSubsystem>();Binder->Canvas=Canvas;
+    auto* Loot=GI->GetSubsystem<UACELootQualitySubsystem>();
+    FACEWorldObject Item;Item.Guid=101;Item.WeenieClassId=3884;Item.ItemType=ACEItemType::MeleeWeapon;Item.Name=TEXT("Future Heavy Sword");
+    FACEAppraisalInfo A;A.ObjectGuid=101;A.bSuccess=true;A.bHasWeaponProfile=true;A.WeaponSkill=44;A.Damage=65;A.DamageVariance=.47;A.WeaponOffense=1.08;A.FloatProperties.Add(29,1.08);
+    A.IntProperties={{158,2},{159,44},{160,400},{171,0}};Loot->Review(Item);Loot->ObserveAppraisal(A);
+    if(!TestTrue(TEXT("Fixture requires a skill this character lacks"),Loot->Review(Item).bCannotWield))return false;
+    auto* Border=NewObject<UBorder>(GI);
+    Binder->SetItemSlotBackground(Border,&Item);
+    TestFalse(TEXT("Ordinary unusable items keep the distinct background tint"),Border->GetBrushColor().Equals(FLinearColor::White));
+    for(uint32 Effect:{0x20u,0x40u,0x80u,0x100u,0x200u,0x400u,0x800u,0x1000u})
+    {
+        Item.UiEffects=Effect;Binder->SetItemSlotBackground(Border,&Item);
+        TestTrue(TEXT("Every imbue palette retains its original background color"),Border->GetBrushColor().Equals(FLinearColor::White));
+        TestTrue(TEXT("Imbued background uses the original DAT texture"),Border->Background.GetResourceObject()==Resources->ResolveItemBackground(Item.ItemType,Item.IconUnderlayId));
+    }
+    Item.UiEffects=0;
+    // RecipeManager.IconUnderlay: cold/electric/acid/armor rend, crippling,
+    // critical strike, fire/bludgeon/pierce/slash rend.
+    for(uint32 Underlay=0x06003353;Underlay<=0x0600335c;++Underlay)
+    {
+        Item.IconUnderlayId=Underlay;Binder->SetItemSlotBackground(Border,&Item);
+        TestTrue(TEXT("Every authored imbue underlay is preserved without recoloring"),Border->GetBrushColor().Equals(FLinearColor::White));
+        TestTrue(TEXT("Imbue underlay remains composed from its original DAT texture"),Border->Background.GetResourceObject()==Resources->ResolveItemBackground(Item.ItemType,Underlay));
+    }
     return !HasAnyErrors();
 }
 

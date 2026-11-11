@@ -1,6 +1,8 @@
 #include "ACEVTRegex.h"
 #include "Containers/StringConv.h"
 #include "Containers/LruCache.h"
+#include "HAL/CriticalSection.h"
+#include "Misc/ScopeLock.h"
 #if UE_ENABLE_ICU
 THIRD_PARTY_INCLUDES_START
 #include <unicode/uregex.h>
@@ -68,12 +70,21 @@ struct FCompiledPattern
     uint64 Used = 0;
     ~FCompiledPattern() { if (Regex) uregex_close(Regex); }
 };
+struct FRegexRuntime
+{
+    FCriticalSection Mutex;
+    TMap<FString,TSharedPtr<FCompiledPattern>> Cache;
+    uint64 Clock=0;
+    bool Stopped=false;
+};
+static FRegexRuntime& Runtime() { static FRegexRuntime State;return State; }
 static URegularExpression* CachedClone(const FString& Pattern,FString& Error,FString* Normalized=nullptr)
 {
     // Cache text-free templates. Every invocation gets its own matcher, so ICU
     // never retains a pointer to a previous call's temporary UTF-16 input.
-    static thread_local TMap<FString,TSharedPtr<FCompiledPattern>> Cache;
-    static thread_local uint64 Clock=0;
+    // The caller holds Runtime.Mutex through cloning, matching and releasing
+    // its local matcher. No ICU object can outlive the pre-exit drain.
+    auto& Cache=Runtime().Cache;auto& Clock=Runtime().Clock;
     auto Entry=Cache.FindRef(Pattern);
     if(!Entry)
     {
@@ -97,11 +108,27 @@ static URegularExpression* CachedClone(const FString& Pattern,FString& Error,FSt
     return Regex;
 }
 #endif
+void Initialize()
+{
+#if UE_ENABLE_ICU
+    auto& State=Runtime();FScopeLock Lock(&State.Mutex);State.Stopped=false;
+#endif
+}
+void Shutdown()
+{
+#if UE_ENABLE_ICU
+    auto& State=Runtime();FScopeLock Lock(&State.Mutex);
+    if(!State.Stopped)UE_LOG(LogTemp,Display,TEXT("ACE regex shutdown: releasing %d cached ICU patterns before text-library teardown"),State.Cache.Num());
+    State.Stopped=true;State.Cache.Empty();State.Clock=0;
+#endif
+}
 bool Test(const FString& Pattern,const FString& Text,FString& Error)
 {
     Error.Empty();
     if(Text.Len()>4096||Pattern.Len()>8192){Error=TEXT("Regex input exceeds limit");return false;}
 #if UE_ENABLE_ICU
+    auto& State=Runtime();FScopeLock Lock(&State.Mutex);
+    if(State.Stopped){Error=TEXT("Regex service is shutting down");return false;}
     static thread_local TMap<FString,bool> Results;
     const FString Key=FString::FromInt(Pattern.Len())+TEXT(":")+Pattern+Text;
     if(const bool* Found=Results.Find(Key))return *Found;
@@ -121,6 +148,8 @@ bool Validate(const FString& Pattern,FString& Error)
 {
     Error.Empty();
 #if UE_ENABLE_ICU
+    auto& State=Runtime();FScopeLock Lock(&State.Mutex);
+    if(State.Stopped){Error=TEXT("Regex service is shutting down");return false;}
     if(const auto* Cached=ValidationCache.FindAndTouch(Pattern))
     {Error=*Cached;return Error.IsEmpty();}
 #if WITH_DEV_AUTOMATION_TESTS
@@ -139,6 +168,14 @@ bool Validate(const FString& Pattern,FString& Error)
 #endif
 }
 #if WITH_DEV_AUTOMATION_TESTS
+int32 CompiledCacheEntriesForTests()
+{
+#if UE_ENABLE_ICU
+    auto& State=Runtime();FScopeLock Lock(&State.Mutex);return State.Cache.Num();
+#else
+    return 0;
+#endif
+}
 uint64 ValidationCompilationsForTests()
 {
 #if UE_ENABLE_ICU
@@ -160,6 +197,8 @@ bool Match(const FString& Pattern,const FString& Text,TMap<FString,FString>& Cap
 {
     Captures.Empty();Error.Empty();if(Text.Len()>4096){Error=TEXT("Regex input exceeds 4096 characters");return false;}
 #if UE_ENABLE_ICU
+    auto& State=Runtime();FScopeLock Lock(&State.Mutex);
+    if(State.Stopped){Error=TEXT("Regex service is shutting down");return false;}
     FString Normalized;auto* Regex=CachedClone(Pattern,Error,&Normalized);if(!Regex)return false;
     const auto Utf16=StringCast<UTF16CHAR>(*Text,Text.Len());UErrorCode Status=U_ZERO_ERROR;
     uregex_setText(Regex,reinterpret_cast<const UChar*>(Utf16.Get()),Utf16.Length(),&Status);

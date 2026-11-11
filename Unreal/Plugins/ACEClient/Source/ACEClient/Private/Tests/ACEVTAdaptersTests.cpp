@@ -15,7 +15,7 @@ TSharedPtr<FJsonObject> AdapterJSON(const TCHAR* Text){TSharedPtr<FJsonObject> O
 FString CommandMetaFile(const FString& Command)
 {return TEXT("1\nCondAct\n5\nCType\nAType\nCData\nAData\nState\nn\nn\nn\nn\nn\n1\ni\n1\ni\n2\ni\n0\ns\n")+Command+TEXT("\ns\nDefault\n");}
 }
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEVTAdaptersTest,"ACE.Plugins.LegacyAdapters",EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEVTAdaptersTest,"ACE.Plugins.LegacyAdapters",EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
 bool FACEVTAdaptersTest::RunTest(const FString&)
 {
     FString Error,Script;TArray<FString> Issues;TSharedPtr<FJsonObject> Intent;
@@ -215,6 +215,8 @@ bool FACEVTAdaptersTest::RunTest(const FString&)
         auto Profile=AdapterJSON(TEXT(R"({"buffing":false,"recovery":false,"combat":"off","looting":true,"loot_rules":[{"action":"keep"}]})"));
         Profile->GetArrayField(TEXT("loot_rules"))[0]->AsObject()->SetStringField(TEXT("action"),Action);
         Snap->GetArrayField(TEXT("contents"))[0]->AsObject()->SetNumberField(TEXT("material"),59);
+        // An identified salvage item includes workmanship in real appraisals.
+        Snap->GetArrayField(TEXT("contents"))[0]->AsObject()->SetNumberField(TEXT("workmanship"),5);
         TestTrue(TEXT("Loot action transfers first"),Loot.Step(Snap,Profile,Intent,Error));if(!Intent){AddError(Error);continue;}
         TestEqual(TEXT("Loot uses normal transfer"),Intent->GetStringField(TEXT("action")),FString(TEXT("loot")));
         auto Owned=Snap->GetArrayField(TEXT("inventory"));Owned.Add(Snap->GetArrayField(TEXT("contents"))[0]);Snap->SetArrayField(TEXT("inventory"),Owned);Snap->SetArrayField(TEXT("contents"),{});

@@ -88,6 +88,8 @@ void UACEHoverTooltipWidget::SetWidgetTooltip(UWidget* Widget, const FText& Text
 {
 	if (!Widget) return;
 	auto* Tip = Cast<UACEHoverTooltipWidget>(Widget->GetToolTip());
+	// A reused inventory slot can change from equipment to an ordinary item.
+	if (Tip && Tip->CustomContent) { Widget->SetToolTip(nullptr); Tip = nullptr; }
 	if (Widget->GetToolTipText().EqualTo(Text) && Tip && Tip->CurrentTemplate == TemplateId) return;
 	Widget->SetToolTipText(Text);
 	if (Text.IsEmpty()) { Widget->SetToolTip(nullptr); return; }
@@ -117,14 +119,26 @@ void UACEHoverTooltipWidget::SetWidgetContentTooltip(UWidget* Widget,const FText
 {
 	if(!Widget)return;
 	auto* Tip=Cast<UACEHoverTooltipWidget>(Widget->GetToolTip());
-	if(!Tip||!Tip->CustomContent)
+	const bool NewTip=!Tip||!Tip->CustomContent;
+	if(NewTip)
 	{
 		Tip=NewObject<UACEHoverTooltipWidget>(Widget);Tip->Initialize();
 	}
-	Widget->SetToolTipText(AccessibleText);
+	// UMG's setters replace the Slate IToolTip, even for identical text/widgets.
+	// Slate closes an active popup whenever that identity changes. Inventory
+	// refreshes must update content inside the existing popup instead.
+	const auto SlateOwner=Widget->GetCachedWidget();
+	const auto Existing=SlateOwner?SlateOwner->GetToolTip():nullptr;
+	if(!Widget->GetToolTipText().EqualTo(AccessibleText))
+	{
+		Widget->SetToolTipText(AccessibleText);
+		if(!NewTip&&SlateOwner)SlateOwner->SetToolTip(Existing);
+	}
+	Tip->SetVisibility(ESlateVisibility::HitTestInvisible);
 	Tip->CustomContent=Content;
 	if(Tip->CustomContentHost)Tip->CustomContentHost->SetContent(Content);
-	Widget->SetToolTip(Tip);Tip->ProtectOwnerFromCursorOverlap();
+	if(NewTip)Widget->SetToolTip(Tip);
+	Tip->ProtectOwnerFromCursorOverlap();
 }
 
 FSlateRect UACEHoverTooltipWidget::GetCursorExclusionRect(const FVector2D& CursorPixels)
@@ -170,7 +184,7 @@ void UACEHoverTooltipWidget::ProtectOwnerFromCursorOverlap()
 
 TSharedRef<SWidget> UACEHoverTooltipWidget::RebuildWidget()
 {
-	if(CustomContent)return SNew(SACECursorSafeTooltip)
+	if(CustomContent)return SNew(SACECursorSafeTooltip).Visibility(EVisibility::HitTestInvisible)
 		[SAssignNew(CustomContentHost,SBox)[CustomContent.ToSharedRef()]];
 	EnsureDefaultLayout();
 	ApplyRetailStyle();

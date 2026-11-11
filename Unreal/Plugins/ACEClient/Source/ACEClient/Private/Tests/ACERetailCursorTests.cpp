@@ -13,6 +13,7 @@
 #include "ACEClientSubsystem.h"
 #include "ACEDatSubsystem.h"
 #include "ACEMouseCursorWidget.h"
+#include "ACETestDatDirectory.h"
 #include "ACEHoverTooltipWidget.h"
 #include "ACEPlayerController.h"
 #include "ACESession.h"
@@ -27,7 +28,7 @@
 #include "Sockets.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERetailCursorTest,"ACE.RetailParity.MouseCursors",
-    EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
 bool FACERetailCursorTest::RunTest(const FString&)
 {
     auto* W=UWorld::CreateWorld(EWorldType::Game,false);
@@ -39,7 +40,7 @@ bool FACERetailCursorTest::RunTest(const FString&)
     C->Session=MakeShared<FACESession>();auto& S=*C->Session;
     S.State=EACESessionState::InWorld;S.PlayerGuid=1234;S.PlayerVitals.CombatMode=1;
     auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
-    if (!TestTrue(TEXT("Retail DAT opens"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))) return false;
+    if (!TestTrue(TEXT("Retail DAT opens"),Dat->LoadDatDirectory(ACETestDatDirectory()))) return false;
     auto* PC=W->SpawnActor<AACEPlayerController>();PC->Client=C;PC->PlayerInput=NewObject<UPlayerInput>(PC);
     AddExpectedMessagePlain(TEXT("does not have a valid PlayerInput object"),ELogVerbosity::Warning);
     auto* LP=NewObject<ULocalPlayer>(GEngine);LP->PlayerController=PC;

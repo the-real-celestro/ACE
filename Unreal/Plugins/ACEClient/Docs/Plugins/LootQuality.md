@@ -139,3 +139,37 @@ monotonicity, grade boundaries, relevance and continued ordering above 100.
 `review-examples.cpp` emits the review examples using the same shipped arithmetic.
 Also run the existing item presentation, icon rendering, tooltip and inventory
 performance regression suites before distributing a build.
+
+## Icon and hover stability (v156)
+
+Authored underlays and imbue/effect backgrounds retain their original DAT colors,
+including on items the character cannot wield. These items use a small pink
+lower-right corner marker instead of the unusable background tint; their quality
+edge remains independent. Ordinary unusable equipment retains its distinct tint.
+
+Inventory refreshes and new appraisals update the existing noninteractive tooltip
+content without replacing Slate's active popup identity. Equipment slots reused
+for ordinary items restore the normal text tooltip. Regression fixtures exercise
+100 repeated refreshes, live content/name changes, and background preservation.
+
+On macOS the retail cursor artwork is installed as native OS cursor shapes,
+including targeting, busy, move and resize states. Scaling updates artwork and
+hotspots together. Native drawing keeps the cursor visible over macOS overlays
+such as notifications; other platforms retain their existing cursor path. Missing
+native art falls back to the software cursor, and controller teardown restores
+the previous cursor mapping policy. `ACE.RetailParity.MacNativeCursor` checks
+native color/alpha, hotspots, scaling, reuse, and cleanup. Notification interaction
+itself requires a desktop check; offscreen tests do not simulate Notification Center.
+
+The v156 shutdown fix drains cached loot-filter ICU patterns on the engine's
+pre-exit event, before ICU resets its allocator. Compiled templates have shared,
+synchronized ownership; shutdown waits for in-flight matching and blocks late
+calls. Thread-local text-only validation/predicate caches hold no ICU objects.
+`ACE.Plugins.RegexShutdown` warms templates from game and worker threads, checks
+drain/restart, and leaves a warm cache for the native process-exit check.
+
+For the shutdown regression use
+`-ExecCmds="Automation RunTests ACE.Plugins.RegexShutdown;SoftQuit"`. Do not
+combine this with `-TestExit`: on macOS that option calls `_Exit` and skips the
+normal engine cleanup. Require a zero process exit and a pre-exit cache-drain
+log entry after the test queue completes.

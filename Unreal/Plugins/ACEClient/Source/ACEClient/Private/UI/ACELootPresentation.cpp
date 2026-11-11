@@ -18,7 +18,7 @@ class SACEQualityIcon : public SLeafWidget
 public:
     SLATE_BEGIN_ARGS(SACEQualityIcon){}SLATE_END_ARGS()
     void Construct(const FArguments&){}
-    bool Rated=false;FLinearColor Tint;FString Mark;FVector2D MarkAt=FVector2D::ZeroVector;
+    bool Rated=false,Unavailable=false;FLinearColor Tint;FString Mark;FVector2D MarkAt=FVector2D::ZeroVector;
     virtual FVector2D ComputeDesiredSize(float)const override{return FVector2D(32,32);}
     virtual int32 OnPaint(const FPaintArgs&,const FGeometry& G,const FSlateRect&,FSlateWindowElementList& E,
         int32 L,const FWidgetStyle&,bool)const override
@@ -30,6 +30,13 @@ public:
         {
             Box({0,0},{Size.X,1},Tint);Box({0,Size.Y-1},{Size.X,1},Tint);
             Box({0,1},{1,Size.Y-2},Tint);Box({Size.X-1,1},{1,Size.Y-2},Tint);
+        }
+        // A small corner marker replaces the unusable background tint on imbued
+        // items. Keep the quality edge and authored effect artwork intact.
+        if(Unavailable)
+        {
+            Box({Size.X-5,Size.Y-5},{4,2},FLinearColor(1,.35,.7));
+            Box({Size.X-3,Size.Y-5},{2,4},FLinearColor(1,.35,.7));
         }
         if(!Mark.IsEmpty())
         {
@@ -45,9 +52,10 @@ public:
         return L+1;
     }
 };
-void UACELootIconOverlay::SetReview(const FACEQualityReview& Review,UTexture2D* Foreground)
+void UACELootIconOverlay::SetReview(const FACEQualityReview& Review,UTexture2D* Foreground,bool PreserveBackground)
 {
     TakeWidget();Painted->Rated=Review.bRated;Painted->Tint=ACELootQuality::Color(Review.Grade);Painted->Mark.Empty();
+    Painted->Unavailable=PreserveBackground&&Review.bCannotWield;
     // Test actual composited foreground coverage. Never cover the weapon to
     // force a class badge onto a small inventory icon.
     if(!Review.ClassMark.IsEmpty()&&Foreground&&Foreground->GetPlatformData()&&Foreground->GetPlatformData()->Mips.Num())

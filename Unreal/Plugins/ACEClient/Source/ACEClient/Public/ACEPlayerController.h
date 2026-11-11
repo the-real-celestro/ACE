@@ -116,6 +116,7 @@ public:
 	TSharedPtr<class FACEDesktopDisplay> DesktopDisplay;
 	void RefreshDesktopDisplayInputMode();
 	TSharedPtr<class FACEDesktopPointer> DesktopPointer;
+	TSharedPtr<class FACENativeCursor> NativeCursor;
 
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;

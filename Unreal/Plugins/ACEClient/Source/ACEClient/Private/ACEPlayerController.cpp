@@ -13,6 +13,7 @@
 #include "ACEDesktopDisplay.h"
 #include "Widgets/SWindow.h"
 #include "ACEDesktopPointer.h"
+#include "ACENativeCursor.h"
 #include "HAL/IConsoleManager.h"
 #include "UnrealClient.h"
 #include "VR/ACEVRComponent.h"
@@ -316,6 +317,7 @@ void AACEPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	KeyboardRouter.Reset();
 	DesktopDisplay.Reset();
 	DesktopPointer.Reset();
+	NativeCursor.Reset();
 	if (IsLocalController()) ACERuntimeOptions::ApplyDesktopUIScale(FIntPoint::ZeroValue,true);
 #if WITH_EDITOR
 	if (GEditor)
@@ -4865,6 +4867,7 @@ void AACEPlayerController::EnsureRetailMouseCursor()
 {
 	if (IsVRActive() || IsMobileActive()) { bShowMouseCursor = false; return; }
 	const float CursorScale = ACERuntimeOptions::Get(TEXT("CursorScale"));
+	if(NativeCursor)NativeCursor->SetScale(CursorScale);
 	if (MouseCursorWidget) MouseCursorWidget->SetCursorScale(CursorScale);
 	for (const auto& Cursor : RetailWindowCursorWidgets) if (Cursor) Cursor->SetCursorScale(CursorScale);
 	if (!IsLocalController() || bRetailCursorInstalled)
@@ -4918,6 +4921,8 @@ void AACEPlayerController::EnsureRetailMouseCursor()
 	MouseCursorWidget->SetCursorScale(CursorScale);
 	CurrentMouseCursor = EMouseCursor::Default;
 	SetMouseCursorWidget(EMouseCursor::Default, MouseCursorWidget);
+	if(auto* LP=GetLocalPlayer())NativeCursor=FACENativeCursor::Create(LP->ViewportClient);
+	if(NativeCursor)NativeCursor->SetScale(CursorScale);
 	// Let Slate's cursor query select the native window affordance independently
 	// of the world-selection cursor, including while a drag retains capture.
 	const TPair<EMouseCursor::Type, uint32> WindowCursors[] = {
@@ -4936,6 +4941,7 @@ void AACEPlayerController::EnsureRetailMouseCursor()
 			Widget->SetCursorScale(CursorScale);
 			Widget->SetCursorTexture(Texture, UACEMouseCursorWidget::WindowHotspot, UACEMouseCursorWidget::WindowHotspot);
 			SetMouseCursorWidget(Cursor.Key, Widget);
+			if(NativeCursor)NativeCursor->SetTexture(Cursor.Key,Texture,UACEMouseCursorWidget::WindowHotspot,UACEMouseCursorWidget::WindowHotspot);
 			RetailWindowCursorWidgets.Add(Widget);
 		}
 	}
@@ -4972,6 +4978,7 @@ void AACEPlayerController::ApplyRetailMouseCursor(bool bInteractable, bool bComp
 	}
 	const int32 Hotspot=!Busy&&(TargetMode==1||TargetMode==3)?UACEMouseCursorWidget::TargetHotspot:0;
 	MouseCursorWidget->SetCursorTexture(Tex,Hotspot,Hotspot);
+	if(NativeCursor&&!NativeCursor->SetTexture(EMouseCursor::Default,Tex,Hotspot,Hotspot))NativeCursor.Reset();
 	bRetailCursorInteractable = bInteractable;
 }
 

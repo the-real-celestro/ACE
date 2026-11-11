@@ -98,6 +98,7 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 	friend class FACEChessTest;
 	friend class FACEBarberTest;
 	friend class FACEItemPresentationTest;
+	friend class FACELootIconPreservationTest;
 	friend class FACESelectionToolbarTest;
     friend class FACEActionDeckTest;
     friend class FACERetailCursorTest;

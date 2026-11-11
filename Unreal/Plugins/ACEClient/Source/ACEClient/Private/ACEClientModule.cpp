@@ -2,11 +2,15 @@
 #include "ACEClientBuild.h"
 #include "ACEProjectMigration.h"
 #include "HAL/IConsoleManager.h"
+#include "Misc/CoreDelegates.h"
+#include "Mods/ACEVTRegex.h"
 
 #define LOCTEXT_NAMESPACE "FACEClientModule"
 
 void FACEClientModule::StartupModule()
 {
+	ACEVTRegex::Initialize();
+	RegexPreExit=FCoreDelegates::OnPreExit.AddStatic(&ACEVTRegex::Shutdown);
 	ACEProjectMigration::ImportWindowsProfile();
 	// Use compatible CSM rendering; user scalability controls quality and can disable shadows.
 	// PView (portal draw admission) is not CSM — keep cascaded shadows for lighting.
@@ -47,6 +51,8 @@ void FACEClientModule::StartupModule()
 
 void FACEClientModule::ShutdownModule()
 {
+	FCoreDelegates::OnPreExit.Remove(RegexPreExit);
+	ACEVTRegex::Shutdown();
 }
 
 DEFINE_LOG_CATEGORY(LogACEClient);

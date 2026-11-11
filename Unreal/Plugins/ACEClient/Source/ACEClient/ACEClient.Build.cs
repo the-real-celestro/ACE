@@ -46,6 +46,7 @@ public class ACEClient : ModuleRules
 		{
 			// Launcher passwords are stored in the macOS Keychain.
 			PublicFrameworks.Add("Security");
+			PublicFrameworks.Add("AppKit");
 		}
 		if (Target.Platform == UnrealTargetPlatform.Android)
 		{
