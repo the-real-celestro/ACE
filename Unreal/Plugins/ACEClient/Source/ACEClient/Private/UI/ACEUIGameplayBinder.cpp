@@ -626,6 +626,21 @@ void UACEUIGameplayBinder::Shutdown()
 	TransientInfoTimes.Reset();
 	TransientInfoTemplate.Reset();
 	TransientInfoScale = FVector2D::ZeroVector;
+	for (auto* Root : {&ServerConfirmRoot, &ServerPopupRoot})
+	{
+		if (*Root)
+		{
+			(*Root)->bVisible = false;
+			if (auto Parent = (*Root)->Parent.Pin()) Parent->RemoveChild(*Root);
+			Root->Reset();
+		}
+	}
+	for (auto* Labels : {&ServerConfirmLabels, &ServerPopupLabels})
+	{
+		for (UTextBlock* Label : *Labels) if (Label) Label->RemoveFromParent();
+		Labels->Reset();
+	}
+	ServerPopupId = 0; ServerPopupPrompt.Reset(); ServerConfirmPrompt.Reset();
 	Client = nullptr;
 	Manager = nullptr;
 	Canvas = nullptr;
@@ -728,6 +743,7 @@ void UACEUIGameplayBinder::TickRefresh(bool bRefreshDesktopHUD)
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshTradeOverlays); RefreshTradeOverlays(); }
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshManaStoneConfirmation); RefreshManaStoneConfirmation(); }
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshServerConfirmation); RefreshServerConfirmation(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshServerPopup); RefreshServerPopup(); }
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshSalvageOverlays); RefreshSalvageOverlays(); }
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshSocialOverlays); RefreshSocialOverlays(); }
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshQuestOverlays); RefreshQuestOverlays(); }
@@ -887,7 +903,9 @@ void UACEUIGameplayBinder::OnElementActivated(TSharedPtr<FACEUIElement> Element)
 			{JournalNotes->SetScrollOffset(JournalNotes->GetScrollOffset()+Dir*28.f);RefreshJournalOverlays();return;}
 			if (A->ElementName == TEXT("BookPanel_Field") && BookScroll)
 			{
-				BookScroll->SetScrollOffset(FMath::Clamp(BookScroll->GetScrollOffset()+Dir*28.f,0.f,BookScroll->GetScrollOffsetOfEnd()));
+				if (BookPageEditor && BookPageEditor->IsVisible())
+					BookPageEditor->SetScrollOffset(BookPageEditor->GetScrollOffset()+Dir*28.f);
+				else BookScroll->SetScrollOffset(FMath::Clamp(BookScroll->GetScrollOffset()+Dir*28.f,0.f,BookScroll->GetScrollOffsetOfEnd()));
 				RefreshBookOverlays(); return;
 			}
 			if ((A->ElementName == TEXT("ItemDisplayTextScrollbar") || A->ElementName == TEXT("SpellDisplayTextScrollbar")) && ExamScroll)
@@ -1153,7 +1171,9 @@ bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
 	}
 	if (Name == TEXT("ContractNameSortButton") || Name == TEXT("ContractStatusSortButton"))
 	{
-		bQuestSortByStatus = (Name == TEXT("ContractStatusSortButton"));
+		const bool bStatus = Name == TEXT("ContractStatusSortButton");
+		bQuestReverseSort = bQuestSortByStatus == bStatus ? !bQuestReverseSort : false;
+		bQuestSortByStatus = bStatus;
 		QuestScrollOffset = 0;
 		RefreshQuestOverlays();
 		return true;
@@ -1843,7 +1863,7 @@ bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
 		}
 		if (Client && bTradeOpen)
 		{
-			if (Client->GetTradeAcceptedGuid() == Client->GetPlayerGuid()) Client->SendDeclineTrade();
+			if (Client->HasAcceptedTrade()) Client->SendDeclineTrade();
 			else if (!Client->GetTradeSelfItems().IsEmpty() || !Client->GetTradePartnerItems().IsEmpty()) Client->SendAcceptTrade();
 		}
 		return true;
@@ -2033,6 +2053,8 @@ void UACEUIGameplayBinder::SanitizeFloatyPanelChrome()
 
 void UACEUIGameplayBinder::ShowPanelPage(const FString& PageElementName)
 {
+	if (ActivePanelPage == TEXT("BookPanel_Field") && PageElementName != ActivePanelPage && Client)
+		Client->ClearBook();
 	SanitizeFloatyPanelChrome();
 	SetFloatyVisible(TEXT("RootGameplay_FloatyPanel_Field"), true);
 	if (!Manager)
@@ -2174,6 +2196,7 @@ void UACEUIGameplayBinder::ShowPanelPage(const FString& PageElementName)
 
 void UACEUIGameplayBinder::HidePanel()
 {
+	if (ActivePanelPage == TEXT("BookPanel_Field") && Client) Client->ClearBook();
 	SetFloatyVisible(TEXT("RootGameplay_FloatyPanel_Field"), false);
 	ActivePanelPage.Reset();
 	HideWorldOverlays();
@@ -8208,6 +8231,7 @@ bool UACEUIGameplayBinder::IsChatEntryFocused() const
 	// This gate also suppresses movement keys while editing other HUD text.
 	if (SquelchNameEntry && SquelchNameEntry->HasKeyboardFocus()) return true;
 	if (JournalNotes && JournalNotes->HasKeyboardFocus()) return true;
+	if (BookPageEditor && BookPageEditor->HasKeyboardFocus()) return true;
 	for (const auto& Entry : JournalEntries) if (Entry && Entry->HasKeyboardFocus()) return true;
 	if (EditingInscriptionGuid && ExamInscriptionEditor && ExamInscriptionEditor->HasKeyboardFocus()) return true;
 	for (const auto& Entry : ComponentDesiredEntries) if (Entry && Entry->HasKeyboardFocus()) return true;
@@ -13720,7 +13744,8 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D ViewportPos)
 	}
 	if (ActivePanelPage == TEXT("BookPanel_Field") && BookScroll)
 		if (TryBar(GetBookScrollbar(), EACEUIScrollTarget::Book,
-			FMath::CeilToInt(BookScroll->GetScrollOffsetOfEnd()), false)) return true;
+			FMath::CeilToInt(BookPageEditor && BookPageEditor->IsVisible() ? BookPageEditor->GetScrollOffsetOfEnd()
+				: BookScroll->GetScrollOffsetOfEnd()), false)) return true;
 	if (ActivePanelPage == TEXT("CharacterInfoPanel_Field") && CharacterInfoScroll)
 		if (TryBar(Manager->FindElementUnder(ActivePanelPage,TEXT("CharacterInfoText_Scrollbar")),
 			EACEUIScrollTarget::CharacterInfo,FMath::CeilToInt(CharacterInfoScroll->GetScrollOffsetOfEnd()),false)) return true;
@@ -13958,7 +13983,8 @@ void UACEUIGameplayBinder::UpdateScrollbarDrag(FVector2D ViewportPos)
 	case EACEUIScrollTarget::HousePayment:
 		HouseItemOffset=Off; RefreshHouseOffer(); break;
 	case EACEUIScrollTarget::Book:
-		if (BookScroll) BookScroll->SetScrollOffset(Off);
+		if (BookPageEditor && BookPageEditor->IsVisible()) BookPageEditor->SetScrollOffset(Off);
+		else if (BookScroll) BookScroll->SetScrollOffset(Off);
 		break;
 	case EACEUIScrollTarget::Examination:
 		if (ExamScroll) ExamScroll->SetScrollOffset(Off);
@@ -15996,9 +16022,9 @@ void UACEUIGameplayBinder::RefreshTradeOverlays()
 	PlaceTextOnElement(TradeLabels[4],TEXT("TradeSelfTradeButton"),TEXT("Trade"),10,TextWhite,OverlayZ+2,true);
 	PlaceTextOnElement(TradeLabels[5],TEXT("Trade_ClearAllButon"),TEXT("Clear All"),10,TextWhite,OverlayZ+2,true);
 	if (auto Indicator=Manager->FindElementByName(TEXT("TradeOtherTradeIndicator")))
-		Indicator->bVisible=Client->GetTradeAcceptedGuid()!=0 && Client->GetTradeAcceptedGuid()!=Client->GetPlayerGuid();
+		Indicator->bVisible=Client->HasPartnerAcceptedTrade();
 	if (auto Button=Manager->FindElementByName(TEXT("TradeSelfTradeButton")))
-		Button->bHighlighted=Client->GetTradeAcceptedGuid()==Client->GetPlayerGuid();
+		Button->bHighlighted=Client->HasAcceptedTrade();
 }
 
 bool UACEUIGameplayBinder::IsPointerOverExternalContainer(FVector2D CanvasLocalPos) const
@@ -16035,7 +16061,7 @@ void UACEUIGameplayBinder::RefreshServerConfirmation()
 	const auto Session = Client ? Client->GetSession() : nullptr;
 	if (!Session || Session->GetState()!=EACESessionState::InWorld)
 	{ PendingAllegianceAction.Reset(); PendingAllegiancePrompt.Reset(); PendingAllegianceGuid=0; bHousePaymentConfirm=false; bChessQuitConfirm=false; }
-	if (!Session || (Session->GetConfirmations().IsEmpty() && !PendingAllegianceGuid && !bHousePaymentConfirm && !bChessQuitConfirm))
+	if (!Session || Session->GetState()!=EACESessionState::InWorld || (Session->GetConfirmations().IsEmpty() && !PendingAllegianceGuid && !bHousePaymentConfirm && !bChessQuitConfirm))
 	{
 		if (ServerConfirmRoot) ServerConfirmRoot->bVisible = false;
 		for (UTextBlock* Label : ServerConfirmLabels) if (Label) Label->SetVisibility(ESlateVisibility::Collapsed);

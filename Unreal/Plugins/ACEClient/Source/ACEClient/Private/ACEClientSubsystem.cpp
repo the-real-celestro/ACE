@@ -1051,6 +1051,16 @@ int32 UACEClientSubsystem::GetTradeAcceptedGuid() const
 	return Session ? Session->GetTradeAcceptedGuid() : 0;
 }
 
+bool UACEClientSubsystem::HasAcceptedTrade() const
+{
+	return Session && Session->HasAcceptedTrade();
+}
+
+bool UACEClientSubsystem::HasPartnerAcceptedTrade() const
+{
+	return Session && Session->HasPartnerAcceptedTrade();
+}
+
 TArray<int32> UACEClientSubsystem::GetTradeSelfItems() const
 {
 	return Session ? Session->GetTradeSelfItems() : TArray<int32>();
@@ -1172,7 +1182,10 @@ void UACEClientSubsystem::SendBookData(int32 BookGuid)
 
 void UACEClientSubsystem::SendBookPageData(int32 BookGuid, int32 PageIndex)
 {
-	if (Session) { Session->SendBookPageData(BookGuid, PageIndex); }
+	if (!Session) return;
+	const auto& Book = Session->GetBookInfo();
+	if (Book.BookGuid == BookGuid && Book.CurrentPage != PageIndex) Session->TurnBookPage(PageIndex);
+	else Session->SendBookPageData(BookGuid, PageIndex);
 }
 
 void UACEClientSubsystem::SendChessQuit()
@@ -1396,12 +1409,12 @@ bool UACEClientSubsystem::TryGetPlayerEncumbrance(int32& OutEncumbrance) const
 	return Session ? Session->TryGetPlayerEncumbrance(OutEncumbrance) : false;
 }
 
-TArray<FACEActiveEnchantment> UACEClientSubsystem::GetActiveEnchantments() const
+TArray<FACEActiveEnchantment> UACEClientSubsystem::GetActiveEnchantments(bool bIncludeCooldowns) const
 {
 	TArray<FACEActiveEnchantment> Out;
 	if (Session)
 	{
-		Session->GetActiveEnchantments(Out);
+		Session->GetActiveEnchantments(Out, bIncludeCooldowns);
 	}
 	// Retail CEnchantmentRegistry::UpdateSpellTotals classifies by SpellBase's
 	// beneficial bit (4), not the optional server StatModType annotation.
