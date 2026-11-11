@@ -11,5 +11,5 @@ namespace ACEClientBuild
 	ACECLIENT_API const TCHAR* ProductName(bool bVR = false);
 	ACECLIENT_API void UpdateWindowTitle(UWorld* World, bool bVR = false);
 	// One display version for desktop, PC VR, and standalone Quest.
-	inline constexpr const TCHAR* Version = TEXT("2026.11.10.155");
+	inline constexpr const TCHAR* Version = TEXT("2026.11.11.155");
 }

@@ -5,6 +5,8 @@
 #include "ACERuntimeOptions.h"
 #include "UI/ACERetailTextBlock.h"
 #include "UI/ACEUIGameplayBinder.h"
+#include "ACERetailCommandSyntax.h"
+#include "ACERetailCommandHelp.h"
 #include "ACEOlthoi.h"
 #include "UI/ACEChatEntry.h"
 #include "UI/ACEUICanvasWidget.h"
@@ -14,6 +16,7 @@
 #include "UI/ACEUIResourceResolver.h"
 #include "ACEClientSubsystem.h"
 #include "ACEOpcodes.h"
+#include "Protocol/ACECombatChat.h"
 #include "Components/Border.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Components/EditableTextBox.h"
@@ -1224,7 +1227,7 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
         }
         return true;
     }
-    if (TryDispatchMiscCommand(Cmd,Args)) return true;
+    if (TryDispatchRetailUtilityCommand(Cmd,Args) || TryDispatchMiscCommand(Cmd,Args)) return true;
     if(Cmd==TEXT("acuehelp")){Cmd=TEXT("help");Args=TEXT("acue");}
     else if(Cmd.StartsWith(TEXT("acue")))
     {
@@ -1234,6 +1237,7 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
 	if (Cmd == TEXT("friends_add")) { Cmd=TEXT("friends"); Args=TEXT("add ")+Args; }
 	if (Cmd == TEXT("friends_remove")) { Cmd=TEXT("friends"); Args=TEXT("remove ")+Args; }
 	if (Cmd == TEXT("hou")) Cmd=TEXT("house");
+	if (Cmd == TEXT("all")) Cmd=TEXT("allegiance");
 	if (Cmd == TEXT("?")) Cmd=TEXT("help");
 	if (Cmd==TEXT("speaker"))
 	{
@@ -1272,6 +1276,42 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
 		return false;
 	};
 
+	const bool NoArgsRecall=Cmd==TEXT("ls") || Cmd==TEXT("lifestone") || Cmd==TEXT("lif")
+		|| Cmd==TEXT("mp") || Cmd==TEXT("marketplace") || Cmd==TEXT("mar") || Cmd==TEXT("hr") || Cmd==TEXT("hor")
+		|| Cmd==TEXT("ma") || Cmd==TEXT("mansion") || Cmd==TEXT("hom") || Cmd==TEXT("hoa")
+		|| Cmd==TEXT("allegiancehousing") || Cmd==TEXT("alleg_recall") || Cmd==TEXT("ah") || Cmd==TEXT("alh")
+		|| Cmd==TEXT("hometown") || Cmd==TEXT("allegiancehometown");
+	if (NoArgsRecall && !Args.IsEmpty())
+	{
+		AppendLocalChatLine(TEXT("This command takes no arguments."),ACEChatMessageType::ChatError); return true;
+	}
+	// Retail DoPKArena / DoPKLArena send empty recall actions, not Talk.
+	if (Cmd == TEXT("pkarena") || Cmd == TEXT("pka")
+		|| Cmd == TEXT("pklarena") || Cmd == TEXT("pla"))
+	{
+		const bool bLite = Cmd == TEXT("pklarena") || Cmd == TEXT("pla");
+		if (!Args.IsEmpty())
+		{
+			AppendLocalChatLine(FString::Printf(
+				TEXT("Please see @help %s for more information on how to use this command."),
+				bLite ? TEXT("pklarena") : TEXT("pkarena")), ACEChatMessageType::ChatError);
+			return true;
+		}
+		if (const auto S = Client->GetSession(); S.IsValid())
+		{
+			// Match retail's descriptor check when the player object is available.
+			// The server still owns busy/PK-timer checks and the recall itself.
+			const auto* Self = S->GetWorldObjects().Find(S->GetPlayerGuid());
+			const int32 RequiredFlag = bLite ? ACEObjectDescFlag::PkLiteStatus : ACEObjectDescFlag::PlayerKiller;
+			if (Self && !(Self->ObjectDescriptionFlags & RequiredFlag))
+			{
+				const uint32 Error = bLite ? 0x0560u : 0x055Fu;
+				AppendLocalChatLine(ACECombatChat::LookupWeenieError(Error), ACECombatChat::WeenieErrorChatType(Error));
+			}
+			else S->SendSimpleGameAction(bLite ? ACEGameAction::TeleToPkLiteArena : ACEGameAction::TeleToPkArena);
+		}
+		return true;
+	}
 	// Lifestone recall — retail TeleToLifestone (not Talk).
 	if (Cmd == TEXT("ls") || Cmd == TEXT("lifestone") || Cmd == TEXT("lif"))
 	{
@@ -1308,24 +1348,15 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
 		{
 			return true;
 		}
-		uint32 HouseType = 1; // Cottage
-		if (Args.Equals(TEXT("villa"), ESearchCase::IgnoreCase)) { HouseType = 2; }
-		else if (Args.Equals(TEXT("mansion"), ESearchCase::IgnoreCase)) { HouseType = 3; }
-		else if (Args.StartsWith(TEXT("apart"), ESearchCase::IgnoreCase)) { HouseType = 4; }
-		else if (Args.Equals(TEXT("cottage"), ESearchCase::IgnoreCase) || Args.IsEmpty()) { HouseType = 1; }
-		S->SendGameActionU32(ACEGameAction::ListAvailableHouses, HouseType);
+		if (const uint32 Type=ACERetailCommandSyntax::HouseType(Args)) S->SendGameActionU32(ACEGameAction::ListAvailableHouses,Type);
+		else AppendLocalChatLine(TEXT("Usage: @hslist apartment|cottage|villa|mansion"),ACEChatMessageType::ChatError);
 		return true;
 	}
 	if (Cmd == TEXT("house"))
 	{
 		TSharedPtr<FACESession> S = Client->GetSession();
-		FString Sub, Rest;
-		if (!Args.Split(TEXT(" "), &Sub, &Rest))
-		{
-			Sub = Args;
-			Rest.Reset();
-		}
-		Sub.TrimStartAndEndInline();
+		FString Rest=Args;
+		const FString Sub=ACERetailCommandSyntax::Take(Rest);
 		Rest.TrimStartAndEndInline();
 		const FString SubL = Sub.ToLower();
 
@@ -1339,8 +1370,14 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
 			return false;
 		};
 
-		if (SubL.IsEmpty() || SubL == TEXT("recall") || SubL == TEXT("re"))
+		if (SubL.IsEmpty())
 		{
+			AppendLocalChatLine(TEXT("See @help house for housing commands."),ACEChatMessageType::System);
+			return true;
+		}
+		if (SubL == TEXT("recall") || SubL == TEXT("re"))
+		{
+			if (!Rest.IsEmpty()) { AppendLocalChatLine(TEXT("This command takes no arguments."),ACEChatMessageType::ChatError); return true; }
 			Client->SendTeleToHouse();
 			AppendLocalChatLine(TEXT("Recalling to your house..."), ACEChatMessageType::System);
 			return true;
@@ -1349,6 +1386,7 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
 			|| SubL == TEXT("mansion") || SubL == TEXT("ma")
 			|| SubL == TEXT("hom") || SubL == TEXT("hoa"))
 		{
+			if (!Rest.IsEmpty()) { AppendLocalChatLine(TEXT("This command takes no arguments."),ACEChatMessageType::ChatError); return true; }
 			Client->SendTeleToMansion();
 			AppendLocalChatLine(TEXT("Recalling to allegiance housing..."), ACEChatMessageType::System);
 			return true;
@@ -1369,21 +1407,24 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
 		}
 		if (SubL == TEXT("abandon"))
 		{
-			S->SendSimpleGameAction(ACEGameAction::AbandonHouse);
+			PendingChatConfirmation=ACEGameAction::AbandonHouse;
+			ChatConfirmationStage=1;
+			RefreshServerConfirmation();
 			return true;
 		}
 		if (SubL == TEXT("available"))
 		{
-			uint32 HouseType = 1;
-			if (Rest.Equals(TEXT("villa"), ESearchCase::IgnoreCase)) { HouseType = 2; }
-			else if (Rest.Equals(TEXT("mansion"), ESearchCase::IgnoreCase)) { HouseType = 3; }
-			else if (Rest.StartsWith(TEXT("apart"), ESearchCase::IgnoreCase)) { HouseType = 4; }
-			S->SendGameActionU32(ACEGameAction::ListAvailableHouses, HouseType);
+			if (const uint32 Type=ACERetailCommandSyntax::HouseType(Rest)) S->SendGameActionU32(ACEGameAction::ListAvailableHouses,Type);
+			else AppendLocalChatLine(TEXT("Usage: @house available apartment|cottage|villa|mansion"),ACEChatMessageType::ChatError);
 			return true;
 		}
-		if (SubL == TEXT("boot"))
+		if (SubL == TEXT("boot_all") || SubL == TEXT("remove_all"))
 		{
-			if (Rest.Equals(TEXT("all"), ESearchCase::IgnoreCase))
+			S->SendSimpleGameAction(ACEGameAction::BootEveryone); return true;
+		}
+		if (SubL == TEXT("boot") || SubL == TEXT("remove"))
+		{
+			if (Rest.Equals(TEXT("all"), ESearchCase::IgnoreCase) || Rest.Equals(TEXT("-all"), ESearchCase::IgnoreCase))
 			{
 				S->SendSimpleGameAction(ACEGameAction::BootEveryone);
 				return true;
@@ -1392,7 +1433,7 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
 			{
 				return true;
 			}
-			S->SendGameActionString(ACEGameAction::BootSpecificHouseGuest, Rest);
+			S->SendGameActionString(ACEGameAction::BootSpecificHouseGuest, ACERetailCommandSyntax::Name(Rest));
 			return true;
 		}
 		if (SubL == TEXT("hooks"))
@@ -1414,17 +1455,12 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
 		}
 		if (SubL == TEXT("guest") || SubL == TEXT("storage"))
 		{
-			FString Verb, Name;
-			if (!Rest.Split(TEXT(" "), &Verb, &Name))
-			{
-				Verb = Rest;
-				Name.Reset();
-			}
-			Verb.TrimStartAndEndInline();
-			Name.TrimStartAndEndInline();
+			FString Name=Rest;
+			const FString Verb=ACERetailCommandSyntax::Take(Name);
+			Name=ACERetailCommandSyntax::Name(Name);
 			const FString VerbL = Verb.ToLower();
 			const bool bGuest = SubL == TEXT("guest");
-			if (bGuest && (VerbL == TEXT("list") || VerbL.IsEmpty()))
+			if (VerbL == TEXT("list") || VerbL == TEXT("show") || (bGuest && VerbL.IsEmpty()))
 			{
 				S->SendSimpleGameAction(ACEGameAction::RequestFullGuestList);
 				return true;
@@ -1448,6 +1484,11 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
 				S->SendSimpleGameAction(bGuest
 					? ACEGameAction::RemoveAllPermanentGuests
 					: ACEGameAction::RemoveAllStoragePermission);
+				return true;
+			}
+			if (!bGuest && (VerbL==TEXT("add") || VerbL==TEXT("remove")) && Name.Equals(TEXT("-all"),ESearchCase::IgnoreCase))
+			{
+				S->SendSimpleGameAction(VerbL==TEXT("add") ? ACEGameAction::AddAllStoragePermission : ACEGameAction::RemoveAllStoragePermission);
 				return true;
 			}
 			if (!bGuest && VerbL == TEXT("add_all"))
@@ -1720,9 +1761,7 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
 		int32 MessageType = ACEChatMessageType::AllChannels;
 		while (Name.StartsWith(TEXT("-")))
 		{
-			FString Flag, Remaining;
-			if (!Name.Split(TEXT(" "), &Flag, &Remaining)) Flag = Name;
-			Name = Remaining.TrimStartAndEnd();
+			FString Flag=ACERetailCommandSyntax::Take(Name);
 			Flag.RightChopInline(1);
 			if (Flag.Equals(TEXT("account"), ESearchCase::IgnoreCase)) bAccount = true;
 			else if (Flag.Equals(TEXT("reply"), ESearchCase::IgnoreCase)) bReply = true;
@@ -1784,7 +1823,7 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
 			return true;
 		}
 		TArray<FString> Tokens;
-		Args.ParseIntoArray(Tokens, TEXT(" "), true);
+		Args.ParseIntoArrayWS(Tokens);
 		for (FString Token : Tokens)
 		{
 			Token.RemoveFromStart(TEXT("-"));
@@ -1976,7 +2015,7 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
 	{
 		return SendTurbine(ACETurbineChat::Society);
 	}
-	if (Cmd == TEXT("co") || Cmd == TEXT("olthoi"))
+	if (Cmd == TEXT("co") || Cmd == TEXT("olthoi") || Cmd == TEXT("o"))
 	{
 		return SendTurbine(ACETurbineChat::Olthoi);
 	}
@@ -2037,6 +2076,14 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
 		|| Cmd == TEXT("fellowship_help"))
 	{
 		const FString Topic = (Cmd == TEXT("help")) ? ACEClientChatCommands::CanonicalName(Args) : Cmd;
+		if (Topic == TEXT("pkarena") || Topic == TEXT("pka") || Topic == TEXT("pklarena") || Topic == TEXT("pla"))
+		{
+			AppendLocalChatLine(Topic == TEXT("pkarena") || Topic == TEXT("pka")
+				? TEXT("@pkarena / @pka — teleports you to the PK Arena. You must be PK to use this command.")
+				: TEXT("@pklarena / @pla — teleports you to the PK Lite Arena. You must be PK Lite to use this command."),
+				ACEChatMessageType::Help);
+			return true;
+		}
 		static const TMap<FString,FString> MiscHelp = {
 			{TEXT("lockui"),TEXT("/lockui toggles whether UI windows can be moved and resized.")},
 			{TEXT("saveui"),TEXT("/saveui [name] saves window positions and sizes to Saved/UILayouts/<name>.txt. With no name, use UI-Default.txt. Names may have 1-16 characters; quote spaces. UI scale, keybinds, chat filters and VR comfort settings are not changed.")},
@@ -2069,6 +2116,12 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
 			AppendLocalChatLine(*Help,ACEChatMessageType::Help);
 			return true;
 		}
+		if (const auto* Help=ACERetailCommandHelp::Find(Topic))
+		{
+			TArray<FString> Lines;FString(Help->Help).ParseIntoArrayLines(Lines);
+			for (const auto& Line:Lines) AppendLocalChatLine(Line,ACEChatMessageType::Help);
+			return true;
+		}
 		if(Topic==TEXT("acue") || Topic==TEXT("acuehelp"))
 		{
 			PrintHelpLines({TEXT("AC:Unreal client commands use /acue (or @acue) prefixes:"),
@@ -2083,10 +2136,11 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
 				TEXT("Chat: @s @e @sm @t <name>, <text> @r @rt @f @a @v @p @m @c"),
 				TEXT("Global: @cg/@general @ct/@trade @clfg/@lfg @crp/@roleplay @cs/@society @ca @co/@olthoi"),
 				TEXT("Channels: @join/@leave <general|trade|lfg|roleplay|society|allegiance>"),
-				TEXT("Recall: @ls @mp @house recall @house mansion_recall @ah"),
+				TEXT("Recall: @ls @mp @house recall @house mansion_recall @ah @pkarena (@pka) @pklarena (@pla)"),
 				TEXT("UI layouts: @saveui [name] @loadui [name] @saveautoui @loadautoui @lockui"),
 				TEXT("Miscellaneous: @fillcomps @age @birth @day @endurance @fps (@framerate) @loc @pklite (@pkl) @version @loadfile @log @title"),
-				TEXT("Other: @filter @unfilter @messagetypes @clear @title @log @emotes @afk @die @friends"),
+				TEXT("Other: @filter @unfilter @messagetypes @clear @title @log @emotes @afk @die @friends @consent @permit @corpse @render"),
+				TEXT("Help topics: @help commands | allegiances | channels | chatting | death | status | text"),
 				TEXT("Help: @help commands | @house_help | @allegiance_help | @acehelp (server)"),
 				TEXT("AC:Unreal: @acuehelp | @acueperf | @acueobject | @acueplugins | @acueplugin | @acueucm | @acueitems"),
 			});
@@ -2144,15 +2198,12 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
 		{
 			return true;
 		}
-		FString Sub, Rest;
-		if (!Args.Split(TEXT(" "), &Sub, &Rest))
-		{
-			Sub = Args;
-			Rest.Reset();
-		}
-		Sub.TrimStartAndEndInline();
+		FString Rest=Args;
+		const FString Sub=ACERetailCommandSyntax::Take(Rest);
 		if (Sub.Equals(TEXT("msg"), ESearchCase::IgnoreCase))
 		{
+			Rest=Rest.Left(191);
+			if (!Rest.IsEmpty() && !Rest.Contains(TEXT("\n"))) Rest+=TEXT("\n");
 			S->SendGameActionString(ACEGameAction::SetAfkMessage, Rest);
 			AppendLocalChatLine(Rest.IsEmpty()
 				? TEXT("AFK message reset to default.")
@@ -2160,8 +2211,17 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
 				ACEChatMessageType::System);
 			return true;
 		}
-		S->SetAfkLocal(!S->IsAfk());
-		S->SendGameActionU32(ACEGameAction::SetAfkMode, S->IsAfk() ? 1u : 0u);
+		if (!Sub.IsEmpty() && Sub!=TEXT("on") && Sub!=TEXT("off"))
+		{
+			AppendLocalChatLine(TEXT("Usage: @afk [on|off|msg <message>]"),ACEChatMessageType::ChatError);
+			return true;
+		}
+		const bool Enabled=Sub!=TEXT("off");
+		if (S->IsAfk()!=Enabled)
+		{
+			S->SetAfkLocal(Enabled);
+			S->SendGameActionU32(ACEGameAction::SetAfkMode,Enabled?1u:0u);
+		}
 		AppendLocalChatLine(S->IsAfk()
 			? TEXT("You are now set to away-from-keyboard.")
 			: TEXT("You are no longer set to away-from-keyboard."),
@@ -2174,24 +2234,22 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
 		TSharedPtr<FACESession> S = Client->GetSession();
 		if (S.IsValid())
 		{
-			S->SendSimpleGameAction(ACEGameAction::Suicide);
+			if (!Args.IsEmpty()) AppendLocalChatLine(TEXT("Usage: @die"),ACEChatMessageType::ChatError);
+			else { PendingChatConfirmation=ACEGameAction::Suicide;ChatConfirmationStage=1;RefreshServerConfirmation(); }
 		}
 		return true;
 	}
 
 	if (Cmd == TEXT("friends"))
 	{
-		FString Sub, Rest;
-		if (!Args.Split(TEXT(" "), &Sub, &Rest))
-		{
-			Sub = Args;
-			Rest.Reset();
-		}
-		Sub.TrimStartAndEndInline();
+		FString Rest=Args;
+		const FString Sub=ACERetailCommandSyntax::Take(Rest);
 		Rest.TrimStartAndEndInline();
 		const FString SubL = Sub.ToLower();
+		Rest=ACERetailCommandSyntax::Name(Rest);
 		TSharedPtr<FACESession> S = Client->GetSession();
 		const TArray<FACEFriendInfo> Friends = Client->GetFriends();
+		if (SubL==TEXT("old")) { if (S) S->SendLegacyFriendsRequest(); return true; }
 		if (SubL.IsEmpty() || SubL == TEXT("list") || SubL == TEXT("online"))
 		{
 			const bool bOnlineOnly = SubL == TEXT("online");
