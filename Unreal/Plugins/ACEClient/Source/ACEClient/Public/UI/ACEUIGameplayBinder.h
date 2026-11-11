@@ -388,6 +388,7 @@ private:
 	int32 PackScrollOffset = 0;
 	bool bInventoryOverlaysCollapsed = false;
 	uint64 LastInventoryOverlayHash = ~uint64(0);
+	uint64 LastLootQualityRevision = 0;
 	bool bVendorOverlaysCollapsed = false;
 	uint64 LastVendorOverlayHash = ~uint64(0);
 	bool bLootOverlaysCollapsed = false;
@@ -1691,6 +1692,7 @@ private:
 	/** Empty slot chrome, IconUnderlay, or UiEffects-tinted cell behind an inventory icon. */
 	void SetItemSlotBackground(UBorder* Border, const FACEWorldObject* Item);
 	void SetItemSlotForeground(UBorder* Border, const FACEWorldObject* Item);
+	void SetItemTooltip(UWidget* Widget, const FACEWorldObject& Item);
 
 	void CancelInventoryDrag();
 	void CancelSpellDrag();

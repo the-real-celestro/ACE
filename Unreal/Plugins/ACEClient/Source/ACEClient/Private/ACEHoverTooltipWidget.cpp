@@ -113,6 +113,20 @@ void UACEHoverTooltipWidget::NativeConstruct()
 	ProtectOwnerFromCursorOverlap();
 }
 
+void UACEHoverTooltipWidget::SetWidgetContentTooltip(UWidget* Widget,const FText& AccessibleText,TSharedRef<SWidget> Content)
+{
+	if(!Widget)return;
+	auto* Tip=Cast<UACEHoverTooltipWidget>(Widget->GetToolTip());
+	if(!Tip||!Tip->CustomContent)
+	{
+		Tip=NewObject<UACEHoverTooltipWidget>(Widget);Tip->Initialize();
+	}
+	Widget->SetToolTipText(AccessibleText);
+	Tip->CustomContent=Content;
+	if(Tip->CustomContentHost)Tip->CustomContentHost->SetContent(Content);
+	Widget->SetToolTip(Tip);Tip->ProtectOwnerFromCursorOverlap();
+}
+
 FSlateRect UACEHoverTooltipWidget::GetCursorExclusionRect(const FVector2D& CursorPixels)
 {
 	// Software cursor widgets are centered on the pointer, with the retail
@@ -156,6 +170,8 @@ void UACEHoverTooltipWidget::ProtectOwnerFromCursorOverlap()
 
 TSharedRef<SWidget> UACEHoverTooltipWidget::RebuildWidget()
 {
+	if(CustomContent)return SNew(SACECursorSafeTooltip)
+		[SAssignNew(CustomContentHost,SBox)[CustomContent.ToSharedRef()]];
 	EnsureDefaultLayout();
 	ApplyRetailStyle();
 	auto Slate = Super::RebuildWidget();

@@ -17,14 +17,15 @@
 #include "ACEDatSubsystem.h"
 #include "Dat/ACEDatTextureResolver.h"
 #include "UI/ACEUIResourceResolver.h"
+#include "ACETestDatDirectory.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEIconRenderingTest, "ACE.RetailParity.IconRendering",
-    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACEIconRenderingTest::RunTest(const FString&)
 {
     auto* GI = NewObject<UGameInstance>();
     auto* Dat = NewObject<UACEDatSubsystem>(GI);
-    if (!TestTrue(TEXT("Retail DAT opens"), Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))) return false;
+    if (!TestTrue(TEXT("Retail DAT opens"), Dat->LoadDatDirectory(ACETestDatDirectory()))) return false;
     ON_SCOPE_EXIT { Dat->Deinitialize(); };
     auto* Resources = NewObject<UACEUIResourceResolver>(); Resources->Initialize(Dat);
     auto* Decoder = Dat->GetTextureResolver();

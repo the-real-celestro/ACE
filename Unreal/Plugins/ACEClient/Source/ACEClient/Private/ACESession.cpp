@@ -2348,6 +2348,7 @@ void FACESession::HandleObjectCreate(FACEBinaryReader& Reader, bool bForceRecrea
 	}
 
 	UpsertWorldObject(Obj, bForceRecreate);
+	if(bForceRecreate)OnItemRefreshed.Broadcast(Obj.Guid);
 	ReplayObjectPhysicsEvents(Obj.Guid);
 	Log(FString::Printf(TEXT("ObjectCreate '%s' guid=0x%08X setup=0x%08X parent=0x%08X loc=%d animParts=%d wcid=%d type=0x%08X desc=0x%08X physics=0x%08X placement=%d motionTable=0x%08X motion=0x%08X style=0x%08X usable=0x%08X"),
 		*Obj.Name, Obj.Guid, Obj.SetupId, Obj.ParentGuid, Obj.ParentLocation,

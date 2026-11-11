@@ -23,6 +23,9 @@
 #include "ACERetailPaperDoll.h"
 #include "ACERetailObjectNames.h"
 #include "ACEInventoryRules.h"
+#include "ACELootQualitySubsystem.h"
+#include "UI/ACELootIconOverlay.h"
+#include "UI/ACELootPresentation.h"
 #include "ACECharacterOptions.h"
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACEUIElementManager.h"
@@ -680,6 +683,12 @@ void UACEUIGameplayBinder::SetRetailTooltip(UWidget* Widget, const FText& Text)
 
 void UACEUIGameplayBinder::RefreshDesktopHUD()
 {
+	if(Client)if(auto* Loot=Client->GetGameInstance()->GetSubsystem<UACELootQualitySubsystem>())
+		if(LastLootQualityRevision!=Loot->Revision)
+		{
+			LastLootQualityRevision=Loot->Revision;
+			LastInventoryOverlayHash=LastVendorOverlayHash=LastLootOverlayHash=~uint64(0);
+		}
 	if (!bBound || !Canvas || !Manager) return;
 	Manager->BeginNameLookupPass();
 	ON_SCOPE_EXIT { if (Manager) Manager->EndNameLookupPass(); };
@@ -8515,7 +8524,7 @@ void UACEUIGameplayBinder::RefreshShortcutOverlays()
 		PlaceShortcut(Bg, El, 0);
 		Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
 		SetItemSlotForeground(Icon, Obj);
-		SetRetailTooltip(Icon, Obj ? FText::FromString(ACERetailObjectNames::Name(*Obj)) : FText());
+		if(Obj)SetItemTooltip(Icon,*Obj);else SetRetailTooltip(Icon,FText());
 		PlaceShortcut(Icon, El, 1);
 		if (Number)
 		{
@@ -11993,6 +12002,7 @@ void UACEUIGameplayBinder::SetIconDid(UBorder* Border, int32 IconDid, FLinearCol
 	{
 		return;
 	}
+	if(Cast<UACELootIconOverlay>(Border->GetContent()))Border->ClearChildren();
 	FAceIconPaintCache& Cached = IconPaintCache.FindOrAdd(Border);
 	constexpr int32 IconStyleRev = 4;
 	const bool bWantClear = (IconDid == 0);
@@ -12051,6 +12061,7 @@ void UACEUIGameplayBinder::SetIconDid(UBorder* Border, int32 IconDid, FLinearCol
 void UACEUIGameplayBinder::SetSpellIcon(UBorder* Border, int32 SpellId)
 {
 	if (!Border || !Canvas || !Canvas->GetResourceResolver()) return;
+	if(Cast<UACELootIconOverlay>(Border->GetContent()))Border->ClearChildren();
 	UTexture2D* Texture = Canvas->GetResourceResolver()->ResolveSpellIcon(SpellId);
 	if (Texture && Border->Background.GetResourceObject() == Texture) return;
 	FSlateBrush Brush; Brush.SetResourceObject(Texture); Brush.ImageSize = FVector2D(32, 32);
@@ -12064,18 +12075,22 @@ void UACEUIGameplayBinder::SetItemSlotBackground(UBorder* Border, const FACEWorl
     if (!Border || !Canvas || !Canvas->GetResourceResolver()) return;
     if (!Item) { SetIconDid(Border, DidInvSlotBg); return; }
     UTexture2D* Texture = Canvas->GetResourceResolver()->ResolveItemBackground(Item->ItemType, Item->IconUnderlayId);
+    FLinearColor Tint=FLinearColor::White;
+    if(Client)if(auto* Loot=Client->GetGameInstance()->GetSubsystem<UACELootQualitySubsystem>())
+        if(Loot->Review(*Item).bCannotWield)Tint=FLinearColor(.52f,.13f,.48f,1.f);
+    Border->SetBrushColor(Tint);
     if (Border->Background.GetResourceObject() == Texture && Texture) return;
     FSlateBrush Brush;
     Brush.DrawAs = Texture ? ESlateBrushDrawType::Image : ESlateBrushDrawType::NoDrawType;
     Brush.SetResourceObject(Texture); Brush.ImageSize = FVector2D(32,32);
-    Border->SetBrush(Brush); Border->SetBrushColor(FLinearColor::White);
+    Border->SetBrush(Brush); Border->SetBrushColor(Tint);
     IconPaintCache.Remove(Border);
 }
 
 void UACEUIGameplayBinder::SetItemSlotForeground(UBorder* Border, const FACEWorldObject* Item)
 {
     if (!Border || !Canvas || !Canvas->GetResourceResolver()) return;
-    if (!Item) { SetIconDid(Border,0); return; }
+    if (!Item) { SetIconDid(Border,0);Border->ClearChildren();return; }
     // Retail marks salvage offers with the same trade-state overlay as sale offers.
     const bool bOffered = SalvageQueueGuids.Contains(Item->Guid)
         || (Client && Client->GetTradeSelfItems().Contains(Item->Guid))
@@ -12083,6 +12098,17 @@ void UACEUIGameplayBinder::SetItemSlotForeground(UBorder* Border, const FACEWorl
             [Item](const TPair<int32,int32>& Entry) { return Entry.Value == Item->Guid; }));
     UTexture2D* Texture = Canvas->GetResourceResolver()->ResolveItemForeground(Item->IconId,Item->IconOverlayId,Item->UiEffects,bOffered,
         Item->Structure,Item->MaxStructure);
+    if(Client)if(auto* Loot=Client->GetGameInstance()->GetSubsystem<UACELootQualitySubsystem>())
+    {
+        const auto& Review=Loot->Review(*Item);
+        if(Review.bEquipment)
+        {
+            auto* Mark=Cast<UACELootIconOverlay>(Border->GetContent());
+            if(!Mark){Mark=NewObject<UACELootIconOverlay>(Border);Mark->SetVisibility(ESlateVisibility::HitTestInvisible);Border->SetContent(Mark);Border->SetPadding(FMargin(0));}
+            Mark->SetReview(Review,Texture);
+        }
+        else Border->ClearChildren();
+    }
     const float Flash = LastSelection.bValid && Item->Guid == LastSelection.Guid
         ? FMath::Clamp(float((SelectionFlashUntil - FPlatformTime::Seconds()) / .4),0.f,1.f) : 0.f;
     Border->SetBrushColor(FLinearColor(1.f+Flash,1.f+Flash,1.f+Flash,1));
@@ -12092,6 +12118,16 @@ void UACEUIGameplayBinder::SetItemSlotForeground(UBorder* Border, const FACEWorl
     Brush.SetResourceObject(Texture); Brush.ImageSize = FVector2D(32,32);
     Border->SetBrush(Brush); Border->SetBrushColor(FLinearColor::White);
     IconPaintCache.Remove(Border);
+}
+
+void UACEUIGameplayBinder::SetItemTooltip(UWidget* Widget,const FACEWorldObject& Item)
+{
+    if(Client)if(auto* Loot=Client->GetGameInstance()->GetSubsystem<UACELootQualitySubsystem>())
+    {
+        ACELootPresentation::Tooltip(Widget,FormatItemStackName(Item),Item,Loot->Review(Item),Canvas?Canvas->GetResourceResolver():nullptr);
+        return;
+    }
+    SetRetailTooltip(Widget,FText::FromString(FormatItemStackName(Item)));
 }
 
 bool UACEUIGameplayBinder::EnsurePaperDollPreviewRig()
@@ -13113,7 +13149,7 @@ void UACEUIGameplayBinder::RefreshInventoryOverlays()
 			{
 				Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
 				SetItemSlotForeground(Icon, Item);
-				SetRetailTooltip(Icon, FText::FromString(ACERetailObjectNames::Name(*Item)));
+				SetItemTooltip(Icon, *Item);
 				Canvas->PlaceWidgetAtElement(Icon, El, OverlayZ);
 			}
 			else
@@ -13441,7 +13477,7 @@ void UACEUIGameplayBinder::RefreshInventoryOverlays()
 				}
 				if (SlotObj)
 				{
-					SetRetailTooltip(Icon, FText::FromString(FormatItemStackName(*SlotObj)));
+					SetItemTooltip(Icon, *SlotObj);
 				}
 				else
 				{
@@ -15583,7 +15619,7 @@ void UACEUIGameplayBinder::RefreshExternalContainerOverlays()
 		Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
 		if (Guid != 0)
 		{
-			SetRetailTooltip(Icon, FText::FromString(ACERetailObjectNames::Name(Items[Idx])));
+			SetItemTooltip(Icon, Items[Idx]);
 		}
 		else
 		{
@@ -15789,7 +15825,7 @@ void UACEUIGameplayBinder::RefreshVendorOverlays()
 		PlaceCell(Bg, CellX, CellY, OverlayZ);
 		SetItemSlotForeground(Icon, &Items[Idx]);
 		Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
-		SetRetailTooltip(Icon, FText::FromString(ACERetailObjectNames::Name(Items[Idx])));
+		SetItemTooltip(Icon, Items[Idx]);
 		Icon->SetRenderOpacity(Items[Idx].Guid == FocusGuid ? 1.f : 0.85f);
 		PlaceCell(Icon, CellX, CellY, OverlayZ + 1);
 		if (Items[Idx].Guid == FocusGuid)
@@ -15985,7 +16021,7 @@ void UACEUIGameplayBinder::RefreshTradeOverlays()
 			SetItemSlotForeground(Icon,bItem ? &Item : nullptr);
 			Bg->SetVisibility(ESlateVisibility::HitTestInvisible);
 			Icon->SetVisibility(bItem ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
-			SetRetailTooltip(Icon, FText::FromString(ACERetailObjectNames::Name(Item)));
+			SetItemTooltip(Icon, Item);
 			Count->SetText(FText::AsNumber(Item.StackSize));
 			Count->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Bold"), 7));
 			Count->SetColorAndOpacity(TextWhite);

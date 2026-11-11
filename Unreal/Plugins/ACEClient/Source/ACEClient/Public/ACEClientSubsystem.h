@@ -38,6 +38,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FACERoutedChatMessageDyn, const FS
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FACEVitalsUpdatedDyn, const FACEPlayerVitals&, Vitals);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FACEObjectHealthDyn, int32, ObjectGuid, float, HealthFraction);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FACEAppraisalDyn, const FACEAppraisalInfo&, Appraisal);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FACEItemRefreshDyn, int32, ObjectGuid);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FACESelectionChangedDyn, const FACESelectedObject&, Selection);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FACELogMessageDyn, const FString&, Message);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FACEExternalContainerOpenedDyn, int32, Guid);
@@ -180,6 +181,7 @@ public:
 	FACEAppraisalDyn OnAppraisal;
 	/** All appraisal responses, including background plugin requests. */
 	UPROPERTY() FACEAppraisalDyn OnAppraisalObserved;
+	UPROPERTY() FACEItemRefreshDyn OnItemRefreshed;
 	void RequestBackgroundAppraisal(int32 Guid);
 	TSet<int32> BackgroundAppraisals;
 

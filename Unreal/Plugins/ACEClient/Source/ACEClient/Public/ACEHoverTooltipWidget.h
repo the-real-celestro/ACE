@@ -23,6 +23,7 @@ public:
 	static constexpr uint32 OptionsTemplate = 0x10000397;
 	static constexpr uint32 MapTemplate = 0x10000398;
 	static void SetWidgetTooltip(UWidget* Widget, const FText& Text, uint32 TemplateId = OptionsTemplate);
+	static void SetWidgetContentTooltip(UWidget* Widget, const FText& AccessibleText, TSharedRef<SWidget> Content);
 	void SetResources(UACEUIResourceResolver* InResources);
 	void SetTooltipText(const FString& Text, uint32 TemplateId = ObjectTemplate);
 	void SetTooltipScreenPosition(const FVector2D& CursorPixels);
@@ -49,4 +50,6 @@ protected:
 	UPROPERTY() TObjectPtr<UACEUIResourceResolver> Resources;
 	TSharedPtr<FACEUIElement> Template;
 	uint32 CurrentTemplate = ObjectTemplate;
+	TSharedPtr<SWidget> CustomContent;
+	TSharedPtr<class SBox> CustomContentHost;
 };

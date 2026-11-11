@@ -20,6 +20,7 @@ void UACEUIResourceResolver::Initialize(UACEDatSubsystem* InDat)
 	DidMaps.Reset();
 	EnumStrings.Reset(); BaseEnumMaps.Reset();
 	ItemCompositeCache.Reset();
+	ItemEffectColors.Reset();
 	if (Dat && Dat->GetTextureResolver())
 	{
 		FontRenderer = MakeUnique<FACEDatFontRenderer>(Dat->GetTextureResolver());
@@ -28,6 +29,7 @@ void UACEUIResourceResolver::Initialize(UACEDatSubsystem* InDat)
 
 void UACEUIResourceResolver::Shutdown()
 {
+	ItemEffectColors.Reset();
 	SpellIconCache.Reset(); RadarMasks.Reset();
 	PaperDollClickPixels.Reset();
 	PaperDollClickSize = FIntPoint::ZeroValue;
@@ -424,6 +426,23 @@ UTexture2D* UACEUIResourceResolver::ResolveItemBackground(uint32 ItemType,uint32
 	if (DecodeIcon(Resolver,UnderlayId,Underlay)) OverIcon(Pixels,Underlay);
 	auto* Texture=FACEDatTextureResolver::CreateTransientRgbaUiIcon(32,32,Pixels);
 	if (Texture) ItemCompositeCache.Add(Key,Texture); return Texture;
+}
+
+FLinearColor UACEUIResourceResolver::ResolveItemEffectColor(uint32 Effects)
+{
+	if(const auto* Found=ItemEffectColors.Find(Effects))return *Found;
+	FColor Best=FColor::White;int32 Chroma=0;
+	if(Dat&&Dat->GetTextureResolver())
+	{
+		TArray<FColor> Pixels;
+		const uint32 Id=ResolveMappedDid(0x25000009,Effects?FMath::CountTrailingZeros(Effects)+1:33,33);
+		if(DecodeIcon(Dat->GetTextureResolver(),Id,Pixels))for(const auto& Pixel:Pixels)
+		{
+			const int32 Score=(FMath::Max3(Pixel.R,Pixel.G,Pixel.B)-FMath::Min3(Pixel.R,Pixel.G,Pixel.B))*Pixel.A;
+			if(Score>Chroma){Chroma=Score;Best=Pixel;}
+		}
+	}
+	return ItemEffectColors.Add(Effects,FLinearColor::FromSRGBColor(Best));
 }
 
 UTexture2D* UACEUIResourceResolver::ResolveItemForeground(uint32 IconId,uint32 OverlayId,uint32 Effects,bool bForSale,

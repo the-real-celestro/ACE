@@ -1,0 +1,14 @@
+{
+  "source_revision": "5515033b8ea633733da857f176e6a8da16fc38e4",
+  "world_release": "v0.9.296",
+  "world_sha256": "7f58832a326526f72321d3ce0ddf463fe80cef2b12a08090dbdd03964ba021b4",
+  "weapon_variants": 41,
+  "template_memberships": 472,
+  "cohorts_across_eligible_tiers": 333,
+  "native_spell_effects": 4395,
+  "cantrip_effects": 297,
+  "armor_templates": 216,
+  "armor_cohorts": 195,
+  "output_sha256": "a52be0e09cf54b87aeea91f5c5cf65a673aed3f306d604cfd56c1490ce3ac124",
+  "scope": "Ordinary public ACE generation, quality modifier zero; custom/fixed items or unsupported dimensions must remain unrated."
+}

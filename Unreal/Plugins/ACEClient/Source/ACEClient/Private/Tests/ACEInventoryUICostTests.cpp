@@ -7,7 +7,7 @@
 #include "Engine/GameInstance.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEInventoryUICostTest, "ACE.Performance.InventoryUI",
-    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACEInventoryUICostTest::RunTest(const FString&)
 {
     auto* GI = NewObject<UGameInstance>(); GI->Init();

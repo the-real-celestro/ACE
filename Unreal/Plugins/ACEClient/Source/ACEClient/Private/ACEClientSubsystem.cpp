@@ -145,6 +145,7 @@ void UACEClientSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		// That must not consume the reply intended for the open inspection panel.
 		if (!bBackground || Info.ObjectGuid == IdentifyRequestGuid) OnAppraisal.Broadcast(Info);
 	});
+	Session->OnItemRefreshed.AddLambda([this](int32 Guid){OnItemRefreshed.Broadcast(Guid);});
 	Session->OnSelectionChanged.AddLambda([this](const FACESelectedObject& Sel)
 	{
 		OnSelectionChanged.Broadcast(Sel);

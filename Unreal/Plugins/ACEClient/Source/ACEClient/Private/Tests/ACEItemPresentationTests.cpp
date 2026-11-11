@@ -12,6 +12,7 @@
 #include "UI/ACERetailObjectNames.h"
 #include "UI/ACEAppraisalFormatting.h"
 #include "UI/ACERadarColors.h"
+#include "ACETestDatDirectory.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEItemPresentationTest, "ACE.RetailParity.ItemPresentation",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
@@ -19,7 +20,7 @@ bool FACEItemPresentationTest::RunTest(const FString&)
 {
     auto* GI = NewObject<UGameInstance>();
     auto* Dat = NewObject<UACEDatSubsystem>(GI);
-    if (!TestTrue(TEXT("Retail DAT opens"), Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))) return false;
+    if (!TestTrue(TEXT("Retail DAT opens"), Dat->LoadDatDirectory(ACETestDatDirectory()))) return false;
     ON_SCOPE_EXIT { Dat->Deinitialize(); };
     auto* Resources = NewObject<UACEUIResourceResolver>(); Resources->Initialize(Dat);
     auto* Client = NewObject<UACEClientSubsystem>(GI); Client->Session = MakeShared<FACESession>();

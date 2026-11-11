@@ -41,6 +41,8 @@ public:
 	UTexture2D* ResolveItemBackground(uint32 ItemType, uint32 UnderlayId);
 	UTexture2D* ResolveItemForeground(uint32 IconId, uint32 OverlayId, uint32 Effects, bool bForSale = false,
 		int32 Structure = 0, int32 MaxStructure = 0);
+	/** Representative saturated pixel from the same authored DAT effect used on icons. */
+	FLinearColor ResolveItemEffectColor(uint32 Effects);
 	/** Retail power background, spell mask, beneficial/harmful effect and target overlay. */
 	UTexture2D* ResolveSpellIcon(uint32 SpellId);
 	UTexture2D* ResolveFloatingHealthTexture(uint32 ResourceId);
@@ -98,4 +100,5 @@ private:
 	uint32 ResolveMappedDid(uint32 MapperId, uint32 Key, uint32 FallbackKey);
 	UPROPERTY() TMap<FString, TObjectPtr<UTexture2D>> ItemCompositeCache;
 	UPROPERTY() TMap<uint32, TObjectPtr<UTexture2D>> SpellIconCache;
+	TMap<uint32,FLinearColor> ItemEffectColors;
 };

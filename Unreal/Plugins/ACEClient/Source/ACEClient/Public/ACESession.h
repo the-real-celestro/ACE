@@ -45,6 +45,7 @@ DECLARE_MULTICAST_DELEGATE_ThreeParams(FACEOnPlayerTell, const FString&, const F
 DECLARE_MULTICAST_DELEGATE_OneParam(FACEOnVitalsUpdated, const FACEPlayerVitals&);
 DECLARE_MULTICAST_DELEGATE_TwoParams(FACEOnObjectHealth, int32 /*ObjectGuid*/, float /*HealthFraction*/);
 DECLARE_MULTICAST_DELEGATE_OneParam(FACEOnAppraisal, const FACEAppraisalInfo&);
+DECLARE_MULTICAST_DELEGATE_OneParam(FACEOnItemRefreshed, int32);
 DECLARE_MULTICAST_DELEGATE_OneParam(FACEOnSelectionChanged, const FACESelectedObject&);
 DECLARE_MULTICAST_DELEGATE_OneParam(FACEOnLogMessage, const FString&);
 DECLARE_MULTICAST_DELEGATE_OneParam(FACEOnViewContentsExternal, int32 /*ContainerGuid*/);
@@ -236,6 +237,7 @@ public:
 	void NotifyVitalsChanged();
 	FACEOnObjectHealth OnObjectHealth;
 	FACEOnAppraisal OnAppraisal;
+	FACEOnItemRefreshed OnItemRefreshed;
 	FACEOnSelectionChanged OnSelectionChanged;
 	FACEOnLogMessage OnLog;
 	FACEOnViewContentsExternal OnViewContentsExternal;
