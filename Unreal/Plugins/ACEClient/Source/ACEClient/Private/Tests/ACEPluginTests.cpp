@@ -720,6 +720,8 @@ bool FACEPluginHostTest::RunTest(const FString&)
         auto& Bar=Dock->Windows[TEXT("__bar")];const auto Position=Bar.Position;
         const int32 Count=Dock->Buttons->NumSlots();
         TestFalse(TEXT("Plugin bar defaults to vertical"),H->IsPluginBarHorizontal());
+        TestFalse(TEXT("Plugin bar defaults to the smaller size"),H->IsPluginBarLarge());
+        H->SetPluginBarLarge(true);
         H->SetPluginBarHorizontal(true);
         TestTrue(TEXT("Orientation updates the existing icon row and scroll direction"),Dock->Buttons->GetOrientation()==Orient_Horizontal&&Dock->BarScroll->GetOrientation()==Orient_Horizontal);
         TestEqual(TEXT("Horizontal orientation preserves every icon"),Dock->Buttons->NumSlots(),Count);
@@ -745,6 +747,8 @@ bool FACEPluginHostTest::RunTest(const FString&)
         TestTrue(TEXT("Name preference restores from disk"),H->ArePluginBarLabelsVisible());
         H->SetPluginBarLabelsVisible(false);H->SetPluginBarHorizontal(false);
         TestEqual(TEXT("Switching back to icons restores the compact column"),Bar.Size,FVector2D(74,26+58*Count));
+        H->SetPluginBarLarge(false);
+        TestEqual(TEXT("Small mode reduces the vertical bar footprint"),Bar.Size,FVector2D(56,26+40*Count));
     }
     P->Running=false;Dock->Toggle(TEXT("ucm"));
     TestTrue(TEXT("Second click reopens its existing window"),Dock->IsOpen(TEXT("ucm")));
@@ -1121,11 +1125,21 @@ bool FACEPluginBarPresentationTest::RunTest(const FString&)
     auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);
     ON_SCOPE_EXIT{Target->ReleaseResource();};
     auto Draw=[&]{for(int32 Pass=0;Pass<3;++Pass){++GFrameCounter;Renderer.DrawWidget(Target,Dock,Size,0);FlushRenderingCommands();}};
-    for(bool Horizontal:{false,true})
+    TestFalse(TEXT("Fresh profiles use small plugin-bar icons"),H->IsPluginBarLarge());
+    for(bool Large:{false,true})for(bool Horizontal:{false,true})
     {
-        H->SetPluginBarHorizontal(Horizontal);Draw();
+        H->SetPluginBarLarge(Large);H->SetPluginBarHorizontal(Horizontal);Draw();
+        const int32 Count=Dock->Buttons->NumSlots();
+        const auto& Bar=Dock->Windows.FindChecked(TEXT("__bar"));
+        const FVector2D Expected=Horizontal?FVector2D(8+(Large?58:40)*Count,Large?92:74)
+            :FVector2D(Large?74:56,26+(Large?58:40)*Count);
+        TestEqual(TEXT("Live size/orientation toggles resize the existing bar"),Bar.Size,Expected);
         auto Button=Find(Dock,TEXT("PluginOptions"));
         if(!TestTrue(TEXT("Real launcher settings button is rendered"),Button.IsValid()))return false;
+        TestTrue(TEXT("Size toggle updates actual button geometry"),Button->GetCachedGeometry().GetLocalSize().Equals(FVector2D(Large?52:36,Large?52:36),.01));
+        auto Icon=Find(Dock,TEXT("PluginBarIcon.__manager"));
+        if(TestTrue(TEXT("Launcher icon is measurable"),Icon.IsValid()))
+            TestTrue(TEXT("Size toggle updates actual icon geometry"),Icon->GetCachedGeometry().GetLocalSize().Equals(FVector2D(Large?36:26,Large?36:26),.01));
         const FVector2D At=Dock->GetCachedGeometry().AbsoluteToLocal(Button->GetCachedGeometry().LocalToAbsolute(FVector2D(6,6)));
         const int32 X=FMath::FloorToInt(At.X),Y=FMath::FloorToInt(At.Y);
         if(!TestTrue(TEXT("Background sample lies inside the render target"),X>=0&&X<640&&Y>=0&&Y<480))return false;
@@ -1133,10 +1147,16 @@ bool FACEPluginBarPresentationTest::RunTest(const FString&)
         Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags);
         if(!TestEqual(TEXT("Launcher render target has the expected pixel count"),Pixels.Num(),640*480))return false;
         const FColor Fill=Pixels[Y*640+X];
-        TestTrue(TEXT("Actual Slate button stays dark navy in both orientations"),Fill.R<120&&Fill.G<140&&Fill.B<180&&Fill.A>200);
+        TestTrue(TEXT("Actual Slate button stays dark navy in both sizes and orientations"),Fill.R<120&&Fill.G<140&&Fill.B<180&&Fill.A>200);
         TArray64<uint8> PNG;FImageUtils::PNGCompressImageArray(640,480,Pixels,PNG);
-        FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/FString::Printf(TEXT("Automation/PluginBar-Checked-%s.png"),Horizontal?TEXT("Horizontal"):TEXT("Vertical"))));
+        FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/FString::Printf(TEXT("Automation/PluginBar-Checked-%s-%s.png"),Large?TEXT("Large"):TEXT("Small"),Horizontal?TEXT("Horizontal"):TEXT("Vertical"))));
     }
+    FString Saved;TestTrue(TEXT("Bar preferences save to disk"),FFileHelper::LoadFileToString(Saved,*(Root/TEXT("settings.json"))));
+    H->Settings=Json(*Saved);
+    TestTrue(TEXT("Size and orientation preferences restore together"),H->IsPluginBarLarge()&&H->IsPluginBarHorizontal());
+    H->SetPluginBarMinimized(true);H->SetPluginBarLarge(false);
+    TestEqual(TEXT("Size changes preserve the collapsed handle"),Dock->DisplaySize(Dock->Windows.FindChecked(TEXT("__bar"))),FVector2D(70,18));
+    H->SetPluginBarMinimized(false);
     const FModifierKeysState Ctrl(false,false,true,false,false,false,false,false,false);
     const FModifierKeysState RightCtrl(false,false,false,true,false,false,false,false,false);
     TestTrue(TEXT("Slate Control reveals controls without gameplay key delivery"),ACEInputBindings::QuickShowDown(PC,Ctrl));

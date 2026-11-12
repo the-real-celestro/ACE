@@ -629,11 +629,15 @@ void SACEPluginDesktop::Refresh()
     Layout(Windows.FindChecked(BarId));
     const bool Horizontal=Host->IsPluginBarHorizontal();
     const bool Labels=Host->ArePluginBarLabelsVisible();
+    const bool Large=Host->IsPluginBarLarge();
+    const float TilePadding=Large?3.f:2.f;
     const float TextScale=FMath::Max(1.f,ACERuntimeOptions::PluginTextScale());
-    const FVector2D TileSize=Labels?(Horizontal?FVector2D(96,78):FVector2D(208,56))*TextScale:FVector2D(52,52);
+    const FVector2D TileSize=Labels?(Horizontal?FVector2D(96,Large?78:66):FVector2D(208,Large?56:40))*TextScale
+        :FVector2D(Large?52:36,Large?52:36);
     FString Next=(Horizontal?FString(TEXT("horizontal|")):FString(TEXT("vertical|")))+FString::FromInt(Host->GetPluginOrderRevision())+TEXT("|");TSet<FString> Enabled;
     for(auto P:Host->Plugins)if(P->Enabled){Next+=P->Id+(Host->IsPluginOnBar(P->Id)?TEXT("|"):TEXT("~|"));Enabled.Add(P->Id);}
-    Next+=FACEPluginStyle::ThemeName()+(Labels?TEXT("|labels|"):TEXT("|icons|"))+FString::SanitizeFloat(TextScale);
+    Next+=FACEPluginStyle::ThemeName()+(Labels?TEXT("|labels|"):TEXT("|icons|"))
+        +(Large?TEXT("large|"):TEXT("small|"))+FString::SanitizeFloat(TextScale);
     if(Host->Plugins.ContainsByPredicate([](const auto& P){return P->Id==TEXT("ucm");}))Enabled.Add(TEXT("ucm.log"));
     for(const TCHAR* Id:{TEXT("ucm.log"),TEXT("waypoint.map")})
         if((Enabled.Contains(Id)||(FString(Id)==TEXT("waypoint.map")&&Enabled.Contains(TEXT("waypoint"))))
@@ -665,8 +669,8 @@ void SACEPluginDesktop::Refresh()
             &&!(Id==TEXT("waypoint.map")&&Enabled.Contains(TEXT("waypoint"))))continue;
         // "Show on plugin bar" (Plugin Manager) hides an enabled plugin's button only.
         if(!Manager&&!Host->IsPluginOnBar(Id.StartsWith(TEXT("waypoint."))?FString(TEXT("waypoint")):Id==TEXT("ucm.log")?FString(TEXT("ucm")):Id))continue;
-        const float IconSize=Labels?32.f:36.f;
-        auto Icon=SNew(SBox).WidthOverride(IconSize).HeightOverride(IconSize)
+        const float IconSize=Large?(Labels?32.f:36.f):(Labels?24.f:26.f);
+        auto Icon=SNew(SBox).Tag(FName(*(TEXT("PluginBarIcon.")+Id))).WidthOverride(IconSize).HeightOverride(IconSize)
             [SNew(SScaleBox).Stretch(EStretch::ScaleToFit)[WindowIcon(Host.Get(),Id)]];
         const auto Open=TAttribute<bool>::CreateLambda([this,Id,Manager]{return Manager?Host.IsValid()&&Host->IsManagerOpen():IsOpen(Id);});
         const auto Title=TAttribute<FText>::CreateLambda([P,Id,Manager]{return FText::FromString(Manager?TEXT("Plugins"):P?P->DisplayTitle():Id==TEXT("ucm.log")?TEXT("UCM Log"):TEXT("Map"));});
@@ -687,7 +691,7 @@ void SACEPluginDesktop::Refresh()
                     [SNew(STextBlock).Text(FText::FromString(TEXT("OPEN"))).Font(FCoreStyle::GetDefaultFontStyle("Bold",10))
                         .ColorAndOpacity(FLinearColor::White).Visibility_Lambda([Open]{return Open.Get()?EVisibility::HitTestInvisible:EVisibility::Hidden;})];
         }
-        auto Button=SNew(SPluginLauncherButton).ContentPadding(FMargin(8,6)).Tag(Manager?FName(TEXT("PluginOptions")):FName(*(TEXT("PluginBarButton.")+Id)))
+        auto Button=SNew(SPluginLauncherButton).ContentPadding(Large?FMargin(8,6):FMargin(5,4)).Tag(Manager?FName(TEXT("PluginOptions")):FName(*(TEXT("PluginBarButton.")+Id)))
                 .HAlign(Labels?HAlign_Fill:HAlign_Center).VAlign(Labels?VAlign_Fill:VAlign_Center)
                 .Cursor(EMouseCursor::Default).ButtonStyle(&SPluginLauncherButton::ClearStyle()).IsFocusable(false).AllowDragDrop(true)
                 .OnSlateButtonDragDetected_Lambda([H=Host,Id](const FGeometry&,const FPointerEvent&){return ACEPluginOrder::BeginDrag(H.Get(),Id,BarId);})
@@ -700,7 +704,7 @@ void SACEPluginDesktop::Refresh()
                         Tip+=TEXT("\nClick to open/close the editor. This does not toggle looting.\nUCM looting: ")+FString(Looting?TEXT("enabled"):TEXT("disabled"));
                     }
                     else if(P)Tip+=TEXT("\nClick to show/hide\n")+P->Status;
-                    return FText::FromString(Tip+TEXT("\nRight-click for pin / unpin and settings.\nDrag to reorder while unlocked. Hold Quick-show if pinned."));
+                    return FText::FromString(Tip+TEXT("\nRight-click for bar layout, size, pin / unpin and settings.\nDrag to reorder while unlocked. Hold Quick-show if pinned."));
                 })))
                 .OnClicked_Lambda([this,Id,Manager](){if(Manager)Host->TogglePanel();else Toggle(Id);return FReply::Handled();})[Content];
         Button->SetIdentity(Id,Open,Horizontal);
@@ -708,6 +712,17 @@ void SACEPluginDesktop::Refresh()
         {
             const auto Owner=Weak.Pin();if(!H.IsValid()||!Owner)return FReply::Unhandled();
             FMenuBuilder Menu(true,nullptr);
+            Menu.AddMenuEntry(FText::FromString(TEXT("Horizontal plugin bar")),
+                FText::FromString(TEXT("On: horizontal row. Off: vertical column.")),FSlateIcon(),
+                FUIAction(FExecuteAction::CreateLambda([H]{if(H.IsValid())H->SetPluginBarHorizontal(!H->IsPluginBarHorizontal());}),
+                    FCanExecuteAction(),FIsActionChecked::CreateLambda([H]{return H.IsValid()&&H->IsPluginBarHorizontal();})),
+                NAME_None,EUserInterfaceActionType::ToggleButton);
+            Menu.AddMenuEntry(FText::FromString(TEXT("Large plugin bar")),
+                FText::FromString(TEXT("On: larger icons and buttons. Off: small, compact bar.")),FSlateIcon(),
+                FUIAction(FExecuteAction::CreateLambda([H]{if(H.IsValid())H->SetPluginBarLarge(!H->IsPluginBarLarge());}),
+                    FCanExecuteAction(),FIsActionChecked::CreateLambda([H]{return H.IsValid()&&H->IsPluginBarLarge();})),
+                NAME_None,EUserInterfaceActionType::ToggleButton);
+            Menu.AddMenuSeparator();
             // The pinned map is a separate overlay, controlled by Waypoint's
             // interface option rather than the normal window's pin setting.
             const bool MapOverlay=Id==TEXT("waypoint.map")&&H->WaypointOption(TEXT("dungeon_overlay"));
@@ -721,13 +736,13 @@ void SACEPluginDesktop::Refresh()
             FSlateApplication::Get().PushMenu(Owner.ToSharedRef(),FWidgetPath(),Menu.MakeWidget(),E.GetScreenSpacePosition(),FPopupTransitionEffect(FPopupTransitionEffect::ContextMenu));
             return FReply::Handled();
         });
-        Buttons->AddSlot().AutoSize().Padding(3)[SNew(SACEPluginOrderTarget).Host(Host.Get()).Id(Id).LockId(BarId).Horizontal(Horizontal)
+        Buttons->AddSlot().AutoSize().Padding(TilePadding)[SNew(SACEPluginOrderTarget).Host(Host.Get()).Id(Id).LockId(BarId).Horizontal(Horizontal)
             .Tag(FName(*(TEXT("PluginBarOrder.")+Id)))
             [SNew(SBox).WidthOverride(TileSize.X).HeightOverride(TileSize.Y).Clipping(EWidgetClipping::ClipToBounds)[Button]]];
     }
     auto& Bar=Windows.FindChecked(BarId);
-    Bar.Size=Horizontal?FVector2D(8+(TileSize.X+6)*Buttons->NumSlots(),34+TileSize.Y+6)
-        :FVector2D(16+TileSize.X+6,26+(TileSize.Y+6)*Buttons->NumSlots());
+    Bar.Size=Horizontal?FVector2D(8+(TileSize.X+2*TilePadding)*Buttons->NumSlots(),34+TileSize.Y+2*TilePadding)
+        :FVector2D(16+TileSize.X+2*TilePadding,26+(TileSize.Y+2*TilePadding)*Buttons->NumSlots());
     Layout(Bar);
 }
 
@@ -820,6 +835,16 @@ void UACEPluginSubsystem::SetPluginBarHorizontal(bool Horizontal)
 {
     if(!Settings)return;
     Settings->SetBoolField(TEXT("_plugin_bar_horizontal"),Horizontal);SaveSettings();
+    if(DesktopDock)DesktopDock->Refresh();
+}
+bool UACEPluginSubsystem::IsPluginBarLarge() const
+{
+    bool Large=false;if(Settings)Settings->TryGetBoolField(TEXT("_plugin_bar_large"),Large);return Large;
+}
+void UACEPluginSubsystem::SetPluginBarLarge(bool Large)
+{
+    if(!Settings)return;
+    Settings->SetBoolField(TEXT("_plugin_bar_large"),Large);SaveSettings();
     if(DesktopDock)DesktopDock->Refresh();
 }
 bool UACEPluginSubsystem::ArePluginBarLabelsVisible() const

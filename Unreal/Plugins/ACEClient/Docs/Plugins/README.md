@@ -223,8 +223,9 @@ lowering the limit below the enabled count leaves your current plugins unchanged
 This setting does not change the separate rule that only one automation policy
 can run at a time, alongside companion plugins.
 
-The plugin bar uses shaded, painted 36-pixel inventory-style icons in separated
-52-pixel buttons. Supplies uses a rainbow Prismatic Taper, ACPedia an open book,
+The plugin bar uses shaded, painted inventory-style icons. Small mode is the
+default: 26-pixel icons in separated 36-pixel buttons. **Large plugin bar** switches
+to 36-pixel icons in 52-pixel buttons. Supplies uses a rainbow Prismatic Taper, ACPedia an open book,
 and each built-in has its own silhouette. The same artwork appears in window
 titles and Plugin Manager. The shared transparent atlas is packaged with the
 client; custom plugin PNGs still take precedence, and vector emblems remain as
@@ -239,7 +240,10 @@ collapses it to a line. Hide or restore the bar with **Show plugin bar** in
 switches between a horizontal row and the default vertical column. The orientation
 is saved across logins. Icon-only buttons stay square in either direction; a visible
 scrollbar appears when the bar cannot fit on screen.
-Right-click a bar button for **Pin window**, **Unpin window**, and settings.
+Right-click any bar icon for **Horizontal plugin bar** (off = vertical),
+**Large plugin bar** (off = small), **Pin window**, **Unpin window**, and settings.
+The same layout and size switches are in Plugin Manager's appearance settings.
+Both update the current bar immediately and are saved across logins.
 The map also offers **Unpin map from interface** when its overlay is active,
 and an **Unpin** button on the expanded overlay itself. Holding Control
 (Control or Command on macOS) reveals pinned controls even while a chat or

@@ -15,7 +15,8 @@ the pinned map's Unpin button while the global UI lock is active.
 KeyboardBindings covers Slate-owned Control/Command holds with text focus,
 releasing a modifier despite stale gameplay input, and custom rebinding.
 `ACE.Plugins.BarPresentation` is the focused preview check: it renders the actual
-bar in both orientations, reveals a pinned ledger using Slate modifier state,
+bar in both sizes and orientations, checks actual button/icon geometry and saved
+preferences, preserves the minimized handle when changing sizes, reveals a pinned ledger using Slate modifier state,
 clicks its real Unpin control, verifies release handling and clicks the map's
 Unpin button. It uses isolated settings and avoids unrelated UCM profile schemas
 and native IME windows. UV comparisons in IconArtwork allow 1e-6 of float rounding

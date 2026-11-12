@@ -284,6 +284,8 @@ public:
     void SetPluginBarMinimized(bool Minimized);
     bool IsPluginBarHorizontal() const;
     void SetPluginBarHorizontal(bool Horizontal);
+    bool IsPluginBarLarge() const;
+    void SetPluginBarLarge(bool Large);
     bool ArePluginBarLabelsVisible() const;
     void SetPluginBarLabelsVisible(bool Labels);
     TArray<FString> PluginDisplayOrder() const;

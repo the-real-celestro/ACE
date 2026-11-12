@@ -7,12 +7,17 @@
 ## Changes to build
 
 - Shared transparent 20-icon painted atlas, staged as a runtime dependency.
-- Separated 52-pixel buttons with 36-pixel icons, horizontal/vertical layout,
+- Small by default: separated 36-pixel buttons with 26-pixel icons; optional
+  large mode retains 52-pixel buttons with 36-pixel icons. Horizontal/vertical layout,
   optional saved names, and open-window markers.
 - Explicit Slate background tint fixes white launcher tiles.
 - Control/Command reveal uses Slate modifier state while UI fields have focus.
 - Right-click pin/unpin controls and an explicit Unpin button on the expanded map.
 - Focused rendering, artwork, persistence and input regression checks.
+
+Right-click any bar icon to toggle **Horizontal plugin bar** (off = vertical)
+or **Large plugin bar** (off = small). Both switches also appear in Plugin
+Manager's appearance settings, apply immediately, and persist across logins.
 
 The feature diff excludes the new equipment-hover/spell-list work, TreeStats
 uploader implementation and generated runtime-material changes from the shared
@@ -45,7 +50,7 @@ The final isolated snapshot still needs the native build and renderer tests:
 the local attempt stopped before compilation because the restricted execution
 session could not write UnrealBuildTool's trace backup under the user's Library.
 
-For an in-game smoke test, inspect both bar orientations and icon-only mode,
+For an in-game smoke test, inspect both sizes and orientations and icon-only mode,
 toggle optional names, open/close plugins, and pin/unpin a window and map while
 the UI is locked and while a text field has focus. Verify saved settings after
 relaunch. Do not merge or package a release solely on the compile checks.

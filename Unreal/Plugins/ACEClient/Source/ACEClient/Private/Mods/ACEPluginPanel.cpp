@@ -338,8 +338,11 @@ namespace ACEPluginPanelPrivate
                 }),[this]{return Host.IsValid()&&Host->IsMatchWorldColor();},[this](bool V){if(Host.IsValid())Host->SetMatchWorldColor(V);},TEXT("PluginMatchWorld"))];
             Look->AddSlot().AutoHeight().Padding(0,8,0,0)[SwitchRow(TEXT("Show plugin bar"),FText::GetEmpty(),[this]{return Host.IsValid()&&Host->IsPluginBarVisible();},
                 [this](bool V){if(Host.IsValid())Host->SetPluginBarVisible(V);})];
-            Look->AddSlot().AutoHeight().Padding(0,8,0,0)[SwitchRow(TEXT("Horizontal plugin bar"),FText::GetEmpty(),[this]{return Host.IsValid()&&Host->IsPluginBarHorizontal();},
+            Look->AddSlot().AutoHeight().Padding(0,8,0,0)[SwitchRow(TEXT("Horizontal plugin bar"),FText::FromString(TEXT("On: horizontal row. Off: vertical column.")),[this]{return Host.IsValid()&&Host->IsPluginBarHorizontal();},
                 [this](bool V){if(Host.IsValid())Host->SetPluginBarHorizontal(V);},TEXT("PluginBarHorizontal"))];
+            Look->AddSlot().AutoHeight().Padding(0,8,0,0)[SwitchRow(TEXT("Large plugin bar"),FText::FromString(TEXT("On: bigger icons and buttons. Off: small (default).")),
+                [this]{return Host.IsValid()&&Host->IsPluginBarLarge();},
+                [this](bool V){if(Host.IsValid())Host->SetPluginBarLarge(V);},TEXT("PluginBarLarge"))];
             Look->AddSlot().AutoHeight().Padding(0,8,0,0)[SwitchRow(TEXT("Show plugin names"),FText::FromString(TEXT("Add names beside or below the icons.")),
                 [this]{return Host.IsValid()&&Host->ArePluginBarLabelsVisible();},
                 [this](bool V){if(Host.IsValid())Host->SetPluginBarLabelsVisible(V);},TEXT("PluginBarLabels"))];
@@ -445,6 +448,10 @@ namespace ACEPluginPanelPrivate
                     .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Arrange plugin icons in a horizontal row. Uncheck for a vertical column. Saved across logins."))))
                     .IsChecked_Lambda([this](){return Host->IsPluginBarHorizontal()?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
                     .OnCheckStateChanged_Lambda([this](ECheckBoxState S){Host->SetPluginBarHorizontal(S==ECheckBoxState::Checked);})[Label(TEXT("Horizontal plugin bar"),16)]);
+                Add(SNew(SCheckBox).Tag(TEXT("PluginBarLarge")).Style(&FACEPluginStyle::Current()->Check).Padding(FMargin(4,8))
+                    .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Use larger icons and buttons. Uncheck for the default small bar. Saved across logins."))))
+                    .IsChecked_Lambda([this](){return Host->IsPluginBarLarge()?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
+                    .OnCheckStateChanged_Lambda([this](ECheckBoxState S){Host->SetPluginBarLarge(S==ECheckBoxState::Checked);})[Label(TEXT("Large plugin bar"),16)]);
                 Add(SNew(SCheckBox).Tag(TEXT("PluginBarLabels")).Style(&FACEPluginStyle::Current()->Check).Padding(FMargin(4,8))
                     .IsChecked_Lambda([this](){return Host->ArePluginBarLabelsVisible()?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
                     .OnCheckStateChanged_Lambda([this](ECheckBoxState S){Host->SetPluginBarLabelsVisible(S==ECheckBoxState::Checked);})[Label(TEXT("Show plugin names"),16)]);
