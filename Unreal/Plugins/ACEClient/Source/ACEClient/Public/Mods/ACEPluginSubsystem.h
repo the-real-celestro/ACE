@@ -128,6 +128,7 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
     GENERATED_BODY()
     friend class FACEFoundryTest;
     friend class FACEPluginHostTest;
+    friend class FACEPluginBarPresentationTest;
     friend class FACEPluginLimitTest;
     friend class FACEUIWorkloadTest;
     friend class FACEUCMIdleWorkloadTest;
@@ -283,6 +284,8 @@ public:
     void SetPluginBarMinimized(bool Minimized);
     bool IsPluginBarHorizontal() const;
     void SetPluginBarHorizontal(bool Horizontal);
+    bool ArePluginBarLabelsVisible() const;
+    void SetPluginBarLabelsVisible(bool Labels);
     TArray<FString> PluginDisplayOrder() const;
     /** Plugin UI theme ("codex" default, or "original"); switching rebuilds open plugin windows. */
     FString GetPluginTheme() const;

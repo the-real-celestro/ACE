@@ -2,6 +2,7 @@
 #include "CoreMinimal.h"
 #include "Framework/Commands/InputChord.h"
 class APlayerController;
+class FModifierKeysState;
 namespace ACEInputBindings
 {
 constexpr int32 BindingSlots = 4; // Three retail mappings plus a separate controller mapping.
@@ -39,6 +40,8 @@ ACECLIENT_API FImportResult ImportRetailKeymapFile(const FString& Path);
 ACECLIENT_API bool ExportRetailKeymapFile(const FString& Path, FString& Error);
 ACECLIENT_API const TArray<FAction>& Actions();
 ACECLIENT_API bool Down(const APlayerController* PC, FKey DefaultKey);
+/** UI hold action: Slate owns modifier state even when a panel has keyboard focus. */
+ACECLIENT_API bool QuickShowDown(const APlayerController* PC, const FModifierKeysState& Modifiers);
 ACECLIENT_API bool Pressed(const APlayerController* PC, FKey DefaultKey);
 // Plugin editors use Slate text controls outside the native chat widget.
 ACECLIENT_API bool IsTextEntryFocused();

@@ -931,7 +931,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	if (Client) if (auto* Manager=Client->GetUIElementManager())
 		Manager->SetQuickShowUi(!bVR && Client->GetSessionState()==EACESessionState::InWorld
 			&& FSlateApplication::IsInitialized() && FSlateApplication::Get().IsActive()
-			&& ACEInputBindings::Down(this,ACEInputBindings::Action(TEXT("QuickShowUI"))));
+			&& ACEInputBindings::QuickShowDown(this,FSlateApplication::Get().GetModifierKeys()));
 	if (IsLocalController())
 	{
 		int32 Width=0,Height=0; GetViewportSize(Width,Height);

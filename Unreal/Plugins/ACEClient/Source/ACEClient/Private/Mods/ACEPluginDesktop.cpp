@@ -15,6 +15,7 @@
 #include "Engine/GameInstance.h"
 #include "Engine/GameViewportClient.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScaleBox.h"
@@ -51,6 +52,58 @@ namespace
     TSharedRef<STextBlock> Caption(const FString& Text, int32 Size = 12)
     { return SNew(SACEPluginText).Text(FText::FromString(Text)).Font(FCoreStyle::GetDefaultFontStyle("Regular",Size)); }
 
+    /** A launcher keeps its own contrast, rather than inheriting gold title-bar styling. */
+    class SPluginLauncherButton : public SButton
+    {
+    public:
+        using FArguments=SButton::FArguments;
+        void Construct(const FArguments& Args){SButton::Construct(Args);}
+        void SetIdentity(const FString& Id,TAttribute<bool> InOpen,bool InHorizontal)
+        {Accent=SACEPluginIcon::Accent(Id);Open=InOpen;Horizontal=InHorizontal;}
+        void SetContextMenu(TFunction<FReply(const FGeometry&,const FPointerEvent&)> Callback){ContextMenu=MoveTemp(Callback);}
+        virtual FReply OnMouseButtonDown(const FGeometry& G,const FPointerEvent& E) override
+        {
+            if(E.GetEffectingButton()==EKeys::RightMouseButton&&ContextMenu)return ContextMenu(G,E);
+            return SButton::OnMouseButtonDown(G,E);
+        }
+        static const FButtonStyle& ClearStyle()
+        {
+            static const FButtonStyle Style=[]
+            {
+                FButtonStyle S=FCoreStyle::Get().GetWidgetStyle<FButtonStyle>("Button");
+                S.SetNormal(FSlateNoResource()).SetHovered(FSlateNoResource()).SetPressed(FSlateNoResource())
+                    .SetDisabled(FSlateNoResource()).SetNormalPadding(FMargin(0)).SetPressedPadding(FMargin(0))
+                    .SetNormalForeground(FLinearColor::White).SetHoveredForeground(FLinearColor::White).SetPressedForeground(FLinearColor::White);
+                return S;
+            }();return Style;
+        }
+        virtual int32 OnPaint(const FPaintArgs& Args,const FGeometry& G,const FSlateRect& Cull,FSlateWindowElementList& Out,int32 Layer,const FWidgetStyle& Style,bool Enabled) const override
+        {
+            const bool Selected=Open.Get(false),Hovered=IsHovered();
+            const FLinearColor Fill(IsPressed()?FColor(9,19,33):Hovered?FColor(34,54,78):Selected?FColor(22,48,66):FColor(15,25,41));
+            const FLinearColor Edge=Hovered?FLinearColor(FColor(227,240,255)):Selected?Accent:FLinearColor(FColor(90,111,141));
+            const FSlateRoundedBoxBrush Tile(Fill,5.f,Edge,Selected||Hovered?2.f:1.f);
+            // MakeBox does not apply the brush's fill tint (SButton normally does).
+            FSlateDrawElement::MakeBox(Out,Layer,G.ToPaintGeometry(),&Tile,ESlateDrawEffect::None,Fill*Style.GetColorAndOpacityTint());
+            if(Selected)
+            {
+                const FVector2D Size=G.GetLocalSize();
+                const FSlateBrush* White=FCoreStyle::Get().GetBrush("WhiteBrush");
+                const FVector2D At=Horizontal?FVector2D(8,Size.Y-4):FVector2D(1,8);
+                const FVector2D Span=Horizontal?FVector2D(Size.X-16,3):FVector2D(3,Size.Y-16);
+                FSlateDrawElement::MakeBox(Out,Layer+1,G.ToPaintGeometry(Span,FSlateLayoutTransform(At)),White,ESlateDrawEffect::None,Accent*Style.GetColorAndOpacityTint());
+                // A separate white marker remains recognizable without color perception.
+                FSlateDrawElement::MakeBox(Out,Layer+1,G.ToPaintGeometry(FVector2D(5,5),FSlateLayoutTransform(FVector2D(Size.X-10,5))),White,ESlateDrawEffect::None,Style.GetColorAndOpacityTint());
+            }
+            return SButton::OnPaint(Args,G,Cull,Out,Layer+2,Style,Enabled);
+        }
+    private:
+        FLinearColor Accent=FLinearColor::White;
+        TAttribute<bool> Open;
+        bool Horizontal=false;
+        TFunction<FReply(const FGeometry&,const FPointerEvent&)> ContextMenu;
+    };
+
     /** Codex window backdrop: retail title plaque (0x06004D26 header, 42px) over the lobby's tinted
      *  window body, a navy wash and a 1px gold border. Opacity fades all of it; text is unaffected. */
     class SCodexChrome : public SLeafWidget
@@ -76,14 +129,9 @@ namespace
             {if(Brush&&Size.X>0&&Size.Y>0)FSlateDrawElement::MakeBox(Out,Layer,G.ToPaintGeometry(Size,FSlateLayoutTransform(Pos)),Brush,ESlateDrawEffect::None,Color*Mod);};
             if(Flat)
             {
-                // Use the actual retail blue window texture, independently of world tint.
-                // The blue glaze keeps the narrow bar recognizable beside the gold AC trim.
-                if(const FSlateBrush* Body=ACELobbyArt::TintedWindowBody(0))
-                    Box(Body,FVector2D::ZeroVector,S,FLinearColor(.7f,.85f,1.f,A));
-                else Box(White,FVector2D::ZeroVector,S,FLinearColor(FColor(14,33,73)).CopyWithNewOpacity(A));
-                Box(White,FVector2D::ZeroVector,S,FLinearColor(FColor(16,46,112)).CopyWithNewOpacity(.3f*A));
+                Box(White,FVector2D::ZeroVector,S,FLinearColor(FColor(8,15,27)).CopyWithNewOpacity(A));
                 const TArray<FVector2D> Border={FVector2D(.5,.5),FVector2D(S.X-.5,.5),FVector2D(S.X-.5,S.Y-.5),FVector2D(.5,S.Y-.5),FVector2D(.5,.5)};
-                FSlateDrawElement::MakeLines(Out,Layer+1,G.ToPaintGeometry(),Border,ESlateDrawEffect::None,FLinearColor(FColor(112,87,44)).CopyWithNewOpacity(A)*Mod,true,1.f);
+                FSlateDrawElement::MakeLines(Out,Layer+1,G.ToPaintGeometry(),Border,ESlateDrawEffect::None,FLinearColor(FColor(90,111,141)).CopyWithNewOpacity(A)*Mod,true,1.f);
                 return Layer+1;
             }
             const FACELobbyArt* Art=ACELobbyArt::Get();
@@ -367,8 +415,8 @@ void SACEPluginDesktop::Construct(const FArguments& Args)
         .CanManipulate([H=Host](){return H.IsValid()&&H->IsPluginBarUnlocked();})
         .Move([this](FVector2D D,bool Save){Move(BarId,D,Save);})
         .Raise([this](){Raise(BarId);})
-        [SAssignNew(BarScroll,SScrollBox).ScrollBarVisibility(EVisibility::Collapsed)
-            +SScrollBox::Slot()[SAssignNew(Buttons,SStackBox).Orientation(Orient_Vertical)]];
+        [SAssignNew(BarScroll,SScrollBox).ScrollBarVisibility(EVisibility::Visible).ScrollBarThickness(FVector2D(4,4)).ScrollBarPadding(FMargin(2))
+            +SScrollBox::Slot().Padding(4)[SAssignNew(Buttons,SStackBox).Orientation(Orient_Vertical)]];
     Canvas->AddSlot().Expose(Bar.Slot).Alignment(FVector2D::ZeroVector).ZOrder(10000)[Bar.Widget.ToSharedRef()];
     Windows.Add(BarId,Bar);
     Refresh();
@@ -537,6 +585,7 @@ void SACEPluginDesktop::Toggle(const FString& Id)
     FWindow W;W.Id=Id;W.Position=Host->GetPluginWindowPosition(Id,FVector2D(84+24*(Windows.Num()-1),80+24*(Windows.Num()-1)));W.Size=Host->GetPluginWindowPosition(PanelSizeKey(Id),FVector2D(780,700));
     const bool Arrow=Id==TEXT("waypoint.arrow");
     if(Id==TEXT("wiki"))W.Size=Host->GetPluginWindowPosition(PanelSizeKey(Id),FVector2D(520,540));
+    if(Id==TEXT("treestats"))W.Size=Host->GetPluginWindowPosition(PanelSizeKey(Id),FVector2D(460,330));
     const bool Dungeon=Id==TEXT("waypoint.dungeon");
     W.MapOverlay=Dungeon;
     const bool Ledger=UACEPluginSubsystem::IsLedger(Id);
@@ -579,9 +628,12 @@ void SACEPluginDesktop::Refresh()
     Windows.FindChecked(BarId).Widget->SetVisibility(Host->IsPluginBarVisible()?EVisibility::Visible:EVisibility::Collapsed);
     Layout(Windows.FindChecked(BarId));
     const bool Horizontal=Host->IsPluginBarHorizontal();
+    const bool Labels=Host->ArePluginBarLabelsVisible();
+    const float TextScale=FMath::Max(1.f,ACERuntimeOptions::PluginTextScale());
+    const FVector2D TileSize=Labels?(Horizontal?FVector2D(96,78):FVector2D(208,56))*TextScale:FVector2D(52,52);
     FString Next=(Horizontal?FString(TEXT("horizontal|")):FString(TEXT("vertical|")))+FString::FromInt(Host->GetPluginOrderRevision())+TEXT("|");TSet<FString> Enabled;
     for(auto P:Host->Plugins)if(P->Enabled){Next+=P->Id+(Host->IsPluginOnBar(P->Id)?TEXT("|"):TEXT("~|"));Enabled.Add(P->Id);}
-    Next+=FACEPluginStyle::ThemeName();
+    Next+=FACEPluginStyle::ThemeName()+(Labels?TEXT("|labels|"):TEXT("|icons|"))+FString::SanitizeFloat(TextScale);
     if(Host->Plugins.ContainsByPredicate([](const auto& P){return P->Id==TEXT("ucm");}))Enabled.Add(TEXT("ucm.log"));
     for(const TCHAR* Id:{TEXT("ucm.log"),TEXT("waypoint.map")})
         if((Enabled.Contains(Id)||(FString(Id)==TEXT("waypoint.map")&&Enabled.Contains(TEXT("waypoint"))))
@@ -613,12 +665,31 @@ void SACEPluginDesktop::Refresh()
             &&!(Id==TEXT("waypoint.map")&&Enabled.Contains(TEXT("waypoint"))))continue;
         // "Show on plugin bar" (Plugin Manager) hides an enabled plugin's button only.
         if(!Manager&&!Host->IsPluginOnBar(Id.StartsWith(TEXT("waypoint."))?FString(TEXT("waypoint")):Id==TEXT("ucm.log")?FString(TEXT("ucm")):Id))continue;
-        auto Icon=WindowIcon(Host.Get(),Id);
-        Buttons->AddSlot().AutoSize().Padding(1)[SNew(SACEPluginOrderTarget).Host(Host.Get()).Id(Id).LockId(BarId).Horizontal(Horizontal)
-            .Tag(FName(*(TEXT("PluginBarOrder.")+Id)))
-            [SNew(SOverlay)+SOverlay::Slot()[SNew(SBox).WidthOverride(32).HeightOverride(32)
-            [SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::IconButtonPadding)).Tag(Manager?FName(TEXT("PluginOptions")):FName(*(TEXT("PluginBarButton.")+Id)))
-                .Cursor(EMouseCursor::Default).ButtonStyle(FACEPluginStyle::IsCodex()?&SPluginFrame::TitleControlStyle():&DockButtonStyle()).IsFocusable(false).AllowDragDrop(true)
+        const float IconSize=Labels?32.f:36.f;
+        auto Icon=SNew(SBox).WidthOverride(IconSize).HeightOverride(IconSize)
+            [SNew(SScaleBox).Stretch(EStretch::ScaleToFit)[WindowIcon(Host.Get(),Id)]];
+        const auto Open=TAttribute<bool>::CreateLambda([this,Id,Manager]{return Manager?Host.IsValid()&&Host->IsManagerOpen():IsOpen(Id);});
+        const auto Title=TAttribute<FText>::CreateLambda([P,Id,Manager]{return FText::FromString(Manager?TEXT("Plugins"):P?P->DisplayTitle():Id==TEXT("ucm.log")?TEXT("UCM Log"):TEXT("Map"));});
+        TSharedRef<SWidget> Content=Icon;
+        if(Labels)
+        {
+            auto Name=SNew(STextBlock).Tag(FName(*(TEXT("PluginBarLabel.")+Id))).Text(Title)
+                .Font(FACEPluginStyle::ScaledFont(FCoreStyle::GetDefaultFontStyle("Bold",12)))
+                .ColorAndOpacity(FLinearColor(FColor(244,248,255))).AutoWrapText(true)
+                .Justification(Horizontal?ETextJustify::Center:ETextJustify::Left);
+            if(Horizontal)Content=SNew(SVerticalBox)
+                +SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)[Icon]
+                +SVerticalBox::Slot().FillHeight(1).VAlign(VAlign_Center).Padding(0,3,0,0)[Name];
+            else Content=SNew(SHorizontalBox)
+                +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[Icon]
+                +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(10,0,0,0)[Name]
+                +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(5,0,0,0)
+                    [SNew(STextBlock).Text(FText::FromString(TEXT("OPEN"))).Font(FCoreStyle::GetDefaultFontStyle("Bold",10))
+                        .ColorAndOpacity(FLinearColor::White).Visibility_Lambda([Open]{return Open.Get()?EVisibility::HitTestInvisible:EVisibility::Hidden;})];
+        }
+        auto Button=SNew(SPluginLauncherButton).ContentPadding(FMargin(8,6)).Tag(Manager?FName(TEXT("PluginOptions")):FName(*(TEXT("PluginBarButton.")+Id)))
+                .HAlign(Labels?HAlign_Fill:HAlign_Center).VAlign(Labels?VAlign_Fill:VAlign_Center)
+                .Cursor(EMouseCursor::Default).ButtonStyle(&SPluginLauncherButton::ClearStyle()).IsFocusable(false).AllowDragDrop(true)
                 .OnSlateButtonDragDetected_Lambda([H=Host,Id](const FGeometry&,const FPointerEvent&){return ACEPluginOrder::BeginDrag(H.Get(),Id,BarId);})
                 .ToolTip(FACEPluginStyle::Tooltip(TAttribute<FText>::CreateLambda([H=Host,P,Id,Manager]()
                 {
@@ -629,16 +700,34 @@ void SACEPluginDesktop::Refresh()
                         Tip+=TEXT("\nClick to open/close the editor. This does not toggle looting.\nUCM looting: ")+FString(Looting?TEXT("enabled"):TEXT("disabled"));
                     }
                     else if(P)Tip+=TEXT("\nClick to show/hide\n")+P->Status;
-                    return FText::FromString(Tip+TEXT("\nDrag to reorder while unlocked. Hold Quick-show if pinned."));
+                    return FText::FromString(Tip+TEXT("\nRight-click for pin / unpin and settings.\nDrag to reorder while unlocked. Hold Quick-show if pinned."));
                 })))
-                .OnClicked_Lambda([this,Id,Manager](){if(Manager)Host->TogglePanel();else Toggle(Id);return FReply::Handled();})[Icon]]]
-            // Codex: a 2px gold underline marks windows that are open.
-            +SOverlay::Slot().VAlign(VAlign_Bottom).HAlign(HAlign_Center)[SNew(SBox).WidthOverride(18).HeightOverride(2)
-                .Visibility_Lambda([this,Id,Manager]{return FACEPluginStyle::IsCodex()&&(Manager?Host.IsValid()&&Host->IsManagerOpen():IsOpen(Id))?EVisibility::HitTestInvisible:EVisibility::Collapsed;})
-                [SNew(SImage).Image(FCoreStyle::Get().GetBrush("WhiteBrush")).ColorAndOpacity(FLinearColor(.65f,.51f,.28f))]]]];
+                .OnClicked_Lambda([this,Id,Manager](){if(Manager)Host->TogglePanel();else Toggle(Id);return FReply::Handled();})[Content];
+        Button->SetIdentity(Id,Open,Horizontal);
+        Button->SetContextMenu([H=Host,Id,Weak=TWeakPtr<SWidget>(Button)](const FGeometry&,const FPointerEvent& E)
+        {
+            const auto Owner=Weak.Pin();if(!H.IsValid()||!Owner)return FReply::Unhandled();
+            FMenuBuilder Menu(true,nullptr);
+            // The pinned map is a separate overlay, controlled by Waypoint's
+            // interface option rather than the normal window's pin setting.
+            const bool MapOverlay=Id==TEXT("waypoint.map")&&H->WaypointOption(TEXT("dungeon_overlay"));
+            if(MapOverlay)
+                Menu.AddMenuEntry(FText::FromString(TEXT("Unpin map from interface")),FText::GetEmpty(),FSlateIcon(),
+                    FUIAction(FExecuteAction::CreateLambda([H]{if(H.IsValid())H->SetWaypointOption(TEXT("dungeon_overlay"),false);})));
+            Menu.AddMenuEntry(FText::FromString(H->IsPluginWindowPinned(Id)?TEXT("Unpin window"):TEXT("Pin window")),FText::GetEmpty(),FSlateIcon(),
+                FUIAction(FExecuteAction::CreateLambda([H,Id]{if(H.IsValid())H->SetPluginWindowPinned(Id,!H->IsPluginWindowPinned(Id));})));
+            Menu.AddMenuEntry(FText::FromString(TEXT("Plugin settings")),FText::GetEmpty(),FSlateIcon(),
+                FUIAction(FExecuteAction::CreateLambda([H,Id]{if(H.IsValid())H->OpenPluginSettings(Id);})));
+            FSlateApplication::Get().PushMenu(Owner.ToSharedRef(),FWidgetPath(),Menu.MakeWidget(),E.GetScreenSpacePosition(),FPopupTransitionEffect(FPopupTransitionEffect::ContextMenu));
+            return FReply::Handled();
+        });
+        Buttons->AddSlot().AutoSize().Padding(3)[SNew(SACEPluginOrderTarget).Host(Host.Get()).Id(Id).LockId(BarId).Horizontal(Horizontal)
+            .Tag(FName(*(TEXT("PluginBarOrder.")+Id)))
+            [SNew(SBox).WidthOverride(TileSize.X).HeightOverride(TileSize.Y).Clipping(EWidgetClipping::ClipToBounds)[Button]]];
     }
     auto& Bar=Windows.FindChecked(BarId);
-    Bar.Size=Horizontal?FVector2D(4+34*Buttons->NumSlots(),52):FVector2D(38,18+34*Buttons->NumSlots());
+    Bar.Size=Horizontal?FVector2D(8+(TileSize.X+6)*Buttons->NumSlots(),34+TileSize.Y+6)
+        :FVector2D(16+TileSize.X+6,26+(TileSize.Y+6)*Buttons->NumSlots());
     Layout(Bar);
 }
 
@@ -731,6 +820,16 @@ void UACEPluginSubsystem::SetPluginBarHorizontal(bool Horizontal)
 {
     if(!Settings)return;
     Settings->SetBoolField(TEXT("_plugin_bar_horizontal"),Horizontal);SaveSettings();
+    if(DesktopDock)DesktopDock->Refresh();
+}
+bool UACEPluginSubsystem::ArePluginBarLabelsVisible() const
+{
+    bool Labels=false;if(Settings)Settings->TryGetBoolField(TEXT("_plugin_bar_labels"),Labels);return Labels;
+}
+void UACEPluginSubsystem::SetPluginBarLabelsVisible(bool Labels)
+{
+    if(!Settings)return;
+    Settings->SetBoolField(TEXT("_plugin_bar_labels"),Labels);SaveSettings();
     if(DesktopDock)DesktopDock->Refresh();
 }
 bool UACEPluginSubsystem::IsPluginBarUnlocked() const

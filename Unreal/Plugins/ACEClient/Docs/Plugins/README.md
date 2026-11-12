@@ -223,12 +223,27 @@ lowering the limit below the enabled count leaves your current plugins unchanged
 This setting does not change the separate rule that only one automation policy
 can run at a time, alongside companion plugins.
 
-The plugin bar uses original 26-pixel vector emblems; hover for the full plugin name and
-status. Its **gear** opens Plugin Manager. Its grip still moves when the UI is unlocked, and its minus button
+The plugin bar uses shaded, painted 36-pixel inventory-style icons in separated
+52-pixel buttons. Supplies uses a rainbow Prismatic Taper, ACPedia an open book,
+and each built-in has its own silhouette. The same artwork appears in window
+titles and Plugin Manager. The shared transparent atlas is packaged with the
+client; custom plugin PNGs still take precedence, and vector emblems remain as
+a fallback if the atlas cannot load.
+An open window has a bright border, a thick edge stripe and a white corner marker;
+this indicates window visibility, not whether automation is running. Hover for the
+full plugin name and status. **Show plugin names** in Plugin Manager's appearance
+settings adds optional labels beside or below the icons and is saved across logins.
+Icon-only mode is the default. Its **gear** opens Plugin Manager. Its grip still moves when the UI is unlocked, and its minus button
 collapses it to a line. Hide or restore the bar with **Show plugin bar** in
 **Settings > Game Play > Plugin Manager**. In the same manager, **Horizontal plugin bar**
 switches between a horizontal row and the default vertical column. The orientation
-is saved across logins and keeps the icons square, including when the bar must scroll.
+is saved across logins. Icon-only buttons stay square in either direction; a visible
+scrollbar appears when the bar cannot fit on screen.
+Right-click a bar button for **Pin window**, **Unpin window**, and settings.
+The map also offers **Unpin map from interface** when its overlay is active,
+and an **Unpin** button on the expanded overlay itself. Holding Control
+(Control or Command on macOS) reveals pinned controls even while a chat or
+plugin text field has focus. A custom Quick-show binding replaces that default.
 Drag an icon to reorder it, or drag the six-dot grip to the left of a plugin's
 icon in Plugin Manager. A gold insertion line marks the drop position. Both views
 share one saved order; changing it does not change plugin execution order. Unlock
