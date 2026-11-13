@@ -9,7 +9,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERegexShutdownTest,"ACE.Plugins.RegexShutdow
 bool FACERegexShutdownTest::RunTest(const FString&)
 {
     ACEVTRegex::Initialize();ON_SCOPE_EXIT{ACEVTRegex::Initialize();};
-    FString Error;TMap<FString,FString> Captures;
+    FString Error;ACEVTRegex::FCaptures Captures;
     TestTrue(TEXT("Loot-filter regex cache is warmed"),ACEVTRegex::Match(TEXT("(?<item>Frost) Sword"),TEXT("Frost Sword"),Captures,Error));
     TArray<TFuture<bool>> Workers;
     for(int32 Worker=0;Worker<4;++Worker)Workers.Add(Async(EAsyncExecution::ThreadPool,[Worker]()

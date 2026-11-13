@@ -11,7 +11,8 @@ app = Path(sys.argv[1]).resolve()
 root = Path(__file__).resolve().parent
 header = root.parents[1] / 'Plugins/ACEClient/Source/ACEClient/Public/ACEClientBuild.h'
 text = header.read_text()
-release_match = re.search(r'ReleaseNumber\s*=\s*(\d+)', text)
+release_match = re.search(r'\bReleaseNumber\s*=\s*(\d+)', text)
+dusty_match = re.search(r'\bDustyReleaseNumber\s*=\s*(\d+)', text)
 version_match = re.search(r'Version\s*=\s*TEXT\("([0-9.]+)"\)', text)
 if not release_match or not version_match:
     raise SystemExit(f'Could not read the ACE release version from {header}.')
@@ -22,7 +23,9 @@ if not all(p.isdigit() for p in parts) or not (1 <= len(parts) <= 4):
     raise SystemExit(f'Unexpected ACE version: {version}')
 # Apple allows at most three period-separated integers in these keys.
 # Fold YYYY.MM.DD.N into YYYY.MMDD.N so the date and release number are kept.
-if len(parts) == 4:
+if dusty_match:
+    short_version = f'{release}.{int(dusty_match.group(1))}'
+elif len(parts) == 4:
     short_version = f'{int(parts[0])}.{int(parts[1]):02d}{int(parts[2]):02d}.{int(parts[3])}'
 else:
     short_version = '.'.join(str(int(p)) for p in parts)
@@ -43,6 +46,10 @@ data['CFBundleIconFile'] = 'Application.icns'
 data.pop('CFBundleIconName', None)
 data['CFBundleShortVersionString'] = short_version
 data['CFBundleVersion'] = bundle_version
+data['ACEUpstreamVersion'] = version
+data['ACEUpstreamReleaseNumber'] = release
+if dusty_match:
+    data['ACEDustyReleaseNumber'] = int(dusty_match.group(1))
 with info.open('wb') as f:
     plistlib.dump(data, f)
 subprocess.run([

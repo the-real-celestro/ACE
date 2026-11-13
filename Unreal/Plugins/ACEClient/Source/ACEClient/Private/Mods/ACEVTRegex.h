@@ -1,5 +1,6 @@
 #pragma once
 #include "CoreMinimal.h"
+#include "ACEVTRegexKeys.h"
 
 // ICU matching with explicit work/stack limits. Never run an unrestricted
 // backtracking engine on imported profiles on the game thread.
@@ -8,6 +9,7 @@ namespace ACEVTRegex
 // Close all ICU-owned objects before the engine tears down ICU's allocator.
 void Initialize();
 void Shutdown();
+using FCaptures=TMap<FString,FString,FDefaultSetAllocator,TACERegexExactKeys<FString>>;
 // Exact-pattern validation (including diagnostics) uses a bounded cache;
 // changes to pattern text always go through validation again.
 bool Validate(const FString& Pattern, FString& Error);
@@ -20,5 +22,5 @@ int32 CompiledCacheEntriesForTests();
 // predicate results use bounded caches; failures are never cached. ICU ownership
 // is shared and synchronized so shutdown can drain calls from every thread.
 bool Test(const FString& Pattern, const FString& Text, FString& Error);
-bool Match(const FString& Pattern, const FString& Text, TMap<FString,FString>& Captures, FString& Error);
+bool Match(const FString& Pattern, const FString& Text, FCaptures& Captures, FString& Error);
 }

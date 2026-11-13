@@ -794,7 +794,7 @@ void UACELoginWidget::EnsureDefaultLayout()
 		auto* Lines=VBox(); Signature->SetContent(Lines);
 		auto* VersionLabel=Text(TEXT("VERSION"),CapsFont(9.f,2.8f),Hex(0x9f8c65)); VersionLabel->SetJustification(ETextJustify::Right);
 		AddLine(Lines,VersionLabel,4);
-		auto* Version=Retail(ACEClientBuild::Version,TEXT("fancyfont24"),1.f,Hex(0xd3bc82));
+		auto* Version=Retail(ACEClientBuild::DisplayVersion(),TEXT("fancyfont24"),1.f,Hex(0xd3bc82));
 		Version->SetJustification(ETextJustify::Right); Version->SetShadowOffset(FVector2D(1,2));
 		AddLine(Lines,Version,0);
 		At(Signature,1564,974)->SetAlignment(FVector2D(1,1));
@@ -1106,7 +1106,7 @@ void UACELoginWidget::EnsureDefaultLayout()
 	AddLine(Updates,AutoUpdateCheckBox,6);
 	AddLine(Updates,Text(TEXT("Off by default. When enabled, checks every 15 minutes in the launcher and updates before you log in. Never interrupts gameplay. Cancel pauses automatic updates until the next app launch or Check now."),BodyFont(13.5f),Hex(0x8f8366),true),18);
 	Buttons(Updates,{{TEXT("Release Notes"),TEXT("updatenotes")}});
-	UVerticalBox* UpdateSide; AddH(UpdateCols,SidePanel(FString::Printf(TEXT("Version %s"),ACEClientBuild::Version),UpdateSide,430.f),FMargin(0),false,VAlign_Top);
+	UVerticalBox* UpdateSide; AddH(UpdateCols,SidePanel(FString::Printf(TEXT("Version %s"),*ACEClientBuild::DisplayVersion()),UpdateSide,430.f),FMargin(0),false,VAlign_Top);
 	UpdateText=Text(TEXT("Checking for updates..."),BodyFont(16.f),Hex(0xf2e3bd),true); AddLine(UpdateSide,UpdateText,18);
 	if (!VialArt) VialArt=MakeShared<FACEVialArt>();
 	auto* UpdateVial=WidgetTree->ConstructWidget<UNativeWidgetHost>(); UpdateVial->SetVisibility(ESlateVisibility::HitTestInvisible);

@@ -16,6 +16,6 @@ void ACEClientBuild::UpdateWindowTitle(UWorld* World, bool bVR)
 	if (const auto* Viewport = World->GetGameViewport())
 	{
 		if (const auto Window = Viewport->GetWindow())
-			Window->SetTitle(FText::FromString(FString::Printf(TEXT("%s - Build %s"), ProductName(bVR), Version)));
+			Window->SetTitle(FText::FromString(FString::Printf(TEXT("%s - Build %s"), ProductName(bVR), *DisplayVersion())));
 	}
 }
