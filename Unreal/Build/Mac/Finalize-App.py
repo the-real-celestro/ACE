@@ -26,9 +26,11 @@ if len(parts) == 4:
     short_version = f'{int(parts[0])}.{int(parts[1]):02d}{int(parts[2]):02d}.{int(parts[3])}'
 else:
     short_version = '.'.join(str(int(p)) for p in parts)
-# release.yyyymmdd.hhmmss increases for every build and keeps each component in 32-bit range.
+# Mac build identity is independent of the shared upstream release number.
+# A date/time counter remains monotonic even when correcting a local-only
+# release number that had incorrectly advanced beyond the integrated upstream.
 now = datetime.now().astimezone()
-bundle_version = f'{release}.{now:%Y%m%d}.{now:%H%M%S}'
+bundle_version = f'{now.year}.{int(now.strftime("%m%d"))}.{int(now.strftime("%H%M%S"))}'
 
 icon = root / 'Application.icns'
 resources = app / 'Contents/Resources'

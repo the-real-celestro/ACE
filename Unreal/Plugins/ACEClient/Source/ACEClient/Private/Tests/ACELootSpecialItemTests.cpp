@@ -13,6 +13,7 @@
 #include "Framework/Application/SlateApplication.h"
 #include "Slate/WidgetRenderer.h"
 #include "Widgets/Text/STextBlock.h"
+#include "Widgets/Text/SRichTextBlock.h"
 #include "ImageUtils.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -59,11 +60,13 @@ bool FACELootSpecialItemTest::RunTest(const FString&)
         TFunction<void(TSharedRef<SWidget>)> Read=[&](TSharedRef<SWidget> W)
         {
             if(W->GetType()==TEXT("STextBlock"))Copy+=StaticCastSharedRef<STextBlock>(W)->GetText().ToString()+TEXT(" ");
+            if(W->GetType()==TEXT("SRichTextBlock"))Copy+=StaticCastSharedRef<SRichTextBlock>(W)->GetText().ToString()+TEXT(" ");
             Slider|=W->GetType()==TEXT("SACELootBar");
             auto* Children=W->GetChildren();for(int32 I=0;I<Children->Num();++I)Read(Children->GetChildAt(I));
         };Read(Widget);
         TestTrue(TEXT("Quest hover contains actual stats and all intrinsic spell names"),Copy.Contains(TEXT("+40%"))&&Copy.Contains(TEXT("+36%"))&&Copy.Contains(TEXT("30%"))&&Copy.Contains(TEXT("Defender"))&&Copy.Contains(TEXT("Spirit Drinker")));
-        TestFalse(TEXT("Quest hover has no sliders or uncatalogued placeholder"),Slider||Copy.Contains(TEXT("Uncatalogued"))||Copy.Contains(TEXT("Unrated")));
+        TestFalse(TEXT("Quest hover has no sliders or uncatalogued placeholder"),Slider||Copy.Contains(TEXT("Uncatalogued")));
+        TestTrue(TEXT("The separate badge accurately labels this unverified quest cohort Unrated"),Copy.Contains(TEXT("Unrated")));
         const FIntPoint Size(FMath::CeilToInt(Widget->GetDesiredSize().X),FMath::CeilToInt(Widget->GetDesiredSize().Y));
         AddInfo(FString::Printf(TEXT("Quest hover: %d × %d"),Size.X,Size.Y));
         TestTrue(TEXT("Quest panel stays compact"),Size.X<=380&&Size.Y<=540);

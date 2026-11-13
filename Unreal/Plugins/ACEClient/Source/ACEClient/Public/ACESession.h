@@ -948,11 +948,11 @@ private:
     int32 FindEquipmentStowContainer(const TMap<int32, int32>& Reserved) const;
 	bool CanStowEquipmentInContainer(int32 Container, int32 Reserved = 0) const;
 	bool HasPlayerInventoryState(const FACEWorldObject& Object) const;
-	enum EEquipmentRemovalEvidence : uint8 { WielderCleared = 1, WieldLocationCleared = 2, WorldDeleted = 4 };
-	// ACE consumes equipped items using UI quality clears plus a Smartbox delete,
-	// which can arrive in either queue order. Neither alone removes ownership.
-	TMap<int32, uint8> EquipmentRemovalEvidence;
-	bool UpdateEquipmentRemovalEvidence(int32 Guid, uint8 Evidence, bool bSet = true);
+	enum EInventoryRemovalEvidence : uint8 { WielderCleared = 1, WieldLocationCleared = 2, WorldDeleted = 4, ContainerCleared = 8 };
+	// ACE consumes carried items with Container=0 + ObjectDelete, and equipped
+	// items with Wielder/Location clears + ObjectDelete. Queues can reorder.
+	TMap<int32, uint8> InventoryRemovalEvidence;
+	bool UpdateInventoryRemovalEvidence(int32 Guid, uint8 Evidence, bool bSet = true);
 	void RemoveInventoryObject(int32 ItemGuid);
 	int32 PendingEquipmentGuid = 0;
 	TMap<int32,double> PendingInventoryTransfers;

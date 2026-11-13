@@ -81,6 +81,8 @@ bool FACEEnchantmentNetworkParityTest::RunTest(const FString&)
     Event(ACEGameEvent::MagicUpdateMultipleEnchantments,Batch);
     TestTrue(TEXT("Complete mixed-format batch commits and notifies once"),Notices==2 && Session.ActiveEnchantments.Num()==2
         && Session.ActiveEnchantments[0].Duration==2400.f && Session.ActiveEnchantments[1].StartTime==-60.f);
+    TestEqual(TEXT("The optional set ID survives parsing for accurate active-set displays"),Session.ActiveEnchantments[1].SpellSetId,25);
+    TestEqual(TEXT("An ordinary spell cannot be mistaken for an active set bonus"),Session.ActiveEnchantments[0].SpellSetId,0);
     FACEBinaryWriter Deletes; Deletes.WriteUInt32(2); Deletes.WriteBytes(Remove(20,1).GetData()); Deletes.WriteBytes(Remove(21,1).GetData());
     for(uint32 Opcode:{ACEGameEvent::MagicRemoveMultipleEnchantments,ACEGameEvent::MagicDispelMultipleEnchantments})
     {

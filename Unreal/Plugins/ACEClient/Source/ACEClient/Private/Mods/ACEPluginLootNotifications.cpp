@@ -32,9 +32,9 @@ return function(s,p)
   if examined>=256 or not workavailable() then return {pending=true} end
   local rule=rules[index]
   local match=lootmatch(rule,s.item,s,scan)
-  if match=='pending' then return {pending=true} end
+  if match=='pending' then return {pending=true,target_pending=scan.target_pending or false} end
   if match==nil then return {} end
-  if match then return {rule=index,label=rule.label or ('Rule '..index),action=rule.action or 'keep',limit=rule.keep_up_to} end
+  if match then return {rule=index,label=(rule.label or ('Rule '..index))..(scan.target_match and (' · for '..scan.target_match) or ''),action=rule.action or 'keep',limit=rule.keep_up_to} end
   index=index+1;scan={};examined=examined+1
  end
  return {}
@@ -131,7 +131,22 @@ void UACEPluginSubsystem::TickLootNotifications()
     TSharedPtr<FJsonObject> Result;
     if(!LootMatchVM->Step(LootMatchSnapshot,Profile,Result,Error))
     {LogUCMEvent(*P,TEXT("Loot notification check: ")+Error,EACEUCMLogLevel::Warning);LootMatchSnapshot.Reset();LootMatchVM.Reset();return;}
-    bool Pending=false;if(Result&&Result->TryGetBoolField(TEXT("pending"),Pending)&&Pending)return;
+    bool Pending=false;
+    if(Result&&Result->TryGetBoolField(TEXT("pending"),Pending)&&Pending)
+    {
+        bool TargetPending=false;
+        if(Result->TryGetBoolField(TEXT("target_pending"),TargetPending)&&TargetPending)
+        {
+            // Scores are budgeted across frames. Refresh only these snapshots;
+            // ordinary cooperative rule/regex scans retain their static input.
+            const auto Item=LootMatchSnapshot->GetObjectField(TEXT("item"));
+            FACEWorldObject Current;
+            if(C->GetWorldObject(int32(uint32(Item->GetNumberField(TEXT("id")))),Current))
+                QueueLootMatch(Current.Guid);
+            LootMatchSnapshot.Reset();
+        }
+        return;
+    }
     double Rule=0;
     if(Result&&Result->TryGetNumberField(TEXT("rule"),Rule))
     {

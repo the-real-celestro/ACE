@@ -312,6 +312,40 @@ static bool Check(const APlayerController* PC,FKey Key,bool bPressed)
  return false;
 }
 bool Down(const APlayerController* PC,FKey Key){return Check(PC,Key,false);}
+bool QuickShowDown(const APlayerController* PC,const FModifierKeysState& Mods)
+{
+ Load();if(!PC||bEditing)return false;
+ const FKey ActionKey=Action(TEXT("QuickShowUI"));
+ const auto* Bindings=Live.Find(ActionKey);if(!Bindings)return false;
+ const bool Typing=IsTextEntryFocused();
+ for(const auto& C:*Bindings)
+ {
+  if(!C.Key.IsValid())continue;
+  bool IsModifier=true,IsDown=false;
+  if(C.Key==EKeys::LeftControl||C.Key==EKeys::RightControl)
+  {
+   IsDown=Mods.IsControlDown();
+#if PLATFORM_MAC
+   // Both physical Control and Command are useful for the default UI reveal.
+   // Limit this alias to a plain Control hold; custom chords keep their meaning.
+   if(!C.bShift&&!C.bCtrl&&!C.bAlt&&!C.bCmd&&C.ControllerModifiers.IsEmpty())IsDown=IsDown||Mods.IsCommandDown();
+#endif
+  }
+  else if(C.Key==EKeys::LeftCommand||C.Key==EKeys::RightCommand)IsDown=Mods.IsCommandDown();
+  else if(C.Key==EKeys::LeftShift||C.Key==EKeys::RightShift)IsDown=Mods.IsShiftDown();
+  else if(C.Key==EKeys::LeftAlt||C.Key==EKeys::RightAlt)IsDown=Mods.IsAltDown();
+  else
+  {
+   IsModifier=false;
+   IsDown=(C.Key==EKeys::MouseScrollUp||C.Key==EKeys::MouseScrollDown)?PC->WasInputKeyJustPressed(C.Key):PC->IsInputKeyDown(C.Key);
+  }
+  // UI modifiers must work in chat and plugin fields. Ordinary rebound keys
+  // still cannot reveal/move windows while the player is typing.
+  if(IsDown&&(IsModifier||!Typing)
+   &&Matches(ActionKey,FInputChord(C.Key,Mods.IsShiftDown(),Mods.IsControlDown(),Mods.IsAltDown(),Mods.IsCommandDown()),PC))return true;
+ }
+ return false;
+}
 bool Pressed(const APlayerController* PC,FKey Key){return Check(PC,Key,true);}
 FKey StickDirectionKey(FKey Axis,float V)
 {

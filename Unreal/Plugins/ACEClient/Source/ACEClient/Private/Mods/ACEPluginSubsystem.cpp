@@ -9,6 +9,7 @@
 #include "Mods/ACEUCMProfiles.h"
 #include "ACEClientSubsystem.h"
 #include "ACEDatSubsystem.h"
+#include "ACELootTargets.h"
 #include "ACEPlayerController.h"
 #include "ACESession.h"
 #include "Engine/GameInstance.h"
@@ -71,6 +72,7 @@ namespace
     }
     bool ValidUCMProfile(const TSharedPtr<FJsonObject>& O)
     {
+        if(!ACELootTargets::Validate(O))return false;
         // Panels replace roots and also edit nested rules in place. Cache an
         // owned, validated snapshot and compare contents, never pointer identity.
         // This skips thousands of rule checks for a route/monster/character edit
@@ -185,6 +187,20 @@ namespace
             if(R->HasField(TEXT("conditions_mode"))&&(!R->HasTypedField<EJson::String>(TEXT("conditions_mode"))||!TArray<FString>{TEXT("all"),TEXT("any")}.Contains(String(R,TEXT("conditions_mode")))))return false;
             if(R->HasField(TEXT("enabled"))&&R->Values[TEXT("enabled")]->Type!=EJson::Boolean)return false;
             if(R->HasField(TEXT("count_by_name"))&&R->Values[TEXT("count_by_name")]->Type!=EJson::Boolean)return false;
+            if(R->HasField(TEXT("allow_estimated"))&&!R->HasTypedField<EJson::Boolean>(TEXT("allow_estimated")))return false;
+            if(R->HasField(TEXT("quick_goal"))&&(!R->HasTypedField<EJson::Boolean>(TEXT("quick_goal"))||!R->HasField(TEXT("min_quality"))||!R->HasField(TEXT("item_categories"))))return false;
+            if(R->HasField(TEXT("min_quality"))&&(!R->HasTypedField<EJson::Number>(TEXT("min_quality"))||!FMath::IsFinite(Number(R,TEXT("min_quality")))||Number(R,TEXT("min_quality"))<0||Number(R,TEXT("min_quality"))>5||FMath::FloorToDouble(Number(R,TEXT("min_quality")))!=Number(R,TEXT("min_quality"))))return false;
+            if(R->HasField(TEXT("item_categories")))
+            {
+                const TArray<TSharedPtr<FJsonValue>>* Categories=nullptr;
+                if(!R->TryGetArrayField(TEXT("item_categories"),Categories)||Categories->IsEmpty()||Categories->Num()>16)return false;
+                for(const auto& Category:*Categories)if(Category->Type!=EJson::String||!TArray<FString>{TEXT("weapons"),TEXT("melee"),TEXT("missile"),TEXT("heavy"),TEXT("light"),TEXT("finesse"),TEXT("twohand"),TEXT("bow"),TEXT("crossbow"),TEXT("atlatl"),TEXT("wand"),TEXT("armor"),TEXT("shield"),TEXT("jewelry"),TEXT("clothing"),TEXT("essence")}.Contains(Category->AsString()))return false;
+            }
+            if(R->HasField(TEXT("usability"))&&(!R->HasTypedField<EJson::String>(TEXT("usability"))||!TArray<FString>{TEXT("any"),TEXT("now"),TEXT("close")}.Contains(String(R,TEXT("usability")))))return false;
+            if(R->HasField(TEXT("wield_mode"))&&(!R->HasTypedField<EJson::String>(TEXT("wield_mode"))||!TArray<FString>{TEXT("any"),TEXT("none"),TEXT("exact"),TEXT("range")}.Contains(String(R,TEXT("wield_mode")))))return false;
+            for(const TCHAR* K:{TEXT("wield_min"),TEXT("wield_max")})if(R->HasField(K)&&(!R->HasTypedField<EJson::Number>(K)||!FMath::IsFinite(Number(R,K))||Number(R,K)<0||Number(R,K)>10000||Number(R,K)!=FMath::FloorToDouble(Number(R,K))))return false;
+            if(String(R,TEXT("wield_mode"))==TEXT("exact")&&!R->HasField(TEXT("wield_min")))return false;
+            if(String(R,TEXT("wield_mode"))==TEXT("range")&&(!R->HasField(TEXT("wield_min"))||!R->HasField(TEXT("wield_max"))||Number(R,TEXT("wield_max"))<Number(R,TEXT("wield_min"))))return false;
             if(R->HasField(TEXT("compatibility_issues")))
             {
                 const TArray<TSharedPtr<FJsonValue>>* Problems=nullptr;bool Enabled=true;R->TryGetBoolField(TEXT("enabled"),Enabled);

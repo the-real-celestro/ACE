@@ -122,7 +122,11 @@ local function condition_match(c,item,s,scan)
 end
 -- Check public fields before appraising; native rules require missing properties to exist.
 
+local function goal_guard(rule,c)
+ return rule.quick_goal and rule.min_quality~=nil and c.field=='legacy' and c.key==6
+end
 local function rule_match(rule,item,s,scan)
+ scan.target_pending=false;scan.target_match=nil
  if rule.enabled==false then return false end
  local wanted=rule.name or ''
  if wanted~='' then
@@ -137,6 +141,53 @@ local function rule_match(rule,item,s,scan)
  end
  if (rule.material or 0)~=0 and item.material~=rule.material then return false end
  if (rule.type or 0)~=0 and band(item.type,rule.type)==0 then return false end
+ if rule.item_categories then
+  local category=item.quality_category or '';local accepted=false
+  for _,wanted in ipairs(rule.item_categories) do
+   if wanted==category or (wanted=='weapons' and item.quality_weapon)
+    or (wanted=='armor' and category=='shield')
+    or (wanted=='melee' and (category=='heavy' or category=='light' or category=='finesse' or category=='twohand'))
+    or (wanted=='missile' and (category=='bow' or category=='crossbow' or category=='atlatl')) then accepted=true;break end
+  end
+  if not accepted then
+   if not item.identified and (category=='melee' or category=='missile' or category=='') then return nil end
+   return false
+  end
+ end
+ if rule.min_quality~=nil then
+  if not item.identified then return nil end
+  local mode=rule.rating_mode or 'current'
+  if mode=='current' then
+   if item.quality_grade==nil or item.quality_grade<rule.min_quality then return false end
+   if rule.allow_estimated==false and item.quality_estimated then return false end
+  else
+   local best,pending=nil,false
+   local function consider(score)
+    if not score then return end
+    if score.pending then pending=true;return end
+    if score.grade~=nil and score.grade>=rule.min_quality and not (rule.allow_estimated==false and score.estimated)
+     and (not best or (score.score or 0)>(best.score or 0)) then best=score end
+   end
+   if mode=='universal' then consider(rule.allow_estimated==false and item.quality_universal_exact or item.quality_universal)
+   elseif mode=='templates' then
+    for _,id in ipairs(rule.rating_targets or {}) do consider((item.quality_targets or {})[id]) end
+   else return false end
+   if not best then if pending then scan.target_pending=true;return 'pending' end;return false end
+   scan.target_match=best.name
+  end
+ end
+ if (rule.wield_mode or 'any')~='any' then
+  if not item.identified then return nil end
+  local value=item.skill_wield;if value==nil then return false end
+  if rule.wield_mode=='none' and value~=0 then return false end
+  if rule.wield_mode=='exact' and value~=(rule.wield_min or 0) then return false end
+  if rule.wield_mode=='range' and (value<(rule.wield_min or 0) or value>(rule.wield_max or 0)) then return false end
+ end
+ if (rule.rating_mode or 'current')=='current' and (rule.usability or 'any')~='any' then
+  if not item.identified then return nil end
+  if rule.usability=='now' and item.usable_now~=true then return false end
+  if rule.usability=='close' and item.usable_close~=true then return false end
+ end
  local missing=false
  for _,field in ipairs({'value','workmanship','burden','rating'}) do
   local lo,hi=rule['min_'..field] or 0,rule['max_'..field] or 0
@@ -155,7 +206,10 @@ local function rule_match(rule,item,s,scan)
   local c=conditions[index];local expensive=c.field=='spells' or c.field=='string'
   if expensive==(phase==2) then
   if not workavailable() then scan.phase=phase;scan.condition=index;scan.unknown=unknown;scan.matched=matched;return 'pending' end
-  local match=condition_match(conditions[index],item,s,scan)
+  -- The retired always-false predicate keeps quick goals closed on older clients.
+  local match
+  if goal_guard(rule,c) then match='ignored'
+  else match=condition_match(c,item,s,scan) end
   if match=='pending' then scan.phase=phase;scan.condition=index;scan.unknown=unknown;scan.matched=matched;return 'pending'
   elseif match==false and not any then return false
   elseif match==true and any then matched=true;break
@@ -165,7 +219,9 @@ local function rule_match(rule,item,s,scan)
  scan.condition=nil
  if matched then break end
  end
- if any and #conditions>0 and not matched and not unknown then return false end
+ if any and #conditions>0 and not matched and not unknown then
+  for _,c in ipairs(conditions) do if not goal_guard(rule,c) then return false end end
+ end
  missing=missing or (unknown and not (any and matched))
  if missing then if item.identified then return false else return nil end end
  return true

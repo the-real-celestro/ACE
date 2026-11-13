@@ -14,6 +14,7 @@
 #include "UI/ACEUIElementManager.h"
 #include "UI/ACEUILayoutResolver.h"
 #include "UI/ACEUIElement.h"
+#include "UI/ACEUIFontStyles.h"
 #include "ACECharacterOptions.h"
 #include "ACERuntimeOptions.h"
 #include "ACEDesktopDisplay.h"
@@ -30,6 +31,17 @@ namespace
 {
 	static const FLinearColor OptGold(0.95f, 0.82f, 0.35f, 1.f);
 	static const FLinearColor OptWhite(0.92f, 0.92f, 0.88f, 1.f);
+
+    void UseAuthoredButtonFont(UTextBlock* Label,const TSharedPtr<FACEUIElement>& Button)
+    {
+        // The retail renderer applies the button's authored vertical alignment.
+        // A smooth-text fallback paints at the top of the full button rectangle.
+        if(auto* Retail=Cast<UACERetailTextBlock>(Label);Retail&&Button)
+        {
+            const auto Style=ACEUIFontStyles::ResolveForElement(Button,9);
+            Retail->SetFontOverride(Style.FontId?Style.FontId:0x40000001u);
+        }
+    }
 	/** SmallRoundCheckBox off / on (same glyphs the spellbook filters use). */
 	constexpr int32 DidOptCheckOff = 0x06004D15;
 	constexpr int32 DidOptCheckOn = 0x06004D18;
@@ -235,6 +247,8 @@ void UACEUIGameplayBinder::RefreshOptionsOverlays()
 		Label->SetText(FText::FromString(Tabs[i].Value));
 		Label->SetColorAndOpacity(FSlateColor(bActive ? OptGold : OptWhite));
 		Label->SetFont(FCoreStyle::GetDefaultFontStyle(bActive ? TEXT("Bold") : TEXT("Regular"), 8));
+        const auto TabStyle=ACEUIFontStyles::ResolveForElement(TabEl,8);
+        CastChecked<UACERetailTextBlock>(Label)->SetFontOverride(TabStyle.FontId?TabStyle.FontId:0x40000000u);
 		Label->SetVisibility(ESlateVisibility::HitTestInvisible);
 		// DAT paint climbs past 20k — keep captions above tab chrome (SkillManagement pattern).
 		Canvas->PlaceWidgetAtElement(Label, TabEl, 100000, FMargin(8.f, 4.f, 6.f, 4.f));
@@ -303,7 +317,9 @@ void UACEUIGameplayBinder::RefreshOptionsOverlays()
 			{
 				Text += Client->IsCharacterOptionSet(0x31) ? TEXT(": On") : TEXT(": Off");
 			}
-			PlaceTextOnElement(Label, Manager->FindElementUnder(ActiveOptionsTab, Buttons[i].Key),
+			const auto Button=Manager->FindElementUnder(ActiveOptionsTab,Buttons[i].Key);
+            UseAuthoredButtonFont(Label,Button);
+			PlaceTextOnElement(Label, Button,
 				Text, 8, OptWhite, 100010, true);
 		}
 		SyncOptionsScrollbar();
@@ -402,6 +418,7 @@ void UACEUIGameplayBinder::RefreshOptionsOverlays()
 		}
 		// Keep the full button box: the DAT font is 18 pixels high and the
 		// authored text layout supplies its margins and vertical centering.
+        UseAuthoredButtonFont(Label,Btn);
 		PlaceTextOnElement(Label, Btn, Footer[i].Value, 9, Btn->bActivatable ? OptWhite : FLinearColor(.45f,.45f,.45f), 100011, true);
 	}
 

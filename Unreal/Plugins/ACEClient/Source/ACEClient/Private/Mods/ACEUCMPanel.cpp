@@ -7,6 +7,8 @@
 #include "ACEPluginEquipment.h"
 #include "ACEClientSubsystem.h"
 #include "ACEDatSubsystem.h"
+#include "ACELootQuality.h"
+#include "ACELootTargets.h"
 #include "UI/ACEUIResourceResolver.h"
 #include "UI/ACERetailObjectNames.h"
 #include "Engine/GameInstance.h"
@@ -101,6 +103,7 @@ namespace ACEUCMPanelPrivate
     class SUCMPanel : public SCompoundWidget
     {
         friend class FACEUCMLootEditorTest;
+        friend class FACEUCMSimpleGoalsUITest;
         friend class FACEUCMImportUITest;
     public:
         SLATE_BEGIN_ARGS(SUCMPanel):_ShowTitle(true){} SLATE_ARGUMENT(UACEPluginSubsystem*,Host) SLATE_ARGUMENT(FString,InitialPage) SLATE_ARGUMENT(bool,ShowTitle) SLATE_END_ARGS()
@@ -1525,5 +1528,65 @@ bool FACEUCMImportUITest::RunTest(const FString&)
     }
     return true;
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMSimpleGoalsUITest,"ACE.Plugins.SimpleLootGoalsUI",EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACEUCMSimpleGoalsUITest::RunTest(const FString&)
+{
+    auto* GI=NewObject<UGameInstance>();GI->Init();auto* Host=GI->GetSubsystem<UACEPluginSubsystem>();
+    const FString Root=FPaths::ProjectSavedDir()/TEXT("Automation/SimpleGoalsUI");Host->StorageRoot=Root;Host->Settings=MakeShared<FJsonObject>();
+    ON_SCOPE_EXIT{GI->Shutdown();IFileManager::Get().DeleteDirectory(*Root,false,true);};
+    FString DatDirectory;FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),DatDirectory);
+    if(!TestTrue(TEXT("Native UI fonts open"),GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(DatDirectory)))return false;
+    if(!TestTrue(TEXT("Isolated loot section creates"),Host->InitializeUCMSelection()&&Host->NewUCMSection(TEXT("Loot"),TEXT("Simple goals"))))return false;
+    auto Plugin=Host->Find(TEXT("ucm"));auto Panel=SNew(SUCMPanel).Host(Host).InitialPage(TEXT("Loot"));
+    TestFalse(TEXT("Main Loot tab starts with goals"),Panel->ShowAdvancedLoot);
+    TestFalse(TEXT("Opening goals cannot create an advanced rule draft"),Panel->LootDraft.IsValid());
+    Panel->GoalTypes={TEXT("wand")};Panel->GoalQuality=5;Panel->GoalWieldMode=TEXT("exact");Panel->GoalWieldMin=270;Plugin->Running=true;
+    Panel->SaveLootGoal();auto Rules=Panel->CurrentLootRules();
+    if(!TestEqual(TEXT("One goal saved"),Rules.Num(),1))return false;
+    TestFalse(TEXT("Saving goals stops automation"),Plugin->Running);
+    const auto Rule=Rules[0]->AsObject();TestEqual(TEXT("Goal stores quality threshold"),Rule->GetNumberField(TEXT("min_quality")),5.);
+    TestEqual(TEXT("Goal stores exact wield"),Rule->GetNumberField(TEXT("wield_min")),270.);
+    TestEqual(TEXT("Older clients retain an always-false guard"),Rule->GetArrayField(TEXT("conditions"))[0]->AsObject()->GetNumberField(TEXT("key")),6.);
+    Panel->EditLootGoal(0);Panel->GoalTypes.Add(TEXT("jewelry"));Panel->SaveLootGoal();
+    TestEqual(TEXT("Editing updates the goal instead of appending"),Panel->CurrentLootRules().Num(),1);
+    TestEqual(TEXT("Category selection permits multiple classes"),Panel->CurrentLootRules()[0]->AsObject()->GetArrayField(TEXT("item_categories")).Num(),2);
+    Panel->GoalTypes={TEXT("wand")};Panel->GoalQuality=5;Panel->GoalWieldMode=TEXT("none");Panel->SaveLootGoal();
+    Panel->GoalTypes={TEXT("armor"),TEXT("jewelry")};Panel->GoalQuality=2;Panel->GoalWieldMode=TEXT("any");Panel->SaveLootGoal();Panel->Rebuild();
+    if(FApp::CanEverRender()&&FSlateApplication::IsInitialized())
+    {
+        const FVector2D Size(620,850);FWidgetRenderer Renderer(false,true);auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Nearest,false);
+        for(int32 Frame=0;Frame<5;++Frame){++GFrameCounter;Renderer.DrawWidget(Target,Panel,Size,.016f);FlushRenderingCommands();}TArray<FColor> Pixels;
+        FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags);
+        for(auto& Pixel:Pixels)Pixel=Pixel.ReinterpretAsLinear().ToFColor(true);TArray64<uint8> PNG;FImageUtils::PNGCompressImageArray(620,850,Pixels,PNG);
+        FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/TEXT("UCM-simple-goals.png")));Target->ReleaseResource();
+    }
+    Panel->TemplateDraft=ACELootTargets::Presets()[5];Panel->TemplateDraft.Id.Empty();Panel->TemplateDraft.Name=TEXT("Friend's mage");Panel->SaveLootTemplate();
+    TestEqual(TEXT("Named template saved with the Loot profile"),Panel->LootTemplates().Num(),1);
+    TestTrue(TEXT("Templates follow shared Loot section exports"),ACEUCMProfiles::Extract(Panel->P(),TEXT("Loot"))->HasField(TEXT("loot_rating_templates")));
+    Panel->GoalTypes={TEXT("jewelry")};Panel->GoalQuality=3;Panel->GoalWieldMode=TEXT("any");Panel->GoalUsability=TEXT("now");Panel->GoalTargets.Add(TEXT("missile"));Panel->SaveLootGoal();
+    const auto RecipientGoal=Panel->CurrentLootRules()[0]->AsObject();
+    TestEqual(TEXT("Multi-template goal keeps both recipients"),RecipientGoal->GetArrayField(TEXT("rating_targets")).Num(),2);
+    TestEqual(TEXT("Recipient collection ignores looter wield limits"),RecipientGoal->GetStringField(TEXT("usability")),FString(TEXT("any")));
+    Panel->EditLootGoal(0);TestEqual(TEXT("Reopening restores recipient mode"),Panel->GoalRatingMode,FString(TEXT("templates")));
+    TestTrue(TEXT("Reopening restores named and preset recipients"),Panel->GoalTargets.Num()==2&&Panel->GoalTargets.Contains(TEXT("missile")));
+    if(FApp::CanEverRender()&&FSlateApplication::IsInitialized())
+    {
+        const FVector2D Size(620,850);FWidgetRenderer Renderer(false,true);
+        for(int32 View=0;View<3;++View)
+        {
+            Panel->ManagingLootTemplates=View==2;Panel->GoalRatingMode=View==0?TEXT("universal"):TEXT("templates");Panel->Rebuild();
+            auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Nearest,false);
+            for(int32 Frame=0;Frame<5;++Frame){++GFrameCounter;Renderer.DrawWidget(Target,Panel,Size,.016f);FlushRenderingCommands();}
+            TArray<FColor> Pixels;FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags);
+            for(auto& Pixel:Pixels)Pixel=Pixel.ReinterpretAsLinear().ToFColor(true);TArray64<uint8> PNG;FImageUtils::PNGCompressImageArray(620,850,Pixels,PNG);
+            const TCHAR* Files[]={TEXT("UCM-universal-loot.png"),TEXT("UCM-template-loot.png"),TEXT("UCM-template-editor.png")};
+            FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/Files[View]));Target->ReleaseResource();
+        }
+    }
+    Panel->ManagingLootTemplates=false;
+    Panel->ShowAdvancedLoot=true;Panel->Rebuild();TestTrue(TEXT("Original advanced editor remains accessible"),Panel->LootDraft.IsValid());
+    return !HasAnyErrors();
+}
+
 }
 #endif

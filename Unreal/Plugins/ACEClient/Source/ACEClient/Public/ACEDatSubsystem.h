@@ -423,6 +423,8 @@ public:
 
 	/** SpellTable (0x0E00000E) name + icon DID. Lazily parsed once portal.dat is ready. */
 	bool TryGetSpellInfo(uint32 SpellId, FString& OutName, uint32& OutIconDid);
+	/** DAT set tiers use equipped piece count (or combined item level). No tier is active below its threshold. */
+	bool TryGetEquipmentSetSpells(uint32 SetId, uint32 Pieces, TArray<uint32>& OutSpells);
 	bool TryGetPluginSpellInfo(uint32 SpellId, uint32& School, uint32& Power, uint32& Category, uint32& Flags, double& Duration);
 	bool IsPluginSingleTargetOffensiveSpell(uint32 SpellId);
 	bool TryGetPluginSpellScarabs(uint32 SpellId, TMap<FString, int32>& OutRequirements);
@@ -466,6 +468,8 @@ public:
 
 	/** SkillTable (0x0E000004) name + icon DID. Lazily parsed once portal.dat is ready. */
 	bool TryGetSkillInfo(uint32 SkillId, FString& OutName, uint32& OutIconDid);
+	/** Positive attribute terms of the native skill formula, for item synergy. */
+	bool TryGetSkillAttributes(uint32 SkillId, TArray<uint32>& OutAttributes);
 	/** Retail SkillInfoRegion tooltip: attribute formula, then the DAT description. */
 	bool TryGetSkillTooltip(uint32 SkillId, FString& OutText);
 	/** CACQualities: DAT formulas, raw/buffed attributes and top-layer enchantments. */
@@ -855,6 +859,7 @@ private:
 	bool bContractTableLoaded = false;
 	bool EnsureChatPoseTableLoaded();
 	TMap<uint32, FSpellInfoCacheEntry> SpellInfoCache;
+	TMap<uint32, TMap<uint32, TArray<uint32>>> EquipmentSetSpellCache;
 	bool bSpellTableLoaded = false;
 	struct FChatPoseEntry
 	{

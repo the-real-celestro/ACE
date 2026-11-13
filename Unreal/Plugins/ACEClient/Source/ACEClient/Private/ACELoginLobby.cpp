@@ -58,6 +58,7 @@
 #include "Styling/CoreStyle.h"
 #include "Widgets/SWidget.h"
 #include "Widgets/SLeafWidget.h"
+#include "Widgets/SCompoundWidget.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
@@ -89,6 +90,33 @@ namespace
 		LobbyGhost = 7, LobbyPlaque = 8, LobbySegment = 9, LobbySwatch = 10, LobbyEye = 11, LobbyScrim = 12, LobbyGhostSmall = 13 };
 	/** Logical lobby stage (the Codex Hall mockups); the root ScaleBox fits it to the window. */
 	constexpr float DesignW = 1600.f, DesignH = 1000.f;
+	class SACELobbyViewport : public SCompoundWidget
+	{
+	public:
+		SLATE_BEGIN_ARGS(SACELobbyViewport){}
+			SLATE_ARGUMENT(TFunction<void(const FVector2D&)>, PrepareLayout)
+			SLATE_DEFAULT_SLOT(FArguments,Content)
+		SLATE_END_ARGS()
+		void Construct(const FArguments& Args){PrepareLayout=Args._PrepareLayout;ChildSlot[Args._Content.Widget];}
+		void OnArrangeChildren(const FGeometry& Geometry,FArrangedChildren& Children) const override
+		{
+			const FVector2D Size=Geometry.GetLocalSize();
+			const float Scale=Geometry.GetAccumulatedLayoutTransform().GetScale();
+			if(Size.X>0&&Size.Y>0&&(!Size.Equals(PreparedSize,.01f)||!FMath::IsNearlyEqual(Scale,PreparedScale)))
+			{
+				PreparedSize=Size;PreparedScale=Scale;
+				PrepareLayout(Size);
+				// Use this allocation before the first paint, including the first
+				// frame after a Retina/window-size change. NativeTick is too late.
+				ChildSlot.GetWidget()->SlatePrepass(Scale);
+			}
+			SCompoundWidget::OnArrangeChildren(Geometry,Children);
+		}
+	private:
+		TFunction<void(const FVector2D&)> PrepareLayout;
+		mutable FVector2D PreparedSize=FVector2D::ZeroVector;
+		mutable float PreparedScale=0;
+	};
 	constexpr float ServerRowHeight = 44.f;
 	/** 2px gold bar on the left edge of a selected quiet row (an empty slot otherwise, so text never shifts). */
 	UWidget* RowAccentBar(UWidgetTree* Tree, bool bShow)
@@ -537,7 +565,9 @@ UEditableTextBox* UACELoginWidget::Field(UVerticalBox* Parent, const FString& Ti
 TSharedRef<SWidget> UACELoginWidget::RebuildWidget()
 {
 	EnsureDefaultLayout(); // Build before Super captures the root Slate widget.
-	return Super::RebuildWidget();
+	TWeakObjectPtr<UACELoginWidget> WeakThis(this);
+	return SNew(SACELobbyViewport).PrepareLayout([WeakThis](const FVector2D& Size)
+		{if(WeakThis.IsValid())WeakThis->LayoutLobby(Size);})[Super::RebuildWidget()];
 }
 
 void UACELoginWidget::EnsureDefaultLayout()
@@ -945,7 +975,7 @@ void UACELoginWidget::EnsureDefaultLayout()
 		auto* HaloLayer=Ring->AddChildToOverlay(Halo); HaloLayer->SetHorizontalAlignment(HAlign_Center); HaloLayer->SetVerticalAlignment(VAlign_Center);
 		auto* ButtonLayer=Ring->AddChildToOverlay(LaunchSize); ButtonLayer->SetHorizontalAlignment(HAlign_Center); ButtonLayer->SetVerticalAlignment(VAlign_Center);
 		auto* RingSlot=Lines->AddChildToVerticalBox(Ring); RingSlot->SetHorizontalAlignment(HAlign_Center); RingSlot->SetPadding(FMargin(0,24,0,0));
-		auto* ShowcaseSlot=Home->AddChildToCanvas(Showcase); ShowcaseSlot->SetAutoSize(true); ShowcaseSlot->SetPosition(FVector2D(790,714)); ShowcaseSlot->SetAlignment(FVector2D(.5f,.5f));
+		auto* ShowcaseSlot=Home->AddChildToCanvas(Showcase); ShowcaseSlot->SetAutoSize(true); ShowcaseSlot->SetPosition(FVector2D(790,614)); ShowcaseSlot->SetAlignment(FVector2D(.5f,.5f));
 	}
 
 	// Server editor: explicit save/cancel avoids sending credentials to an edited endpoint by accident.
@@ -1457,12 +1487,11 @@ void UACELoginWidget::LayoutLobby(const FVector2D& View)
 		// Tint wash low on the left (mockup: ellipse 50%x40% at 18%,70%).
 		if (auto* Wash=SlotOf(LobbyWash)) { Wash->SetPosition(FVector2D(L.X*.18f,L.Y*.7f)); Wash->SetSize(FVector2D(L.X*.7f,L.Y*.56f)); }
 		if (auto* Stage=SlotOf(DashboardSize)) Stage->SetPosition(FVector2D((L.X-DesignW)*.5f,(L.Y-DesignH)*.5f));
-		// Center the whole showcase in the viewport's lower-right quadrant, including
-		// extra space around the fitted stage. Pages begins at (410,36) within that stage.
-		// The ring halo and bitmap line boxes add invisible space; 28px balances the
-		// visible lettering/ring above and below the quadrant center.
+		// Keep the account/world captions with Launch, raised 100 design pixels
+		// from its former lower-right placement. Pages begins at (410,36) within
+		// the fitted stage; include any letterboxing in the viewport position.
 		if (auto* Showcase=SlotOf(WidgetTree->FindWidget(TEXT("LaunchShowcaseGroup"))))
-			Showcase->SetPosition(FVector2D(L.X*.75f-(L.X-DesignW)*.5f-410.f,L.Y*.75f+28.f-(L.Y-DesignH)*.5f-36.f));
+			Showcase->SetPosition(FVector2D(L.X*.75f-(L.X-DesignW)*.5f-410.f,L.Y*.75f-72.f-(L.Y-DesignH)*.5f-36.f));
 		// The signature follows the viewport corner even when the centered stage is letterboxed.
 		if(auto* Signature=SlotOf(WidgetTree->FindWidget(TEXT("LobbyVersionSignature"))))
 			Signature->SetPosition(FVector2D((L.X+DesignW)*.5f-36.f,(L.Y+DesignH)*.5f-26.f));

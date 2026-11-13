@@ -159,9 +159,9 @@ bool FACEUCMLootBuilderTest::RunTest(const FString&)
             Frame();Frame();auto W=Find(Panel,Tag);if(!TestTrue(Tag,W.IsValid()))return false;auto Combo=StaticCastSharedPtr<SComboButton>(W);Combo->SetIsOpen(true);Frame();auto Menu=Combo->GetMenuWindow();
             if(!TestTrue(TEXT("Menu opens"),Menu.IsValid()))return false;auto Entry=Find(Menu.ToSharedRef(),FName(*(FString(TEXT("UCMMenu."))+Caption)));if(!TestTrue(Caption,Entry.IsValid()))return false;StaticCastSharedPtr<SButton>(Entry)->SimulateClick();return true;
         };
-        if(!Click(TEXT("UCMLootTool.New"))||!Click(TEXT("UCMLootTool.Weapon type")))return false;
+        if(!Click(TEXT("UCMLootTool.New"))||!Click(TEXT("UCMLootTool.Advanced filters"))||!Click(TEXT("UCMLootTool.Weapon type")))return false;
         auto Unarmed=StaticCastSharedPtr<SCheckBox>(Find(Panel,TEXT("UCMLootValue.1")));if(!TestTrue(TEXT("Unarmed checkbox exists"),Unarmed.IsValid()))return false;Unarmed->ToggleCheckedState();
-        if(!Click(TEXT("UCMChoice.Apply requirement"))||!Click(TEXT("UCMLootTool.New requirement")))return false;
+        if(!Click(TEXT("UCMLootTool.Apply requirement"))||!Click(TEXT("UCMLootTool.New requirement")))return false;
         if(!Choose(TEXT("UCMLootType"),TEXT("Text / name"))||!Choose(TEXT("UCMLootTextMode"),TEXT("OR - any text separated by |")))return false;
         auto Pattern=StaticCastSharedPtr<SEditableTextBox>(Find(Panel,TEXT("UCMLootPattern")));
         if(!TestTrue(TEXT("String input exists"),Pattern.IsValid()))return false;Pattern->SetText(FText::FromString(TEXT("sword|unarmed")));
@@ -182,7 +182,7 @@ bool FACEUCMLootBuilderTest::RunTest(const FString&)
             TArray<FColor> Pixels;Capture->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);TArray64<uint8> PNG;
             FImageUtils::PNGCompressImageArray(Width,1100,Pixels,PNG);FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/TEXT("Automation")/FString::Printf(TEXT("LootBuilder-String-%d.png"),Width)));Capture->ReleaseResource();
         }
-        if(!Click(TEXT("UCMChoice.Apply requirement"))||!Choose(TEXT("UCMLootChoice.conditions_mode"),TEXT("AND - all requirements"))||!Click(TEXT("UCMLootTool.Apply rule")))return false;
+        if(!Click(TEXT("UCMLootTool.Apply requirement"))||!Choose(TEXT("UCMLootChoice.conditions_mode"),TEXT("AND - all requirements"))||!Click(TEXT("UCMLootTool.Save rule")))return false;
         if(!TestTrue(TEXT("Profile reloads from the saved file"),Host->InitializeUCMSelection()))return false;
         TestEqual(TEXT("Reload selects saved profile"),Host->UCMSectionName(TEXT("Loot")),FString(TEXT("String and weapon choices")));
         const auto& Saved=Plugin->Profile->GetArrayField(TEXT("loot_rules"));if(!TestEqual(TEXT("UI created one rule"),Saved.Num(),1))return false;
@@ -195,7 +195,7 @@ bool FACEUCMLootBuilderTest::RunTest(const FString&)
         Match(SavedRule,Mace,false,TEXT("Saved rule rejects another weapon subtype even with matching name"));
         // The actual shipped UCM policy consumes the UI-created rule and native item snapshot.
         FString UCM;FFileHelper::LoadFileToString(UCM,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
-        auto State=Parse(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"mana":100,"max_mana":100,"inventory":[],"container":9,"container_is_corpse":true,"contents_ready":true})"));
+        auto State=Parse(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"mana":100,"max_mana":100,"inventory":[],"container":9,"container_is_corpse":true,"contents_ready":true,"ready":true,"stamina":100,"max_stamina":100,"position":{"cell":2103705613,"x":25,"y":97,"z":12}})"));
         State->SetArrayField(TEXT("contents"),{MakeShared<FJsonValueObject>(NativeItem)});
         auto Profile=Parse(TEXT(R"({"looting":true,"buffing":false,"recovery":false,"combat":"off"})"));Profile->SetArrayField(TEXT("loot_rules"),Saved);
         FACEPluginVM VM;TSharedPtr<FJsonObject> Intent;

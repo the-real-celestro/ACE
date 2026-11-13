@@ -8,6 +8,8 @@
 #include "Engine/GameInstance.h"
 #include "ACEClientSubsystem.h"
 #include "ACESession.h"
+#include "ACEDatSubsystem.h"
+#include "ACETestDatDirectory.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "Mods/ACEPluginVM.h"
 #include "Serialization/JsonSerializer.h"
@@ -153,6 +155,41 @@ bool FACEUCMLootNotificationTest::RunTest(const FString&)
         Owned->SetNumberField(TEXT("count"),5);auto I=Step(VM,S,ProfileData);
         TestTrue(TEXT("Confirmed stack merge reports just the received amount"),I->HasField(TEXT("loot_notification"))&&I->GetStringField(TEXT("loot_notification")).Contains(TEXT("2 x Ring")));
         TestFalse(TEXT("Merged pickup reports only once"),Step(VM,S,ProfileData)->HasField(TEXT("loot_notification")));
+    }
+    {
+        // A universal comparison spans multiple frames. Native notification
+        // jobs must refresh the budgeted score snapshot instead of waiting on
+        // the first pending JSON object forever.
+        if(!TestTrue(TEXT("DAT opens for recipient notification"),GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(ACETestDatDirectory())))return false;
+        P->Running=false;
+        P->Profile=Parse(TEXT(R"({"loot_rules":[{"label":"Trade jewelry","action":"keep","min_quality":3,"item_categories":["jewelry"],"rating_mode":"universal"}]})"));
+        Ring.WeenieClassId=623;Ring.ValidLocations=0x100;Session.WorldObjects.Add(Ring.Guid,Ring);Session.SelectedObject.Guid=Ring.Guid;
+        Info.ObjectGuid=Ring.Guid;Info.IntProperties={{171,0}};Info.SpellBookEntries={6075};Host->ObserveAppraisal(Info);
+        const int32 Before=Client->ChatHistory.Num();++GFrameCounter;Host->TickLootNotifications();
+        TestEqual(TEXT("Incomplete universal score never reports an early result"),Client->ChatHistory.Num(),Before);
+        for(int32 Frame=0;Frame<64&&Client->ChatHistory.Num()==Before;++Frame){++GFrameCounter;Host->TickLootNotifications();}
+        if(TestEqual(TEXT("Native universal notification finishes across frames"),Client->ChatHistory.Num(),Before+1))
+            TestTrue(TEXT("Native match identifies the recipient"),Client->ChatHistory.Last().Text.Contains(TEXT("for War mage")));
+
+        // TestItem can preview a recipient rule before it has been saved.
+        const auto Draft=P->Profile->GetArrayField(TEXT("loot_rules"))[0]->AsObject();
+        P->Profile=Parse(TEXT(R"({"loot_rules":[]})"));Host->InspectLootItem(Ring.Guid,Draft);
+        for(int32 Frame=0;Frame<64&&Host->InspectLootGuid;++Frame){++GFrameCounter;Host->TickLootInspection();}
+        TestEqual(TEXT("Draft recipient inspection completes"),Host->InspectLootGuid,0);
+        TestTrue(TEXT("Draft recipient rule uses its own scoring context"),Client->ChatHistory.Last().Text.Contains(TEXT("Matches Trade jewelry · for War mage")));
+
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),ProfileData=Profile();
+        const auto Goal=ProfileData->GetArrayField(TEXT("loot_rules"))[0]->AsObject();
+        Goal->SetStringField(TEXT("rating_mode"),TEXT("templates"));Goal->SetNumberField(TEXT("min_quality"),3);
+        Goal->SetArrayField(TEXT("rating_targets"),{MakeShared<FJsonValueString>(TEXT("war"))});
+        const auto Loot=S->GetArrayField(TEXT("contents"))[0]->AsObject();
+        Loot->SetNumberField(TEXT("quality_grade"),0);Loot->SetBoolField(TEXT("usable_now"),false);
+        Loot->SetObjectField(TEXT("quality_targets"),Parse(TEXT(R"({"war":{"grade":3,"score":85,"name":"Friend's mage"}})")));
+        auto I=Step(VM,S,ProfileData);
+        TestTrue(TEXT("Pickup explains the target despite personal Poor quality"),I->GetStringField(TEXT("status")).Contains(TEXT("for Friend's mage")));
+        S->SetNumberField(TEXT("time"),101);S->SetArrayField(TEXT("inventory"),S->GetArrayField(TEXT("contents")));S->SetArrayField(TEXT("contents"),{});S->SetNumberField(TEXT("container"),0);
+        I=Step(VM,S,ProfileData);
+        TestTrue(TEXT("Confirmed recipient pickup names the friend"),I->HasField(TEXT("loot_notification"))&&I->GetStringField(TEXT("loot_notification")).Contains(TEXT("for Friend's mage")));
     }
     TestTrue(TEXT("All notifications remain local, with no server packets"),Session.CachedC2SPackets.IsEmpty());
     return true;

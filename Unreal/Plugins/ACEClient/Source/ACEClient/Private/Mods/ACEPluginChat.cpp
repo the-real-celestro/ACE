@@ -6,6 +6,7 @@
 #include "UI/ACERetailObjectNames.h"
 #include "ACESession.h"
 #include "ACEVTRegex.h"
+#include "ACELootQualitySubsystem.h"
 
 bool UACEPluginSubsystem::ValidatePluginChatFilters(const TArray<TSharedPtr<FJsonValue>>& Values,
     TArray<FACEPluginChatFilter>& Filters,FString& Error) const
@@ -146,7 +147,8 @@ void UACEPluginSubsystem::InspectLootItem(int32 Guid, TSharedPtr<FJsonObject> Te
     InspectLootGuid=Guid;InspectLootSession=C->GetSession();InspectLootProfile=P->Profile;
     InspectLootDeadline=FPlatformTime::Seconds()+12;
     const auto* A=Appraisals.Find(Guid);
-    if((Item.ItemType&(ACEItemType::MeleeWeapon|ACEItemType::MissileWeapon|ACEItemType::Armor|ACEItemType::Caster))&&(!A||!A->bSuccess))
+    const bool NeedsStats=(Item.ItemType&(ACEItemType::MeleeWeapon|ACEItemType::MissileWeapon|ACEItemType::Armor|ACEItemType::Caster|ACEItemType::Jewelry|ACEItemType::Clothing))||Item.ValidLocations||ACELootQuality::IsSummoningEssence(Item);
+    if(NeedsStats&&(!A||!A->bSuccess))
     {InspectLootWaiting=true;C->RequestBackgroundAppraisal(Guid);}
 }
 void UACEPluginSubsystem::TickLootInspection()
@@ -180,14 +182,14 @@ return function(s,p)
   local result=lootmatch(rule,item,s,scan)
   if result=='pending' then return {status='pending'} end
   if result==nil then return {status='identify'} end
-  if result then return {status='match',label=rule.label or ('Rule '..index),action=rule.action or 'keep'} end
+  if result then return {status='match',label=(rule.label or ('Rule '..index))..(scan.target_match and (' · for '..scan.target_match) or ''),action=rule.action or 'keep'} end
   index=index+1;scan={}
  end
  return {status='none'}
 end
 )lua"),Error)){Notice=TEXT("Loot check failed: ")+Error;PrintLootInspection(Item);Cancel();return;}
     }
-    auto S=Snapshot();ExtendSnapshot(S);S->SetField(TEXT("clicked_item"),LootItemSnapshot(Item));
+    auto S=Snapshot();ExtendSnapshot(S);S->SetField(TEXT("clicked_item"),LootItemSnapshot(Item,InspectLootTestPolicy));
     TSharedPtr<FJsonObject> Result;
     if(!InspectLootVM->Step(S,InspectLootTestPolicy?InspectLootTestPolicy:P->Profile,Result,Error)||!Result)
     {Notice=TEXT("Loot check failed: ")+Error;PrintLootInspection(Item);Cancel();return;}
@@ -209,6 +211,21 @@ void UACEPluginSubsystem::PrintLootInspection(const FACEWorldObject& Item,const 
     const bool Matched=Result&&Result->GetStringField(TEXT("status"))==TEXT("match");
     FString Text=(InspectLootTestPolicy?TEXT("[Loot test] "):Matched?TEXT("[MATCH] "):TEXT("[Item] "))+Name;
     const auto* A=Appraisals.Find(Item.Guid);
+    auto* Quality=GetGameInstance()->GetSubsystem<UACELootQualitySubsystem>();
+    if(A&&A->bSuccess)Quality->ObserveAppraisal(*A);
+    const auto Review=Quality->Review(Item);
+    if(Review.bEquipment)
+    {
+        Text=ACELootQuality::ChatSummary(Item,Review);
+        if(Matched)Text+=FString::Printf(TEXT(" - Matches %s (%s)"),*Result->GetStringField(TEXT("label")),*Result->GetStringField(TEXT("action")));
+        else if(InspectLootTestPolicy)Text+=TEXT(" - Does not match this rule");
+        LastInspectedItem=Item.Guid;LastInspectedAt=FPlatformTime::Seconds();
+        C->ReceiveChatMessage(Text,TEXT(""),ACEChatMessageType::Appraisal,INDEX_NONE,0,
+            Review.bRated?ACELootQuality::Color(Review.Grade):FLinearColor::White,Matched?Text:FString());
+        if(!Review.bRated&&Review.bIdentified)
+            UE_LOG(LogTemp,Display,TEXT("Loot quality unrated: WCID=%d Item=%s Tinkers=%d Reason=%s"),Item.WeenieClassId,*Name,Review.Tinkers,*Review.Reason);
+        return;
+    }
     if(A&&A->bSuccess)
     {
         if(A->bHasWeaponProfile)

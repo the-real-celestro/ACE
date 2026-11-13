@@ -18,6 +18,7 @@ int32 ConditionIndex=INDEX_NONE;
 FString LootDraftBaseline,ConditionBaseline;
 TWeakPtr<FJsonObject> LootSourceProfile;
 bool LootNarrow=false,ShowLootFiles=false,LootHasSource=false;
+#include "ACEUCMSimpleLoot.inl"
 
 TSharedRef<SWidget> LootTool(const FString& Caption,TFunction<void()> Action)
 {
@@ -133,10 +134,10 @@ void LootPanel()
     LootSpinStyle.SetBackgroundBrush(Field).SetHoveredBackgroundBrush(Focus).SetActiveFillBrush(FSlateNoResource()).SetInactiveFillBrush(FSlateNoResource());
     if(EditingSalvage){LootTabs();SalvagePanel();return;}
     if(LootHasSource&&LootSourceProfile.Pin()!=P())
-    {LootDraft.Reset();ConditionDraft.Reset();LootEditIndex=INDEX_NONE;ConditionIndex=INDEX_NONE;LootPage=0;LootRuleScroll.Reset();}
+    {LootDraft.Reset();ConditionDraft.Reset();LootEditIndex=INDEX_NONE;ConditionIndex=INDEX_NONE;LootPage=0;LootRuleScroll.Reset();GoalIndex=INDEX_NONE;}
     LootSourceProfile=P();LootHasSource=true;
     const auto Rules=CurrentLootRules();
-    if(!LootDraft&&Rules.Num())
+    if(!LootDraft&&Rules.Num()&&(EditorOnly||ShowAdvancedLoot))
     {
         LootEditIndex=FMath::Clamp(LootEditIndex,0,Rules.Num()-1);
         LootDraft=ACEUCMLootPresentation::Clone(Rules[LootEditIndex]->AsObject());LootDraftBaseline=LootDraftJson();
@@ -149,6 +150,8 @@ void LootPanel()
     LootTabs();
     if(ShowLootFiles){LootProfileFiles();return;}
     if(ShowLootOptions){LootSettings();return;}
+    if(!EditorOnly&&!ShowAdvancedLoot){SimpleLootGoals();return;}
+    if(!EditorOnly)Add(LootTool(TEXT("Back to goals"),[this]{if(CanLeaveLootRule()){LootDraft.Reset();ConditionDraft.Reset();ShowAdvancedLoot=false;Rebuild();}}));
 
     const auto Outer=Body,OuterSection=SectionBody;SectionBody.Reset();
     auto RuleList=SNew(SVerticalBox).Tag(TEXT("LootRuleList"));Body=RuleList;

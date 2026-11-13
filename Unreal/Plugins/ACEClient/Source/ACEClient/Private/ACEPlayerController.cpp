@@ -448,6 +448,11 @@ void AACEPlayerController::ShowLoginUI()
 		bHasGameViewport ? 1 : 0);
 
 	EnsureDatIntroCanvas();
+	if(!IsVRActive()&&DesktopDisplay&&!DesktopDisplay->IsStartupReady())
+	{
+		ScheduleShowLoginUIRetry();
+		return;
+	}
 
 	if (!LoginWidget)
 	{
@@ -931,7 +936,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	if (Client) if (auto* Manager=Client->GetUIElementManager())
 		Manager->SetQuickShowUi(!bVR && Client->GetSessionState()==EACESessionState::InWorld
 			&& FSlateApplication::IsInitialized() && FSlateApplication::Get().IsActive()
-			&& ACEInputBindings::Down(this,ACEInputBindings::Action(TEXT("QuickShowUI"))));
+			&& ACEInputBindings::QuickShowDown(this,FSlateApplication::Get().GetModifierKeys()));
 	if (IsLocalController())
 	{
 		int32 Width=0,Height=0; GetViewportSize(Width,Height);
@@ -8140,6 +8145,7 @@ void AACEPlayerController::HandleMotionUpdate(int32 ObjectGuid, const FACEObject
 				// completes Reload with the authored overhead nock/draw animation.
 				App->FinishMissileMotion();
 				App->FinishEmoteMotion();
+				App->FinishCastMotion();
 			}
 		}
 	}

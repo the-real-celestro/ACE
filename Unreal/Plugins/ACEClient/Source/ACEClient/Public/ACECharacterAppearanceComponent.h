@@ -31,6 +31,7 @@ class ACECLIENT_API UACECharacterAppearanceComponent : public UActorComponent
 	friend class FACEEmoteTransitionTest;
 	friend class FACENetworkAnimationParityTest;
 	friend class FACEArcheryMotionTest;
+	friend class FACEFullCastMotionTest;
 	friend class FACEAttackHeightMotionTest;
 	friend class FACEPortalMotionTest;
 	friend class FACEWalkingStepTest;
@@ -220,6 +221,8 @@ public:
 	bool IsJumpBlockedByMotion(bool bCharging) const;
 	/** Server Ready completes missile substates without interrupting a locally predicted jump/cast. */
 	void FinishMissileMotion();
+	/** Finish the authored cast linkage before playing its return to Ready. */
+	void FinishCastMotion();
 
 	/** Seed the substate's cycle without replaying its entry (including a corpse's static Dead pose). */
 	UFUNCTION(BlueprintCallable, Category = "ACE|Appearance")

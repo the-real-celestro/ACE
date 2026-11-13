@@ -123,6 +123,7 @@ protected:
     friend class FACEMobileTouchTest;
 	friend class FACELauncherWidgetTest;
 	friend class FACELauncherViewportTest;
+	friend class FACELauncherFirstFrameTest;
 	friend class FACEVRRigTest;
 	FACELoginSettings Profile;
 	FString ProfilePath; // Optional isolated storage for automation fixtures.

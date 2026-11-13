@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "ACETestDatDirectory.h"
 #include "Misc/ScopeExit.h"
 #include "ACEDatSubsystem.h"
 #include "ACEWorldEntityActor.h"
@@ -28,7 +29,7 @@ bool FACEAvatarMotionTest::RunTest(const FString&)
  Context.OwningGameInstance=GI;Context.SetCurrentWorld(World);GI->Init();
  ON_SCOPE_EXIT {GI->Shutdown();GEngine->DestroyWorldContext(World);World->DestroyWorld(false);};
  auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
- if(!TestTrue(TEXT("Retail DAT opens"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))))return false;
+ if(!TestTrue(TEXT("Retail DAT opens"),Dat->LoadDatDirectory(ACETestDatDirectory())))return false;
  FACEWorldObject Obj;Obj.Guid=12345;Obj.SetupId=0x02000001;Obj.MotionTableId=0x09000001;Obj.bIsPlayer=true;
  auto* Actor=World->SpawnActor<AACEWorldEntityActor>();Actor->InitializeFromObject(Obj,100,false);
  auto* App=Actor->Appearance.Get();

@@ -51,8 +51,14 @@ for (variant, kind, skill, wield), stats in sorted(groups.items()):
     out.append('    {%d,%d,%d,%d,{%s}},' % (variant, kind, skill, wield, bounds))
 out += ['};']
 cantrips = {r['spell_id']: dict(r) for r in db.execute('select * from decoded_cantrip_effect')}
-legends = {r['family']: r['stat_Mod_Val'] for r in cantrips.values() if r['rank'] == 4}
-families = {name: i + 1 for i, name in enumerate(sorted({r['family'] for r in cantrips.values()}))}
+# Retail retains several renamed spell IDs. Group by the effect they actually
+# modify, not old family symbols (Mace/Spear/Staff -> Light Weapons, etc.).
+def effect_key(row):
+    kind, key = row['stat_Mod_Type'] & 255, row['stat_Mod_Key']
+    aliases = {4: {44: 360, 49: 361}, 8: {62: 168, 29: 169, 152: 170, 144: 171}}
+    return kind, aliases.get(kind, {}).get(key, key)
+legends = {effect_key(r): r['stat_Mod_Val'] for r in cantrips.values() if r['rank'] == 4}
+families = {effect: i + 1 for i, effect in enumerate(sorted({effect_key(r) for r in cantrips.values()}))}
 out += ['static constexpr FLootSpell LootSpells[] = {']
 count = 0
 for row in db.execute('select id,stat_Mod_Type,stat_Mod_Key,stat_Mod_Val from world_spell order by id'):
@@ -60,7 +66,9 @@ for row in db.execute('select id,stat_Mod_Type,stat_Mod_Key,stat_Mod_Val from wo
         continue
     if not math.isfinite(row['stat_Mod_Val']): continue
     ct = cantrips.get(row['id'], {})
-    out.append('    {%d,%d,%d,%.10g,%d,%d,%.10g},' % (row['id'], row['stat_Mod_Type'], row['stat_Mod_Key'], row['stat_Mod_Val'], families.get(ct.get('family'), 0), ct.get('rank', 0), legends.get(ct.get('family'), 0)))
+    effect = effect_key(ct) if ct else None
+    key = effect[1] if effect else row['stat_Mod_Key']
+    out.append('    {%d,%d,%d,%.10g,%d,%d,%.10g},' % (row['id'], row['stat_Mod_Type'], key, row['stat_Mod_Val'], families.get(effect, 0), ct.get('rank', 0), legends.get(effect, 0)))
     count += 1
 out += ['};', '']
 # Armor family selection mirrors GetMutationScript_ArmorLevel. Society armor
@@ -109,7 +117,7 @@ args.output.parent.mkdir(parents=True, exist_ok=True)
 args.output.write_text('\n'.join(out))
 manifest = {'source_revision': data['metadata']['source_revision'], 'world_release': data['metadata']['world_release'],
     'world_sha256': data['metadata']['world_sha256'], 'weapon_variants': len(variants), 'template_memberships': len(templates),
-    'cohorts_across_eligible_tiers': len(groups), 'native_spell_effects': count, 'cantrip_effects': len(cantrips),
+    'cohorts_across_eligible_tiers': len(groups), 'native_spell_effects': count, 'cantrip_effects': len(cantrips), 'canonical_cantrip_families':len(families),
     'armor_templates':len(armor_templates),'armor_cohorts':len(armor_groups),
     'output_sha256': hashlib.sha256(args.output.read_bytes()).hexdigest(),
     'scope': 'Ordinary public ACE generation, quality modifier zero; custom/fixed items or unsupported dimensions must remain unrated.'}

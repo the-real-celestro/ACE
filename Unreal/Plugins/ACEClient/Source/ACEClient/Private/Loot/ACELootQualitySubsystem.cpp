@@ -51,14 +51,14 @@ void UACELootQualitySubsystem::CheckCharacter()
     const auto S=C->GetSession();const int32 Id=C->GetPlayerGuid();
     const FString Name=S?S->GetServerName():FString();
     if(Id==Player&&Name==Server)return;
-    SaveOriginals();Player=Id;Server=Name;Appraisals.Empty();Originals.Empty();Reviews.Empty();Items.Empty();Requested.Empty();Queue.Empty();
+    SaveOriginals();Player=Id;Server=Name;Appraisals.Empty();Originals.Empty();Reviews.Empty();TargetReviews.Empty();Items.Empty();Requested.Empty();Queue.Empty();
     bDirty=false;RefreshPending.Empty();++Revision;if(Player)LoadOriginals();
 }
 void UACELootQualitySubsystem::ObserveItemRefresh(int32 Guid)
 {
     CheckCharacter();
     if(RefreshPending.Num()>=1024)RefreshPending.Empty();
-    RefreshPending.Add(Guid);Appraisals.Remove(Guid);Reviews.Remove(Guid);Requested.Remove(Guid);
+    RefreshPending.Add(Guid);Appraisals.Remove(Guid);Reviews.Remove(Guid);TargetReviews.Remove(Guid);Requested.Remove(Guid);
     if(Items.Contains(Guid)&&!Queue.Contains(Guid)&&Queue.Num()<128)Queue.Add(Guid);
     ++Revision;
 }
@@ -78,7 +78,7 @@ void UACELootQualitySubsystem::ObserveVitals(const FACEPlayerVitals& V)
     if(auto S=GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->GetSession())
     {
         TArray<FACEActiveEnchantment> Active;S->GetActiveEnchantments(Active);
-        for(const auto& E:Active){H=HashCombine(H,GetTypeHash(E.SpellId));H=HashCombine(H,GetTypeHash(E.CasterGuid));}
+        for(const auto& E:Active){H=HashCombine(H,GetTypeHash(E.SpellId));H=HashCombine(H,GetTypeHash(E.CasterGuid));H=HashCombine(H,GetTypeHash(E.SpellSetId));}
     }
     if(H==ProfileFingerprint)return;ProfileFingerprint=H;Reviews.Empty();++Revision;
 }
@@ -96,7 +96,7 @@ void UACELootQualitySubsystem::ObserveEnchantments()
         Requested.Remove(P.Key);
         if(!Queue.Contains(P.Key)&&Queue.Num()<128)Queue.Add(P.Key);
     }
-    Reviews.Empty();++Revision;
+    Reviews.Empty();TargetReviews.Empty();++Revision;
 }
 void UACELootQualitySubsystem::ObserveAppraisal(const FACEAppraisalInfo& A)
 {
@@ -105,8 +105,8 @@ void UACELootQualitySubsystem::ObserveAppraisal(const FACEAppraisalInfo& A)
     if(!C->GetWorldObject(A.ObjectGuid,Item))
     {const auto* Listed=Items.Find(A.ObjectGuid);if(!Listed)return;Item=*Listed;}
     if(Appraisals.Num()>=1024&&!Appraisals.Contains(A.ObjectGuid))
-    {Appraisals.Empty();Items.Empty();Reviews.Empty();}
-    Appraisals.Add(A.ObjectGuid,A);RefreshPending.Remove(A.ObjectGuid);Items.Add(Item.Guid,Item);Reviews.Empty();++Revision;
+    {Appraisals.Empty();Items.Empty();Reviews.Empty();TargetReviews.Empty();}
+    Appraisals.Add(A.ObjectGuid,A);RefreshPending.Remove(A.ObjectGuid);Items.Add(Item.Guid,Item);Reviews.Empty();TargetReviews.Remove(Item.Guid);++Revision;
     if(!A.bSuccess)return;
     TArray<FACEActiveEnchantment> Active;if(auto S=C->GetSession())S->GetActiveEnchantments(Active);
     if(!Originals.Contains(Item.Guid))
@@ -122,10 +122,10 @@ void UACELootQualitySubsystem::ObserveAppraisal(const FACEAppraisalInfo& A)
 const FACEQualityReview& UACELootQualitySubsystem::Review(const FACEWorldObject& Item)
 {
     CheckCharacter();
-    if(Items.Num()>=1024&&!Items.Contains(Item.Guid)){Items.Empty();Reviews.Empty();Queue.Empty();Requested.Empty();}
+    if(Items.Num()>=1024&&!Items.Contains(Item.Guid)){Items.Empty();Reviews.Empty();TargetReviews.Empty();Queue.Empty();Requested.Empty();}
     if(const auto* Old=Items.Find(Item.Guid);Old&&(Old->WeenieClassId!=Item.WeenieClassId||Old->Name!=Item.Name
         ||Old->SetupId!=Item.SetupId||Old->IconId!=Item.IconId))
-    {Reviews.Remove(Item.Guid);Appraisals.Remove(Item.Guid);Originals.Remove(Item.Guid);bDirty=true;}
+    {Reviews.Remove(Item.Guid);TargetReviews.Remove(Item.Guid);Appraisals.Remove(Item.Guid);Originals.Remove(Item.Guid);bDirty=true;}
     Items.Add(Item.Guid,Item);
     if(const auto* Result=Reviews.Find(Item.Guid))return *Result;
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
@@ -138,11 +138,34 @@ const FACEQualityReview& UACELootQualitySubsystem::Review(const FACEWorldObject&
             {Appraisals.Add(Item.Guid,*Fresh);A=Appraisals.Find(Item.Guid);}
     }
     const bool Equipment=(Item.ItemType&(ACEItemType::MeleeWeapon|ACEItemType::MissileWeapon|ACEItemType::Caster))
-        ||(Item.ValidLocations&&!(Item.ItemType&ACEItemType::Container));
+        ||(Item.ValidLocations&&!(Item.ItemType&ACEItemType::Container))||ACELootQuality::IsSummoningEssence(Item);
     if(Equipment&&!A&&!Queue.Contains(Item.Guid)&&Queue.Num()<128)Queue.Add(Item.Guid);
     TArray<FACEActiveEnchantment> Active;if(auto S=C->GetSession())S->GetActiveEnchantments(Active);
     return Reviews.Add(Item.Guid,ACELootQuality::Evaluate(Item,A?*A:Empty,C->GetPlayerVitalsView(),Active,
         GetGameInstance()->GetSubsystem<UACEDatSubsystem>(),Originals.Find(Item.Guid)));
+}
+FACELootTargetScore UACELootQualitySubsystem::ReviewFor(const FACEWorldObject& Item,const FACELootTemplate& Template)
+{
+    Review(Item); // Shares identification, original-roll knowledge and refresh routing.
+    const auto* A=Appraisals.Find(Item.Guid);if(!A||!A->bSuccess)return {};
+    const FString Signature=Template.Signature();
+    if(const auto* ByTemplate=TargetReviews.Find(Item.Guid))if(const auto* Cached=ByTemplate->Find(Signature))return *Cached;
+    const bool Weapon=(Item.ItemType&(ACEItemType::MeleeWeapon|ACEItemType::MissileWeapon|ACEItemType::Caster))!=0;
+    const int32 AttackSkill=Weapon?ACELootQuality::AttackSkill(Item,*A):0;
+    const bool Fits=(!AttackSkill||Template.Skills.Contains(AttackSkill))
+        &&(!ACELootQuality::IsSummoningEssence(Item)||Template.Skills.Contains(54))
+        &&(!(Item.ValidLocations&ACEEquipMask::Shield)||Template.Skills.Contains(48));
+    if(!Fits)return {};
+    if(TargetBudgetFrame!=GFrameCounter){TargetBudgetFrame=GFrameCounter;TargetBudgetCount=0;TargetBudgetStart=FPlatformTime::Seconds();}
+    if(TargetBudgetCount>=8||(TargetBudgetCount>0&&FPlatformTime::Seconds()-TargetBudgetStart>.002))
+    {FACELootTargetScore Pending;Pending.bPending=true;return Pending;}
+    ++TargetBudgetCount;++TargetEvaluationCount;
+    auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();TArray<FACEActiveEnchantment> Active;
+    if(auto Session=C->GetSession())Session->GetActiveEnchantments(Active);
+    const auto R=ACELootQuality::Evaluate(Item,*A,Template.Character(),Active,GetGameInstance()->GetSubsystem<UACEDatSubsystem>(),Originals.Find(Item.Guid));
+    FACELootTargetScore Score;Score.bRated=R.bRated;Score.bEstimated=R.bEstimated;Score.Points=R.Points;Score.Grade=R.Grade;
+    if(TargetReviews.Num()>=512&&!TargetReviews.Contains(Item.Guid))TargetReviews.Remove(TargetReviews.CreateConstIterator().Key());
+    auto& Cache=TargetReviews.FindOrAdd(Item.Guid);if(Cache.Num()>=48)Cache.Empty();Cache.Add(Signature,Score);return Score;
 }
 void UACELootQualitySubsystem::Tick(float)
 {

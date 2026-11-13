@@ -14,6 +14,9 @@
 #include "Protocol/ACEObjectCreateParser.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "Mods/ACEPluginVM.h"
+#include "ACELootQuality.h"
+#include "ACEDatSubsystem.h"
+#include "ACETestDatDirectory.h"
 #include "Mods/ACEVTProfile.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEPluginLootIconsTest,"ACE.Plugins.LootIconProperties",
@@ -228,12 +231,24 @@ bool FACEPluginLootIconsTest::RunTest(const FString&)
     TestEqual(TEXT("Completed appraisal resumes the clicked item match"),Client->ChatHistory.Num(),Before+3);
     Policy->Profile->SetArrayField(TEXT("loot_rules"),{});Policy->Enabled=false;
     Session->WorldObjects[ClickItem.Guid].ItemType=ACEItemType::MeleeWeapon;
-    ClickAppraisal.bHasWeaponProfile=true;ClickAppraisal.Damage=40;ClickAppraisal.DamageVariance=.25;ClickAppraisal.WeaponTime=30;
+    ClickAppraisal.bHasWeaponProfile=true;ClickAppraisal.Damage=40;ClickAppraisal.DamageVariance=.25;ClickAppraisal.WeaponTime=30;ClickAppraisal.WeaponOffense=1.1;
     Host->LastInspectedAt=0;ClickAppraisal.FloatProperties.Add(29,1.2);ClickAppraisal.FloatProperties.Add(149,1.1);ClickAppraisal.FloatProperties.Add(150,1.05);ClickAppraisal.IntProperties.Add(204,12);
     Host->ObserveAppraisal(ClickAppraisal);Client->SelectInventoryObject(ClickItem.Guid);Host->TickLootInspection();
-    TestTrue(TEXT("Weapon click prints appraised damage and speed without any loot rules or enabled UCM"),Client->ChatHistory.Last().Text.Contains(TEXT("Dmg 30–40"))&&Client->ChatHistory.Last().Text.Contains(TEXT("Speed 30")));
-    TestTrue(TEXT("Weapon includes attack, three defenses and damage bonuses"),Client->ChatHistory.Last().Text.Contains(TEXT("Attack"))&&Client->ChatHistory.Last().Text.Contains(TEXT("Melee D"))&&Client->ChatHistory.Last().Text.Contains(TEXT("Missile D"))&&Client->ChatHistory.Last().Text.Contains(TEXT("Magic D"))&&Client->ChatHistory.Last().Text.Contains(TEXT("Damage bonus 12")));
+    TestTrue(TEXT("Weapon click prints appraised damage and speed without any loot rules or enabled UCM"),Client->ChatHistory.Last().Text.Contains(TEXT("30–40"))&&Client->ChatHistory.Last().Text.Contains(TEXT("Speed 30")));
+    TestTrue(TEXT("Weapon includes attack, three defenses and damage bonuses"),Client->ChatHistory.Last().Text.Contains(TEXT("Attack"))&&Client->ChatHistory.Last().Text.Contains(TEXT("Melee D"))&&Client->ChatHistory.Last().Text.Contains(TEXT("Missile D"))&&Client->ChatHistory.Last().Text.Contains(TEXT("Magic D"))&&Client->ChatHistory.Last().Text.Contains(TEXT("Damage bonus +12")));
     TestTrue(TEXT("Unmatched weapon stat line stays unbolded"),Client->ChatHistory.Last().BoldText.IsEmpty());
+    auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
+    if(TestTrue(TEXT("DAT opens for a rated click"),Dat->LoadDatDirectory(ACETestDatDirectory())))
+    {
+        auto& Sword=Session->WorldObjects[ClickItem.Guid];Sword.WeenieClassId=3884;Sword.Name=TEXT("Fire Long Sword");Sword.ValidLocations=ACEEquipMask::MeleeWeapon;
+        ClickAppraisal.Damage=65;ClickAppraisal.DamageVariance=.47;ClickAppraisal.DamageType=16;ClickAppraisal.WeaponSkill=44;ClickAppraisal.WeaponOffense=1.2;
+        ClickAppraisal.IntProperties={{158,2},{159,44},{160,400},{171,0},{105,7}};ClickAppraisal.FloatProperties={{29,1.2}};ClickAppraisal.SpellBookEntries={6089};
+        Host->LastInspectedAt=0;Host->ObserveAppraisal(ClickAppraisal);Client->SelectInventoryObject(ClickItem.Guid);Host->TickLootInspection();
+        const auto& Message=Client->ChatHistory.Last();
+        TestTrue(TEXT("Click announces Legendary with per-hit damage type"),Message.Text.StartsWith(TEXT("[LEGENDARY] Fire Long Sword"))&&Message.Text.Contains(TEXT("Fire"))&&Message.Text.Contains(TEXT("Work 7")));
+        TestTrue(TEXT("Legendary chat uses the orange rarity color"),Message.Color.IsSet()&&Message.Color.GetValue().Equals(ACELootQuality::Color(ACELootScoring::Grade::Legendary)));
+        FFileHelper::SaveStringToFile(Message.Text,*(FPaths::ProjectSavedDir()/TEXT("LootQuality-chat-summary.txt")));
+    }
     TestFalse(TEXT("Inspecting loot never starts UCM"),Policy->Running);
     return true;
 }

@@ -58,7 +58,7 @@ TArray<FACEItemStatLine> ACEAppraisalFormatting::EquipmentStatLines(const FACEAp
     if(const auto* AL=Info.IntProperties.Find(28))
     {
         Add(TEXT("Armor"),TEXT("Armor level"),FString::FromInt(*AL));
-        const TCHAR* Names[]={TEXT("Slashing armor"),TEXT("Piercing armor"),TEXT("Bludgeoning armor"),TEXT("Cold armor"),TEXT("Fire armor"),TEXT("Acid armor"),TEXT("Nether armor"),TEXT("Electric armor")};
+        const TCHAR* Names[]={TEXT("Slashing"),TEXT("Piercing"),TEXT("Bludgeoning"),TEXT("Cold"),TEXT("Fire"),TEXT("Acid"),TEXT("Nether"),TEXT("Electric")};
         const int32 Keys[]={13,14,15,16,17,18,165,19};
         for(int32 I:{0,1,2,4,3,5,7,6})if(Info.ArmorResistances.IsValidIndex(I)&&FMath::IsFinite(Info.ArmorResistances[I]))
             Rows.Add({FString::Printf(TEXT("Armor%d"),Keys[I]),Names[I],FString::FromInt(FMath::TruncToInt(*AL*FMath::Clamp(Info.ArmorResistances[I],0.f,2.f)))});
@@ -74,6 +74,7 @@ TArray<FACEItemStatLine> ACEAppraisalFormatting::EquipmentStatLines(const FACEAp
         Add(TEXT("Set"),TEXT("Set"),Name.IsEmpty()?FString::FromInt(Set):Name);
     }
     if(Info.IntProperties.FindRef(171)>0)Add(TEXT("Tinkers"),TEXT("Tinkers"),FString::FromInt(Info.IntProperties.FindRef(171)));
+    if(const auto* V=Info.IntProperties.Find(19))Add(TEXT("Value"),TEXT("Value"),FText::AsNumber(*V).ToString());
     if(const auto* V=Info.IntProperties.Find(105))Add(TEXT("Work"),TEXT("Workmanship"),FString::FromInt(*V));
     if(const auto* V=Info.IntProperties.Find(107);V&&Info.IntProperties.Contains(108))
         Add(TEXT("Mana"),TEXT("Item mana"),FString::Printf(TEXT("%d / %d"),*V,Info.IntProperties.FindRef(108)));

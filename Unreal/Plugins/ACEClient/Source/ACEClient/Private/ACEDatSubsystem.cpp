@@ -1284,6 +1284,7 @@ void UACEDatSubsystem::ClearLoadedState()
 	WaveCache.Reset();
 	SoundTableCache.Reset();
 	SpellInfoCache.Reset();
+	EquipmentSetSpellCache.Reset();
 	bSpellTableLoaded = false;
 	SkillInfoCache.Reset();
 	bSkillTableLoaded = false;
@@ -8648,8 +8649,40 @@ bool UACEDatSubsystem::EnsureSpellTableLoaded()
 			SpellInfoCache.Add(Key, MoveTemp(Entry));
 		}
 	}
+	// SpellTable ends with a packed hash of set IDs, each containing a packed
+	// hash of piece-count tiers and their spell-ID vectors (ACE.DatLoader.SpellSet).
+	const uint16 SetCount=Cur.ReadU16(bOk);Cur.ReadU16(bOk);
+	bOk=bOk&&SetCount<=1024;
+	for(uint16 I=0;I<SetCount&&bOk;++I)
+	{
+		const uint32 SetId=Cur.ReadU32(bOk);
+		const uint16 TierCount=Cur.ReadU16(bOk);Cur.ReadU16(bOk);
+		bOk=bOk&&TierCount<=1024;
+		TMap<uint32,TArray<uint32>> Tiers;
+		for(uint16 J=0;J<TierCount&&bOk;++J)
+		{
+			const uint32 Pieces=Cur.ReadU32(bOk),SpellCount=Cur.ReadU32(bOk);
+			bOk=bOk&&SpellCount<=1024;
+			TArray<uint32> Spells;
+			for(uint32 K=0;K<SpellCount&&bOk;++K)Spells.Add(Cur.ReadU32(bOk));
+			if(bOk)Tiers.Add(Pieces,MoveTemp(Spells));
+		}
+		if(bOk)EquipmentSetSpellCache.Add(SetId,MoveTemp(Tiers));
+	}
+	if(!bOk)EquipmentSetSpellCache.Reset();
 	bSpellTableLoaded = true;
-	UE_LOG(LogTemp, Log, TEXT("ACEDat: SpellTable loaded (%d spells)"), SpellInfoCache.Num());
+	UE_LOG(LogTemp, Log, TEXT("ACEDat: SpellTable loaded (%d spells, %d equipment sets)"), SpellInfoCache.Num(),EquipmentSetSpellCache.Num());
+	return true;
+}
+
+bool UACEDatSubsystem::TryGetEquipmentSetSpells(uint32 SetId,uint32 Pieces,TArray<uint32>& OutSpells)
+{
+	OutSpells.Reset();if(!EnsureSpellTableLoaded())return false;
+	const auto* Tiers=EquipmentSetSpellCache.Find(SetId);if(!Tiers)return false;
+	const TArray<uint32>* Best=nullptr;uint32 Threshold=0;
+	for(const auto& Tier:*Tiers)if(Tier.Key<=Pieces&&(!Best||Tier.Key>Threshold))
+	{Best=&Tier.Value;Threshold=Tier.Key;}
+	if(Best)OutSpells=*Best;
 	return true;
 }
 
@@ -9160,6 +9193,16 @@ bool UACEDatSubsystem::TryGetSkillInfo(uint32 SkillId, FString& OutName, uint32&
 		return !OutName.IsEmpty() || OutIconDid != 0;
 	}
 	return false;
+}
+
+bool UACEDatSubsystem::TryGetSkillAttributes(uint32 SkillId, TArray<uint32>& OutAttributes)
+{
+    OutAttributes.Reset();
+    if(!SkillId||!EnsureSkillTableLoaded())return false;
+    const auto* Skill=SkillInfoCache.Find(SkillId);if(!Skill||!Skill->FormulaZ)return false;
+    if(Skill->FormulaX&&Skill->FormulaAttr1>=1&&Skill->FormulaAttr1<=6)OutAttributes.AddUnique(Skill->FormulaAttr1);
+    if(Skill->FormulaY&&Skill->FormulaAttr2>=1&&Skill->FormulaAttr2<=6)OutAttributes.AddUnique(Skill->FormulaAttr2);
+    return !OutAttributes.IsEmpty();
 }
 
 bool UACEDatSubsystem::TryGetSkillTooltip(uint32 SkillId, FString& OutText)

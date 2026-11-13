@@ -1,5 +1,40 @@
 # Retail parity regression tests
 
+## Resizable plugin bar (2026-11-13)
+
+`bash Unreal/Build/Mac/Preview-PluginBar.sh --test-only` runs IconArtwork,
+BarLayout and BarPresentation. BarLayout checks sixteen-icon row/column/grid
+geometry, incomplete rows, resize quantization, and viewport wrapping.
+BarPresentation also checks a sixteen-target Slate grid, cross-row drops, modifier
+header/resize visibility, stable icon position during reveal, opacity independent
+of global settings, actual rendered transparency with opaque artwork, and grid /
+opacity persistence after recreating the dock. It emits additional
+`PluginBar-Checked-Grid-*.png` captures for both sizes, optional names, and a fully
+transparent background. Rendering and live interactions still require a normal
+macOS application session. No NullRHI for presentation or artwork acceptance.
+
+## Painted plugin icons (2026-11-11)
+
+Run `ACE.Plugins.IconArtwork`, `ACE.Plugins.HostAndPanel`, and
+`ACE.Plugins.PublicAPI` with rendering enabled. IconArtwork verifies the staged
+atlas loads, all twenty emblems share one texture, and live badges retain it
+through garbage collection. It also checks transparent silhouettes at 26px
+(badges) and 36px (the icon-only launcher), plus the Prismatic Taper/Hyssop mapping.
+The other suites cover layout, orientation, saved optional names, drag reordering,
+and custom plugin PNGs taking precedence over the built-in artwork.
+HostAndPanel samples the actual launcher button fill in both orientations to
+catch white tiles caused by missing explicit Slate draw tints. It also checks
+the pinned map's Unpin button while the global UI lock is active.
+KeyboardBindings covers Slate-owned Control/Command holds with text focus,
+releasing a modifier despite stale gameplay input, and custom rebinding.
+`ACE.Plugins.BarPresentation` is the focused preview check: it renders the actual
+bar in both sizes and orientations, checks actual button/icon geometry and saved
+preferences, preserves the minimized handle when changing sizes, reveals a pinned ledger using Slate modifier state,
+clicks its real Unpin control, verifies release handling and clicks the map's
+Unpin button. It uses isolated settings and avoids unrelated UCM profile schemas
+and native IME windows. UV comparisons in IconArtwork allow 1e-6 of float rounding
+(less than 0.002 source texels), while preserving strict per-cell bounds.
+
 ## Toolbar icon depth (2026-10-23)
 
 Run `ACE.RetailParity.SelectionToolbar`, `ACE.RetailParity.UIScreens`,
@@ -1132,3 +1167,44 @@ interactions, world entry and landscape fidelity use `-RetailDatDir=` through
 The world-entry fixture uses RGBA32f depth readback supported by Vulkan and
 D3D. Windows scan-code normalization is tested on Windows; other platforms
 feed Unreal keypad keys instead of interpreting Windows VK values as native codes.
+
+`ACE.LootQuality.UtilityRatings` reproduces Legendary Arcane Prowess jewelry
+(Rare, 75.65), validates contrast of all six quality badges, and checks every Blood
+Thirst rank receives weapon damage credit. Its native capture is
+`Saved/LootQuality-arcane-rare.png`.
+
+`ACE.LootQuality.RatingAudit` exports the production evaluator's marginal scores
+for all 297 decoded cantrip IDs across 73 weapon/wearable/build fixtures, all 139
+DAT sets in the same contexts, every verified weapon/armor bracket and the full
+decoded ordinary stat-effect catalog to `Saved/Loot-rating-audit.json`. The audit
+tests all canonical families and both positive and zero contributions; it does
+not assert that every mechanical spell/slot combination can naturally drop.
+
+
+`ACE.LootQuality.TargetTemplates` checks recipient selection, universal versus
+hybrid scoring, missing-template validation, cached native snapshots, weapon
+training identity, OR matching, pending work and per-recipient estimated-score
+filtering. `ACE.Plugins.SimpleLootGoalsUI` also saves and reopens named/multiple
+recipients and verifies that recipient goals do not inherit looter usability.
+Its additional captures are `Saved/UCM-universal-loot.png`,
+`Saved/UCM-template-loot.png` and `Saved/UCM-template-editor.png`.
+
+`ACE.Plugins.LootNotifications` also exercises a native Universal comparison
+across frames, recipient names in match/pickup messages, and previewing an
+unsaved recipient rule. Pending score snapshots refresh without restarting
+ordinary cooperative regex/rule scans or requesting another appraisal.
+
+Local v173 adds expired-key cases to `ACE.RetailParity.InventoryOrder`: carried
+consumption in main/side packs, dense placement and selection cleanup, and all
+six orderings of login description, Container=0 quality and ObjectDelete.
+`ACE.Collision.ClosedChestEscape` loads the actual Legendary Magic Chest model
+(`0x02000F34`, shared by the four Legendary chests), closes it around a standing
+player, walks out in small steps, and verifies solid entry and neighboring walls
+remain blocking after physics/visibility refreshes.
+
+Local v174 adds `ACE.RetailParity.FullCastMotion`. It compares every displayed
+pose through human magic gesture entry and recovery against DAT links, on both
+human bodies at two casting speeds and frame rates. It also checks early local
+and remote Ready messages, queued next spells/stance changes and late Ready
+during a jump. `Saved/Full-cast-item-hand-trace.csv` records the displayed and
+authored right-hand height through the complete item-enchantment cast.

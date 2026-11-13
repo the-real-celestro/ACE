@@ -858,6 +858,15 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
         }
     }
     // Character edits are staged; Chat and Config resets cannot change character options.
+    Binder->ShowPanelPage(TEXT("OptionsPanel_Field"));Binder->SyncOptionsPanelTab(TEXT("GameplayOptionsPage"));
+    Binder->RefreshOptionsOverlays();Draw(TEXT("RetailGameplayMenu"));
+    for(int32 Index=0;Index<9&&Index<Binder->OptionsButtonLabels.Num();++Index)
+    {
+        const auto* Label=Cast<UACERetailTextBlock>(Binder->OptionsButtonLabels[Index]);
+        const auto Element=Label?Label->GetRetailElement():nullptr;
+        TestTrue(TEXT("Game menu captions retain the retail font and authored vertical centering"),
+            Label&&Label->GetBitmapFont()&&Element&&Element->TextVerticalJustification==1);
+    }
     Binder->ShowPanelPage(TEXT("OptionsPanel_Field"));Binder->SyncOptionsPanelTab(TEXT("CharacterSettingsPage"));
     Draw(TEXT("RetailCharacterOptions"));
     TestTrue(TEXT("Character starts with UI behavior in retail order"),Binder->OptionRowOptions.Num()>1 && Binder->OptionRowOptions[1]==0x07);

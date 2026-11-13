@@ -2421,6 +2421,7 @@ local function tick(s,p)
      loot_scan.evaluation=loot_scan.evaluation or {}
      local match=rule_match(rule,item,s,loot_scan.evaluation)
      if match=='pending' then return progress() end
+     local recipient=loot_scan.evaluation.target_match
      loot_scan.evaluation=nil
      if match==nil then
       local key='id'..item.id
@@ -2440,8 +2441,9 @@ local function tick(s,p)
       local amount=rule.keep_up_to and rule.keep_up_to>0 and math.min(item.count,math.max(0,rule.keep_up_to-have)) or item.count
       if rule.action~='skip' and amount>0 then
        local before={};for _,v in ipairs(inventory) do before[v.id]=true end
-       loot_scan={};loot_pending={container=s.container,empties=#contents==1 and amount==item.count,before=before,amount=amount,id=item.id,count=item.count,wcid=item.wcid,expected=(owned[item.wcid] or 0)+amount,expires=s.time+10,after=rule.action,name=item.name or 'Item',rule=rule.label or 'Matching rule'}
-       return {action='loot',item=item.id,amount=amount,status='Looting '..item.name..' ('..(rule.label or 'matching rule')..')'}
+       local match_label=(rule.label or 'Matching rule')..(recipient and (' · for '..recipient) or '')
+       loot_scan={};loot_pending={container=s.container,empties=#contents==1 and amount==item.count,before=before,amount=amount,id=item.id,count=item.count,wcid=item.wcid,expected=(owned[item.wcid] or 0)+amount,expires=s.time+10,after=rule.action,name=item.name or 'Item',rule=match_label}
+       return {action='loot',item=item.id,amount=amount,status='Looting '..item.name..' ('..match_label..')'}
       end
       break
      end

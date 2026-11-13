@@ -135,10 +135,19 @@ void UACEHoverTooltipWidget::SetWidgetContentTooltip(UWidget* Widget,const FText
 		if(!NewTip&&SlateOwner)SlateOwner->SetToolTip(Existing);
 	}
 	Tip->SetVisibility(ESlateVisibility::HitTestInvisible);
+	Content->SlatePrepass();
+	const bool ContentChanged=Tip->CustomContent!=Content;
 	Tip->CustomContent=Content;
-	if(Tip->CustomContentHost)Tip->CustomContentHost->SetContent(Content);
+	if(ContentChanged&&Tip->CustomContentHost)Tip->CustomContentHost->SetContent(Content);
 	if(NewTip)Widget->SetToolTip(Tip);
+	Tip->ForceLayoutPrepass();
 	Tip->ProtectOwnerFromCursorOverlap();
+}
+
+TSharedPtr<SWidget> UACEHoverTooltipWidget::GetWidgetContentTooltip(const UWidget* Widget)
+{
+	const auto* Tip=Widget?Cast<UACEHoverTooltipWidget>(Widget->GetToolTip()):nullptr;
+	return Tip?Tip->CustomContent:nullptr;
 }
 
 FSlateRect UACEHoverTooltipWidget::GetCursorExclusionRect(const FVector2D& CursorPixels)
@@ -317,7 +326,9 @@ void UACEHoverTooltipWidget::SetTooltipScreenPosition(const FVector2D& CursorPix
 	const float Dpi = FMath::Max(0.01f, UWidgetLayoutLibrary::GetViewportScale(this));
 	FVector2D SizePx = UWidgetLayoutLibrary::GetViewportSize(this);
 	ForceLayoutPrepass();
-	const FVector2D PosPx = CalculateTooltipPosition(CursorPixels, GetDesiredSize() * Dpi, SizePx, Dpi);
+	const FVector2D DesiredSize=GetDesiredSize();
+	if(CustomContent&&!GetCachedGeometry().GetLocalSize().Equals(DesiredSize,.01f))SetDesiredSizeInViewport(DesiredSize);
+	const FVector2D PosPx = CalculateTooltipPosition(CursorPixels, DesiredSize * Dpi, SizePx, Dpi);
 	SetAlignmentInViewport(FVector2D::ZeroVector);
 	SetPositionInViewport(PosPx, true);
 }

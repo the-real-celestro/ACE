@@ -195,3 +195,52 @@ For automatic assessment, add the `identify` permission and submit
 its shared one-per-second command limit and waiting for appraisal changes. An
 automation driver uses `inventory` permission for appraisal. Neither a match nor
 a request being accepted proves that a subsequent pickup or salvage succeeded.
+
+
+## Simple quality goals (local v169)
+
+The main UCM Loot tab defaults to explicit pickup goals. Choose a minimum
+quality, one or more categories, and optionally a base-skill wield requirement:
+Any, No skill requirement, Exactly, or Between (inclusive). Examples are
+Uncommon+ armor/jewelry, Legendary wands with no skill wield, and Legendary
+wands requiring exactly 270. Goals use the hover evaluator, including explicitly
+estimated tinkered scores. They do not penalize good future equipment just
+because the current character cannot wield it. Arcane Lore and level gates are
+separate from the skill-wield filter. Build-complement jewelry selection is not
+part of this feature.
+
+Native JSON fields: `quick_goal` boolean, `min_quality` integer 0..5,
+`item_categories` nonempty string array, `wield_mode` any/none/exact/range,
+`wield_min` and `wield_max` nonnegative integers. Advanced rules can set
+`allow_estimated: false`. Categories are weapons, melee, missile, heavy, light,
+finesse, twohand, bow, crossbow, atlatl, wand, armor, shield, jewelry, clothing,
+essence. Parent categories include their children. Missing identification waits
+for appraisal; identified items without a usable grade do not match. An absent
+skill requirement is zero, independently of Arcane Lore.
+
+Adding a goal puts it first in the existing first-match rule order. Editing,
+toggling and deleting save through the normal profile flow and stop UCM until
+restarted. Opening the panel does not alter profiles. Advanced rules remain
+available. New goals contain a retired always-false Classic condition (legacy
+key 6), ignored only by the new quality-goal matcher. This prevents an older
+client from ignoring unknown quality fields and accidentally keeping all loot.
+Quality goals are a native-profile feature; original-format UTL cannot express
+them and retains that closed compatibility guard.
+
+
+## Recipient-aware quality goals (local v172)
+
+Use **Rate for** in the simple Loot goals: Current character, Universal / trade
+loot, or any combination of preset and named templates. Universal evaluates
+whole coherent combat/crafting templates plus saved custom templates and keeps
+the best full score. It does not combine incompatible spells across recipients.
+Named templates can start from a preset or copy the current character's trained
+skills, then be customized and saved for a friend/alt. They live in the shared
+Loot profile and travel with that profile when selected on another character.
+
+Several selected templates mean **any one qualifies**, not all must qualify.
+Quality, item category and wield-bracket filters still combine normally.
+Usable-now/close filters apply only to Current character goals. Recipient goals
+ignore the looter's own skill limits. Personal hover/icon ratings remain personal;
+pickup explanations name the recipient whose quality threshold was met.
+Existing goals default to Current character and retain their prior behavior.

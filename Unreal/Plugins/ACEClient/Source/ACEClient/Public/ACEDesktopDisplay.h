@@ -8,6 +8,8 @@ class ACECLIENT_API FACEDesktopDisplay
 {
 public:
     virtual ~FACEDesktopDisplay() = default;
+    /** The initial native fullscreen repair must settle before showing the lobby. */
+    virtual bool IsStartupReady() const { return true; }
     static TSharedPtr<FACEDesktopDisplay> Create(AACEPlayerController* Controller);
     /** A mode-only fullscreen switch uses the monitor, not the old window size. */
     static FIntPoint ResolveResolution(EWindowMode::Type Previous, EWindowMode::Type Next,

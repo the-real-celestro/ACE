@@ -5,7 +5,7 @@
 #include "Protocol/ACEBinaryWriter.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEClosedContainerLifetimeTest, "ACE.RetailParity.ClosedContainerLifetime",
-    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACEClosedContainerLifetimeTest::RunTest(const FString&)
 {
     FACESession Session;

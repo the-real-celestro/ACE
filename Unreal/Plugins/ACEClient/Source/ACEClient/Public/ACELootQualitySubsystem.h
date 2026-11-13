@@ -3,6 +3,7 @@
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "Tickable.h"
 #include "ACELootQuality.h"
+#include "ACELootTargets.h"
 #include "ACELootQualitySubsystem.generated.h"
 
 /** Owns observed appraisals and original rolls; never changes loot or equips items. */
@@ -18,6 +19,8 @@ public:
     virtual bool IsTickable() const override { return bInitialized && !IsTemplate(); }
     virtual UWorld* GetTickableGameObjectWorld() const override;
     const FACEQualityReview& Review(const FACEWorldObject& Item);
+    FACELootTargetScore ReviewFor(const FACEWorldObject& Item,const FACELootTemplate& Template);
+    uint64 TargetEvaluationCount=0;
     uint64 Revision = 1;
     UFUNCTION() void ObserveAppraisal(const FACEAppraisalInfo& Info);
     UFUNCTION() void ObserveVitals(const FACEPlayerVitals& Vitals);
@@ -32,6 +35,10 @@ private:
     TMap<int32, FACEQualityOriginal> Originals;
     TMap<int32, FACEQualityReview> Reviews;
     TMap<int32, FACEWorldObject> Items;
+    TMap<int32,TMap<FString,FACELootTargetScore>> TargetReviews;
+    uint64 TargetBudgetFrame=MAX_uint64;
+    int32 TargetBudgetCount=0;
+    double TargetBudgetStart=0;
     TMap<int32, double> Requested;
     TArray<int32> Queue;
     TSet<int32> RefreshPending;

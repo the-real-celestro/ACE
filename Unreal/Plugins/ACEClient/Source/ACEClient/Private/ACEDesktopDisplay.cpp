@@ -99,6 +99,14 @@ class FDisplayInput final : public IInputProcessor
     }
 public:
     explicit FDisplayInput(AACEPlayerController* PC) : Controller(PC) {}
+    bool IsStartupReady() const
+    {
+#if PLATFORM_MAC
+        return MacFullscreenFix==2 && FPlatformTime::Seconds()>=MacFullscreenAt;
+#else
+        return true;
+#endif
+    }
     virtual void Tick(float, FSlateApplication& App, TSharedRef<ICursor>) override
     {
         auto* PC=Controller.Get();
@@ -133,6 +141,7 @@ public:
                 Settings->ApplyResolutionSettings(false);
                 Settings->SaveSettings();
             }
+            MacFullscreenAt=FPlatformTime::Seconds()+.05;
             return;
         }
 #endif
@@ -197,6 +206,7 @@ class FDisplayLifetime final : public FACEDesktopDisplay
 public:
     explicit FDisplayLifetime(AACEPlayerController* PC) : Input(MakeShared<FDisplayInput>(PC))
     { FSlateApplication::Get().RegisterInputPreProcessor(Input,0); }
+    virtual bool IsStartupReady() const override { return Input->IsStartupReady(); }
     virtual ~FDisplayLifetime() override
     {
         FACEDesktopDisplay::FinishModeChange(false);

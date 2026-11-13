@@ -9,7 +9,7 @@
 #include "IPAddress.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERetailInventoryOrderTest, "ACE.RetailParity.InventoryOrder",
-    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACERetailInventoryOrderTest::RunTest(const FString& Parameters)
 {
     FACESession Session;
@@ -688,13 +688,49 @@ bool FACERetailInventoryOrderTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("Final missile releases its equipment slot"),Equipped.IsEmpty());
         TestEqual(TEXT("Consumed missile selection is cleared"),Session.SelectedObject.Guid,0);
         TestTrue(TEXT("Consumed ammo invalidates the inventory snapshot"),Session.InventoryDataRevision>Revision);
-        TestTrue(TEXT("Completed removal leaves no pending evidence"),Session.EquipmentRemovalEvidence.IsEmpty());
+        TestTrue(TEXT("Completed removal leaves no pending evidence"),Session.InventoryRemovalEvidence.IsEmpty());
         auto Refill=Ammo; Refill.Guid=201; Refill.StackSize=250; Refill.WielderId=0; Refill.CurrentWieldedLocation=0; Refill.ContainerId=100;
         Session.UpsertWorldObject(Refill);
         FACEBinaryWriter Wield; Wield.WriteUInt32(201); Wield.WriteInt32(int32(Location));
         FACEBinaryReader WR(Wield.GetData()); Session.HandleWieldItem(WR); Session.GetEquippedItems(Equipped);
         TestEqual(TEXT("Fresh ammo can occupy the slot without relogging"),Equipped.Num(),1);
         if(Equipped.Num())TestEqual(TEXT("Equipped ammo is the replacement stack"),Equipped[0].Guid,201);
+    }
+    // Expiring keys and other consumed pack items use Container=0 + Delete,
+    // without InventoryRemoveObject. Preserve placement until both arrive.
+    for(int32 Bag:{100,500})for(bool DeleteFirst:{false,true})
+    {
+        Session.ClearWorldState();Session.PlayerGuid=100;Session.State=EACESessionState::InWorld;
+        if(Bag!=100){auto Pack=Item(Bag,100,0);Pack.ItemType=ACEItemType::Container;Pack.ItemsCapacity=24;Session.UpsertWorldObject(Pack);Session.ContainerContents.Add(100,{{Bag,1}});}
+        for(int32 I=0;I<3;++I){auto Key=Item(200+I,Bag,I);Key.Name=TEXT("Legendary Key");Key.bHasPhysicsTimestamps=true;Key.PhysicsTimestamps[ACEPhysicsTimeStamp::Instance]=7;Session.UpsertWorldObject(Key);}
+        Session.ContainerContents.Add(Bag,{{200,0},{201,0},{202,0}});Session.SelectObject(201,true);
+        const auto Revision=Session.InventoryDataRevision;
+        for(int32 Step=0;Step<2;++Step)
+        {
+            FACEBinaryWriter W;
+            if((Step==0)==DeleteFirst){W.WriteUInt32(201);W.WriteUInt16(7);W.Align();FACEBinaryReader R(W.GetData());Session.HandleObjectDelete(R);}
+            else{W.WriteUInt8(1);W.WriteUInt32(201);W.WriteUInt32(2);W.WriteUInt32(0);FACEBinaryReader R(W.GetData());Session.HandlePublicUpdateInstanceId(R);}
+            TestEqual(TEXT("Both expiration receipts are required"),Session.WorldObjects.Contains(201),Step==0);
+        }
+        Check(Bag,{200,202});
+        TestEqual(TEXT("Consumed key clears its selection"),Session.SelectedObject.Guid,0);
+        TestEqual(TEXT("Neighbor placement closes the expired key's gap"),Session.WorldObjects[202].PlacementPosition,1);
+        TestTrue(TEXT("Expired key refreshes cached inventory"),Session.InventoryDataRevision>Revision);
+        TestTrue(TEXT("Completed key removal releases evidence"),Session.InventoryRemovalEvidence.IsEmpty());
+    }
+    for(const auto& Order:TArray<TArray<int32>>{{0,1,2},{0,2,1},{1,0,2},{1,2,0},{2,0,1},{2,1,0}})
+    {
+        Session.ClearWorldState();Session.PlayerGuid=100;Session.State=EACESessionState::InWorld;
+        Session.ContainerContents.Add(100,{{201,0}});
+        auto Key=Item(201,100,0);Key.Name=TEXT("Legendary Key");Key.bHasPhysicsTimestamps=true;Key.PhysicsTimestamps[ACEPhysicsTimeStamp::Instance]=7;
+        for(int32 Event:Order)
+        {
+            if(Event==0){Session.UpsertWorldObject(Key);Session.ReplayObjectPhysicsEvents(201);}
+            else if(Event==1){FACEBinaryWriter W;W.WriteUInt8(1);W.WriteUInt32(201);W.WriteUInt32(2);W.WriteUInt32(0);FACEBinaryReader R(W.GetData());Session.HandlePublicUpdateInstanceId(R);}
+            else{FACEBinaryWriter W;W.WriteUInt32(201);W.WriteUInt16(7);W.Align();FACEBinaryReader R(W.GetData());Session.HandleObjectDelete(R);}
+        }
+        TestFalse(TEXT("Login description cannot resurrect an expired key in any queue order"),Session.WorldObjects.Contains(201));
+        TestTrue(TEXT("Expired login key is removed from the inventory profile too"),Session.ContainerContents[100].IsEmpty());
     }
     // Wield receipts arriving before ObjectCreate must retain the acknowledged
     // equipment record. They must not invent a destination for other equipment.

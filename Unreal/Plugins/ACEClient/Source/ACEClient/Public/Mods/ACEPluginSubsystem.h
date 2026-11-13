@@ -15,7 +15,7 @@
 
 class FACEPluginVM;
 namespace ACEWaypoint { struct FRoutePoint; }
-namespace ACEUCMPanelPrivate { class FACEUCMImportUITest; }
+namespace ACEUCMPanelPrivate { class FACEUCMImportUITest; class FACEUCMSimpleGoalsUITest; }
 class SWidget;
 struct FACEWikiState;
 class AACEPlayerController;
@@ -128,6 +128,7 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
     GENERATED_BODY()
     friend class FACEFoundryTest;
     friend class FACEPluginHostTest;
+    friend class FACEPluginBarPresentationTest;
     friend class FACEPluginLimitTest;
     friend class FACEUIWorkloadTest;
     friend class FACEUCMIdleWorkloadTest;
@@ -152,6 +153,9 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
     friend class FACEUCMLootLatencyTest;
     friend class FACEUCMLootNotificationTest;
     friend class FACEPluginLootIconsTest;
+    friend class FACEQualityLootGoalsTest;
+    friend class FACELootTargetsTest;
+    friend class ACEUCMPanelPrivate::FACEUCMSimpleGoalsUITest;
     friend class FACEWeaponSkillLootTest;
     friend class FACEUCMLootBuilderTest;
     friend class FACEUCMWeaponSelectionTest;
@@ -283,6 +287,13 @@ public:
     void SetPluginBarMinimized(bool Minimized);
     bool IsPluginBarHorizontal() const;
     void SetPluginBarHorizontal(bool Horizontal);
+    /** Zero uses the horizontal/vertical preset; positive values persist a custom grid. */
+    int32 GetPluginBarColumns() const;
+    void SetPluginBarColumns(int32 Columns,bool Persist=true);
+    bool IsPluginBarLarge() const;
+    void SetPluginBarLarge(bool Large);
+    bool ArePluginBarLabelsVisible() const;
+    void SetPluginBarLabelsVisible(bool Labels);
     TArray<FString> PluginDisplayOrder() const;
     /** Plugin UI theme ("codex" default, or "original"); switching rebuilds open plugin windows. */
     FString GetPluginTheme() const;
@@ -405,7 +416,7 @@ public:
         bool Manual, bool Blocked, bool VR, const FVector& Facing, float MaxFrameTravel = 0.f);
 private:
     void TickLootInspection();
-    TSharedPtr<FJsonValue> LootItemSnapshot(const FACEWorldObject& Item);
+    TSharedPtr<FJsonValue> LootItemSnapshot(const FACEWorldObject& Item,const TSharedPtr<FJsonObject>& RatingPolicy=nullptr);
     int32 InspectLootGuid=0;
     int32 LastInspectedItem=0;
     double LastInspectedAt=0;

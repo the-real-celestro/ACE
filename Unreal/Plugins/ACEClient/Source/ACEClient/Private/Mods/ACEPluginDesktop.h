@@ -5,13 +5,13 @@
 #include "Widgets/Layout/SConstraintCanvas.h"
 
 class UACEPluginSubsystem;
-class SStackBox;
-class SScrollBox;
+class SUniformGridPanel;
 
 /** Nonmodal desktop plugin launcher and independent movable plugin windows. */
 class SACEPluginDesktop : public SCompoundWidget
 {
     friend class FACEPluginHostTest;
+    friend class FACEPluginBarPresentationTest;
     friend class FACELedgerTest;
     friend class FACEUCMLogTest;
     friend class FACEActionDeckTest;
@@ -38,8 +38,11 @@ private:
     };
     TWeakObjectPtr<UACEPluginSubsystem> Host;
     TSharedPtr<SConstraintCanvas> Canvas;
-    TSharedPtr<SStackBox> Buttons;
-    TSharedPtr<SScrollBox> BarScroll;
+    TSharedPtr<SUniformGridPanel> Buttons;
+    int32 BarColumns=1;
+    FVector2D BarResizeExtent=FVector2D::ZeroVector;
+    FVector2D BarResizeDelta=FVector2D::ZeroVector;
+    FReply ShowBarMenu(TSharedRef<SWidget> Owner,const FPointerEvent& Event,const FString& PluginId=FString());
     TMap<FString, FWindow> Windows;
     FString Signature;
     FVector2D ViewSize = FVector2D::ZeroVector;

@@ -131,7 +131,7 @@ void FACESession::Disconnect()
 	WorldObjects.Reset();
 	PlayerPositionQualities.Reset();
 	bAfkMode=false;
-	EquipmentRemovalEvidence.Reset();
+	InventoryRemovalEvidence.Reset();
 	ObjectVisibilityDeadlines.Reset();
 	ClosedContainerItemDeadlines.Reset();
 	NextClosedContainerExpiryAt = 0.;
@@ -310,7 +310,7 @@ void FACESession::ClearWorldState()
 	WorldObjects.Reset();
 	PlayerPositionQualities.Reset();
 	bAfkMode=false;
-	EquipmentRemovalEvidence.Reset();
+	InventoryRemovalEvidence.Reset();
 	ContainerContents.Reset();
 	LoginEquipment.Reset();
 	OpenExternalContainerGuid = 0;
@@ -2016,7 +2016,11 @@ void FACESession::UpsertWorldObject(const FACEWorldObject& Object, bool bForceRe
 		|| !Object.bHasPhysicsTimestamps || !Existing->bHasPhysicsTimestamps
 		|| Object.PhysicsTimestamps[ACEPhysicsTimeStamp::Instance] == Existing->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance]);
 	if (Existing && !bSameInstance) PropertyStamps.Remove(Object.Guid);
-	if (!bSameInstance || bForceRecreate) EquipmentRemovalEvidence.Remove(Object.Guid);
+	// A Container=0 quality can precede an expired login item's CreateObject.
+	// Keep that known-inventory clear until its queued instance-stamped delete
+	// is replayed. A new incarnation of an existing object starts fresh.
+	if ((Existing && (!bSameInstance || bForceRecreate))
+		|| (!Existing && !(InventoryRemovalEvidence.FindRef(Object.Guid)&ContainerCleared))) InventoryRemovalEvidence.Remove(Object.Guid);
 	if (Existing && bSameInstance && !bForceRecreate)
 	{
 		Merged.ReceivedActionStamp=Existing->ReceivedActionStamp;
@@ -2483,7 +2487,7 @@ void FACESession::HandleObjectDelete(FACEBinaryReader& Reader)
 		const uint16 IncomingInstance = Reader.ReadUInt16();
 		if (DeferObjectPhysicsEvent(Guid, IncomingInstance, ACEOpcode::ObjectDelete, Reader, PayloadStart)) return;
 	}
-	if (!UpdateEquipmentRemovalEvidence(Guid, WorldDeleted)) DeleteWorldObject(Guid);
+	if (!UpdateInventoryRemovalEvidence(Guid, WorldDeleted)) DeleteWorldObject(Guid);
 }
 
 void FACESession::DeleteWorldObject(int32 Guid)
@@ -2546,7 +2550,7 @@ void FACESession::DeleteWorldObject(int32 Guid)
 	}
 	if (!bKeepInventoryRecord)
 	{
-		EquipmentRemovalEvidence.Remove(Guid);
+		InventoryRemovalEvidence.Remove(Guid);
 		if (GiveRecipientGuid == Guid) GiveRecipientGuid = 0;
 		if (OpenExternalContainerGuid == Guid)
 		{
@@ -5854,7 +5858,7 @@ bool FACESession::ReadEnchantmentRecord(FACEBinaryReader& Reader, FACEActiveEnch
 		{
 			return false;
 		}
-		Reader.ReadUInt32(); // SpellSetID
+		Out.SpellSetId=static_cast<int32>(Reader.ReadUInt32());
 	}
 	constexpr uint32 FlagBeneficial = 0x2000000u;
 	constexpr uint32 FlagVitae = 0x0800000u;
@@ -7412,7 +7416,7 @@ void FACESession::HandleInventoryPutObjInContainer(FACEBinaryReader& Reader)
 	const int32 Placement = Reader.ReadInt32();
 	const int32 ContainerType = Reader.ReadInt32();
 	PendingInventoryTransfers.Remove(ItemGuid);
-	EquipmentRemovalEvidence.Remove(ItemGuid);
+	InventoryRemovalEvidence.Remove(ItemGuid);
 
 	int32 PrevContainer = 0;
 	int32 PrevPlacement = INDEX_NONE;
@@ -7486,7 +7490,7 @@ void FACESession::HandleWieldItem(FACEBinaryReader& Reader)
 	}
 	const int32 ItemGuid = static_cast<int32>(Reader.ReadUInt32());
 	const int64 Location = static_cast<int64>(Reader.ReadInt32());
-	EquipmentRemovalEvidence.Remove(ItemGuid);
+	InventoryRemovalEvidence.Remove(ItemGuid);
 	// The ordered receipt changes only this item. Other equipment has its own
 	// ContainID/removal receipt; never guess that it was moved to the main pack.
 	constexpr int64 HeldVisual = ACEEquipMask::MeleeWeapon | ACEEquipMask::TwoHanded
@@ -7586,7 +7590,7 @@ void FACESession::HandleInventoryPutObjIn3D(FACEBinaryReader& Reader)
 		return;
 	}
 	const int32 ItemGuid = static_cast<int32>(Reader.ReadUInt32());
-	EquipmentRemovalEvidence.Remove(ItemGuid);
+	InventoryRemovalEvidence.Remove(ItemGuid);
 	PendingInventoryTransfers.Remove(ItemGuid);
 	FACEPosition SpawnPos;
 	bool bHavePos = false;
@@ -7755,7 +7759,7 @@ void FACESession::HandleInventoryRemoveObject(FACEBinaryReader& Reader)
 
 void FACESession::RemoveInventoryObject(int32 ItemGuid)
 {
-	EquipmentRemovalEvidence.Remove(ItemGuid);
+	InventoryRemovalEvidence.Remove(ItemGuid);
 	PendingInventoryTransfers.Remove(ItemGuid);
 	// Whole-item turn-ins have no SetStackSize. Invalidate cached inventories
 	// just as partial-stack transfers do, before notifying observers.
@@ -7940,7 +7944,7 @@ void FACESession::HandlePublicUpdatePropertyInt(FACEBinaryReader& Reader)
 		else if (Prop == 152) Obj->HookItemTypes = static_cast<uint32>(Value);
 		else if (Prop == 10) // PropertyInt.CurrentWieldedLocation
 		{
-			if (UpdateEquipmentRemovalEvidence(Guid, WieldLocationCleared, Value == 0)) return;
+			if (UpdateInventoryRemovalEvidence(Guid, WieldLocationCleared, Value == 0)) return;
 			// ACCWeenieObject::OnStatUpdated leaves owned/requested equipment to
 			// the ordered inventory events, including ACE's preliminary zeroes.
 			if (!HasPlayerInventoryState(*Obj)) Obj->CurrentWieldedLocation = static_cast<int64>(Value);
@@ -8055,26 +8059,30 @@ bool FACESession::HasPlayerInventoryState(const FACEWorldObject& Object) const
 		|| PendingEquipmentGuid == Object.Guid || PendingEquipmentRemovals.Contains(Object.Guid));
 }
 
-bool FACESession::UpdateEquipmentRemovalEvidence(int32 Guid, uint8 Evidence, bool bSet)
+bool FACESession::UpdateInventoryRemovalEvidence(int32 Guid, uint8 Evidence, bool bSet)
 {
 	const auto* Object = WorldObjects.Find(Guid);
-	if (!Object || !PlayerGuid || Object->WielderId != PlayerGuid || Object->ContainerId)
+	const bool Contained=PlayerGuid && (!Object || Object->ContainerId) && ResolveContainerRoot(Guid)==PlayerGuid;
+	const bool Wielded=Object && PlayerGuid && Object->WielderId==PlayerGuid && !Object->ContainerId;
+	if (!Contained && !Wielded)
 	{
-		EquipmentRemovalEvidence.Remove(Guid);
+		InventoryRemovalEvidence.Remove(Guid);
 		return false;
 	}
-	uint8 Flags = EquipmentRemovalEvidence.FindRef(Guid);
+	const uint8 Required=Contained ? (ContainerCleared | WorldDeleted) : (WielderCleared | WieldLocationCleared | WorldDeleted);
+	if (!(Evidence & Required)) return false;
+	uint8 Flags = InventoryRemovalEvidence.FindRef(Guid) & Required;
 	Flags = bSet ? Flags | Evidence : Flags & ~Evidence;
-	if (Flags == (WielderCleared | WieldLocationCleared | WorldDeleted))
+	if (Flags == Required)
 	{
-		// Player.UpdateAmmoAfterLaunch -> ConsumeItem has no ContainID or
-		// InventoryRemoveObject receipt. The two quality clears and delete are
-		// its authoritative removal; Pickup alone just detaches each projectile.
+		// ConsumeItem has no ordered ContainID or InventoryRemoveObject receipt.
+		// These quality clears and delete together confirm removal. A physics
+		// delete alone still preserves an owned item's inventory description.
 		RemoveInventoryObject(Guid);
 		return true;
 	}
-	if (Flags) EquipmentRemovalEvidence.Add(Guid, Flags);
-	else EquipmentRemovalEvidence.Remove(Guid);
+	if (Flags) InventoryRemovalEvidence.Add(Guid, Flags);
+	else InventoryRemovalEvidence.Remove(Guid);
 	return false;
 }
 
@@ -8104,6 +8112,8 @@ void FACESession::HandlePrivateUpdateInstanceId(FACEBinaryReader& Reader)
 
 void FACESession::ApplyPropertyInstanceId(int32 Guid, uint32 Prop, int32 Value)
 {
+	// PlayerDescription membership exists before individual item descriptions.
+	if (Prop==2 && UpdateInventoryRemovalEvidence(Guid,ContainerCleared,Value==0)) return;
 	if (Guid == PlayerGuid && Prop == 11)
 	{
 		// ACE sends this only when the attacker changes, including on evade or
@@ -8122,7 +8132,7 @@ void FACESession::ApplyPropertyInstanceId(int32 Guid, uint32 Prop, int32 Value)
 		}
 		else if (Prop == 3) // PropertyInstanceId.Wielder
 		{
-			if (UpdateEquipmentRemovalEvidence(Guid, WielderCleared, Value == 0)) return;
+			if (UpdateInventoryRemovalEvidence(Guid, WielderCleared, Value == 0)) return;
 			if (HasPlayerInventoryState(*Obj)) return;
 			Obj->WielderId = Value;
 			if (Value != 0 && !(PlayerGuid && Obj->ContainerId && ResolveContainerRoot(Guid) == PlayerGuid))

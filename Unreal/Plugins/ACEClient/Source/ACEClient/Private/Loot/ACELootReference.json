@@ -7,8 +7,9 @@
   "cohorts_across_eligible_tiers": 333,
   "native_spell_effects": 4395,
   "cantrip_effects": 297,
+  "canonical_cantrip_families": 69,
   "armor_templates": 216,
   "armor_cohorts": 195,
-  "output_sha256": "a52be0e09cf54b87aeea91f5c5cf65a673aed3f306d604cfd56c1490ce3ac124",
+  "output_sha256": "fcb938cd6f08b8707b17a33b7e2abeee8009661e979e32e62eb211b448041673",
   "scope": "Ordinary public ACE generation, quality modifier zero; custom/fixed items or unsupported dimensions must remain unrated."
 }

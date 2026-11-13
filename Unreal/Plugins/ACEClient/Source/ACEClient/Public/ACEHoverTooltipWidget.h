@@ -24,6 +24,7 @@ public:
 	static constexpr uint32 MapTemplate = 0x10000398;
 	static void SetWidgetTooltip(UWidget* Widget, const FText& Text, uint32 TemplateId = OptionsTemplate);
 	static void SetWidgetContentTooltip(UWidget* Widget, const FText& AccessibleText, TSharedRef<SWidget> Content);
+	static TSharedPtr<SWidget> GetWidgetContentTooltip(const UWidget* Widget);
 	void SetResources(UACEUIResourceResolver* InResources);
 	void SetTooltipText(const FString& Text, uint32 TemplateId = ObjectTemplate);
 	void SetTooltipScreenPosition(const FVector2D& CursorPixels);

@@ -5,11 +5,12 @@ class UWorld;
 
 namespace ACEClientBuild
 {
-	inline constexpr int32 ReleaseNumber = 160;
+	inline constexpr int32 ReleaseNumber = 155;
 	inline constexpr const TCHAR* DesktopProductName = TEXT("AC:Unreal");
 	inline constexpr const TCHAR* VRProductName = TEXT("AC:VR");
 	ACECLIENT_API const TCHAR* ProductName(bool bVR = false);
 	ACECLIENT_API void UpdateWindowTitle(UWorld* World, bool bVR = false);
 	// One display version for desktop, PC VR, and standalone Quest.
-	inline constexpr const TCHAR* Version = TEXT("2026.11.11.160");
+	// Mirror the integrated Thwargle release; local builds use packaging timestamps.
+	inline constexpr const TCHAR* Version = TEXT("2026.11.11.155");
 }

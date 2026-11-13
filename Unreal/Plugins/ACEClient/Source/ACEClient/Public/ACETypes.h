@@ -1776,6 +1776,7 @@ struct ACECLIENT_API FACEActiveEnchantment
 	GENERATED_BODY()
 
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 SpellId = 0;
+	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 SpellSetId = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 Layer = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 SpellCategory = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 PowerLevel = 0;

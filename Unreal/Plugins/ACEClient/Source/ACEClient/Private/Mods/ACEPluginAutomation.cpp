@@ -1,4 +1,5 @@
 #include "Mods/ACEPluginSubsystem.h"
+#include "ACELootQualitySubsystem.h"
 #include "Mods/ACEAutoCraft.h"
 #include "ACEClientSubsystem.h"
 #include "ACEDatSubsystem.h"
@@ -94,7 +95,101 @@ bool UACEPluginSubsystem::IsOwnedPluginItem(const FACEWorldObject& Item) const
     return Player && (C->IsOwnedInventoryItem(Item) || Item.WielderId==Player
         || (Item.CurrentWieldedLocation && Item.ParentGuid==Player));
 }
-TSharedPtr<FJsonValue> UACEPluginSubsystem::LootItemSnapshot(const FACEWorldObject& Item)
+namespace
+{
+bool TargetCategory(const TSharedPtr<FJsonObject>& Rule,const FString& Category,bool Weapon)
+{
+    const TArray<TSharedPtr<FJsonValue>>* Types=nullptr;if(!Rule->TryGetArrayField(TEXT("item_categories"),Types))return true;
+    for(const auto& V:*Types)
+    {
+        const FString T=V->AsString();
+        if(T==Category||(T==TEXT("weapons")&&Weapon)||(T==TEXT("armor")&&Category==TEXT("shield"))
+            ||(T==TEXT("melee")&&(Category==TEXT("heavy")||Category==TEXT("light")||Category==TEXT("finesse")||Category==TEXT("twohand")))
+            ||(T==TEXT("missile")&&(Category==TEXT("bow")||Category==TEXT("crossbow")||Category==TEXT("atlatl"))))return true;
+    }return false;
+}
+void AddRecipientScores(UACEPluginSubsystem* Host,UACELootQualitySubsystem* Quality,const FACEWorldObject& Item,const FString& Category,const TSharedPtr<FJsonObject>& J,const TSharedPtr<FJsonObject>& RatingPolicy)
+{
+    const auto* Found=Host->Plugins.FindByPredicate([](const auto& P){return P&&P->Id==TEXT("ucm");});
+    const auto Policy=Found?*Found:nullptr;
+    const auto Profile=RatingPolicy?RatingPolicy:Policy?Policy->Profile:nullptr;if(!Profile)return;
+    const TArray<TSharedPtr<FJsonValue>>* Rules=nullptr;
+    if(!Profile->TryGetArrayField(TEXT("loot_rules"),Rules))return;
+    const bool Weapon=(Item.ItemType&(ACEItemType::MeleeWeapon|ACEItemType::MissileWeapon|ACEItemType::Caster))!=0;
+    TSet<FString> Wanted;bool Universal=false;
+    for(const auto& Value:*Rules)
+    {
+        const auto Rule=Value->AsObject();bool Enabled=true;Rule->TryGetBoolField(TEXT("enabled"),Enabled);
+        if(!Enabled||!Rule->HasField(TEXT("min_quality"))||!TargetCategory(Rule,Category,Weapon))continue;
+        FString Mode;Rule->TryGetStringField(TEXT("rating_mode"),Mode);
+        if(Mode==TEXT("universal"))Universal=true;
+        if(Mode==TEXT("templates"))
+        {const TArray<TSharedPtr<FJsonValue>>* Targets=nullptr;if(Rule->TryGetArrayField(TEXT("rating_targets"),Targets))for(const auto& T:*Targets)Wanted.Add(T->AsString());}
+    }
+    auto Encode=[](const FACELootTargetScore& Score,const FString& Name)
+    {
+        auto O=MakeShared<FJsonObject>();O->SetStringField(TEXT("name"),Name);O->SetBoolField(TEXT("pending"),Score.bPending);O->SetBoolField(TEXT("estimated"),Score.bEstimated);
+        if(Score.bRated){O->SetNumberField(TEXT("grade"),int32(Score.Grade));O->SetNumberField(TEXT("score"),Score.Points);}return O;
+    };
+    if(Universal)
+    {
+        FACELootTargetScore Best,Exact;FString Name,ExactName;bool Pending=false;
+        auto Candidates=ACELootTargets::Presets();
+        const TArray<TSharedPtr<FJsonValue>>* Saved=nullptr;
+        if(Profile->TryGetArrayField(TEXT("loot_rating_templates"),Saved))for(const auto& Value:*Saved)
+        {FString Id;FACELootTemplate T;if(Value->AsObject()->TryGetStringField(TEXT("id"),Id)&&ACELootTargets::Resolve(Id,Profile,T))Candidates.Add(MoveTemp(T));}
+        for(const auto& T:Candidates)
+        {
+            const auto Score=Quality->ReviewFor(Item,T);Pending|=Score.bPending;
+            if(Score.bRated&&(!Best.bRated||Score.Points>Best.Points)){Best=Score;Name=T.Name;}
+            if(Score.bRated&&!Score.bEstimated&&(!Exact.bRated||Score.Points>Exact.Points)){Exact=Score;ExactName=T.Name;}
+        }
+        if(Pending){Best.bRated=Exact.bRated=false;Best.bPending=Exact.bPending=true;}
+        J->SetObjectField(TEXT("quality_universal"),Encode(Best,Name));J->SetObjectField(TEXT("quality_universal_exact"),Encode(Exact,ExactName));
+    }
+    if(!Wanted.IsEmpty())
+    {
+        auto Scores=MakeShared<FJsonObject>();TArray<FString> Sorted=Wanted.Array();Sorted.Sort();
+        for(const auto& Id:Sorted){FACELootTemplate T;if(ACELootTargets::Resolve(Id,Profile,T))Scores->SetObjectField(Id,Encode(Quality->ReviewFor(Item,T),T.Name));}
+        J->SetObjectField(TEXT("quality_targets"),Scores);
+    }
+}
+void AddQualitySnapshot(UACEPluginSubsystem* Host,const FACEWorldObject& Item,const FACEAppraisalInfo* A,const TSharedPtr<FJsonObject>& J,const TSharedPtr<FJsonObject>& RatingPolicy=nullptr)
+{
+        const bool Gear=(Item.ItemType&(ACEItemType::MeleeWeapon|ACEItemType::MissileWeapon|ACEItemType::Caster|ACEItemType::Armor|ACEItemType::Jewelry|ACEItemType::Clothing))||Item.ValidLocations||ACELootQuality::IsSummoningEssence(Item);
+        if(Gear)
+        {
+            auto* Quality=Host->GetGameInstance()->GetSubsystem<UACELootQualitySubsystem>();
+            if(A&&A->bSuccess&&!Quality->Review(Item).bIdentified)Quality->ObserveAppraisal(*A);
+            const auto& R=Quality->Review(Item);
+            J->SetBoolField(TEXT("quality_estimated"),R.bEstimated);
+            if(R.bRated){J->SetNumberField(TEXT("quality_grade"),int32(R.Grade));J->SetNumberField(TEXT("quality_score"),R.Points);}
+            if(A&&A->bSuccess)
+            {
+                const auto& Character=Host->GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->GetPlayerVitalsView();
+                J->SetBoolField(TEXT("usable_now"),ACELootQuality::CanUseWithin(*A,Character,0,0,0,0,&Item));
+                J->SetBoolField(TEXT("usable_close"),ACELootQuality::CanUseWithin(*A,Character,25,5,10,25,&Item));
+            }
+            int32 Wield=0,Skill=A?A->WeaponSkill:0;
+            if(A&&A->bSuccess)for(uint32 K:{158u,270u,273u,276u})if(A->IntProperties.FindRef(K)==1||A->IntProperties.FindRef(K)==2)
+            {Wield=FMath::Max(Wield,A->IntProperties.FindRef(K+2));Skill=A->IntProperties.FindRef(K+1);}
+            if(A&&A->bSuccess)J->SetNumberField(TEXT("skill_wield"),Wield);
+            FString Category;
+            const int32 Subtype=A?A->IntProperties.FindRef(353):0;
+            if(Item.ItemType&ACEItemType::MeleeWeapon)Category=Skill==41?TEXT("twohand"):Skill==44?TEXT("heavy"):Skill==45?TEXT("light"):Skill==46?TEXT("finesse"):TEXT("melee");
+            else if(Item.ItemType&ACEItemType::MissileWeapon)Category=Subtype==8?TEXT("bow"):Subtype==9?TEXT("crossbow"):Subtype==10?TEXT("atlatl"):TEXT("missile");
+            else if(Item.ItemType&ACEItemType::Caster)Category=TEXT("wand");
+            else if(Item.ItemType&ACEItemType::Armor)Category=(Item.ValidLocations&0x200000)?TEXT("shield"):TEXT("armor");
+            else if(Item.ItemType&ACEItemType::Jewelry)Category=TEXT("jewelry");
+            else if(Item.ItemType&ACEItemType::Clothing)Category=TEXT("clothing");
+            else if(ACELootQuality::IsSummoningEssence(Item))Category=TEXT("essence");
+            J->SetStringField(TEXT("quality_category"),Category);
+            if(A&&A->bSuccess)AddRecipientScores(Host,Quality,Item,Category,J,RatingPolicy);
+            J->SetBoolField(TEXT("quality_weapon"),(Item.ItemType&(ACEItemType::MeleeWeapon|ACEItemType::MissileWeapon|ACEItemType::Caster))!=0);
+        }
+}
+}
+TSharedPtr<FJsonValue> UACEPluginSubsystem::LootItemSnapshot(const FACEWorldObject& Item,const TSharedPtr<FJsonObject>& RatingPolicy)
 {
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     auto* Dat=GetGameInstance()->GetSubsystem<UACEDatSubsystem>();
@@ -186,6 +281,7 @@ TSharedPtr<FJsonValue> UACEPluginSubsystem::LootItemSnapshot(const FACEWorldObje
             J->SetNumberField(TEXT("armor"),A->IntProperties.FindRef(28));
             J->SetNumberField(TEXT("spell"),Item.SpellDID);
         }
+        AddQualitySnapshot(this,Item,A,J,RatingPolicy);
         return MakeShared<FJsonValueObject>(J);
 }
 
@@ -911,6 +1007,7 @@ TSharedPtr<FJsonValue> UACEPluginSubsystem::PluginItemSnapshot(const FACEWorldOb
         J->SetNumberField(TEXT("spell"),Item.SpellDID);
     }
     AddEquipmentSnapshot(Item,J);
+    AddQualitySnapshot(this,Item,A,J);
     return MakeShared<FJsonValueObject>(J);
 }
 void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)

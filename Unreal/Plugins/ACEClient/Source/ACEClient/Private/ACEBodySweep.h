@@ -12,6 +12,7 @@
 namespace ACEBodySweep
 {
     bool BatchCrowdQueries();
+    bool CanEscapeClosedContainer(const FHitResult& Hit,const FVector& From,const FVector& To,const FACECollisionBody& Body);
     // Returns unset for non-polygon collision. CPolygon::check_walkable tests
     // the vertical projection with half the lower sphere's radius.
     TOptional<bool> HasMeshWalkableFootprint(const FHitResult& Hit, const FVector& Feet,
@@ -144,7 +145,7 @@ namespace ACEBodySweep
                     }
                     continue;
                 }
-                if(!CanEscapeCreature(Next,From,To,Body))
+                if(!CanEscapeCreature(Next,From,To,Body) && !CanEscapeClosedContainer(Next,From,To,Body))
                 {
                     if(!Blocked || EarlierContact(Next,Part))Part=Next;
                     Blocked=true;

@@ -590,7 +590,7 @@ inline FString ItemEnchantmentComparison(const FACEAppraisalInfo& Info)
     }
     if((Info.ArmorEnchantments&1)&&Info.IntProperties.Contains(28))Row(TEXT("Armor level"),FString::FromInt(Info.IntProperties[28]),FString());
     if((Info.WeaponEnchantments&2)&&Info.FloatProperties.Contains(29))Row(TEXT("Defense multiplier"),RawFloat(29),FString());
-    const TCHAR* Names[]={TEXT("Slashing armor"),TEXT("Piercing armor"),TEXT("Bludgeoning armor"),TEXT("Cold armor"),TEXT("Fire armor"),TEXT("Acid armor"),TEXT("Nether armor"),TEXT("Lightning armor")};
+    const TCHAR* Names[]={TEXT("Slashing"),TEXT("Piercing"),TEXT("Bludgeoning"),TEXT("Cold"),TEXT("Fire"),TEXT("Acid"),TEXT("Nether"),TEXT("Lightning")};
     const uint32 Bits[]={2,4,8,16,32,64,256,128};
     for(int32 I=0;I<8;++I)if((Info.ArmorEnchantments&Bits[I])&&Info.ArmorResistances.IsValidIndex(I))
         Row(Names[I],FString::Printf(TEXT("%.3f"),Info.ArmorResistances[I]),FString());

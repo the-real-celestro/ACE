@@ -10,6 +10,7 @@
 #include "ACEUpdateSubsystem.h"
 #include "ACEClientBuild.h"
 #include "ACEPlayerController.h"
+#include "ACEDesktopDisplay.h"
 #include "ACEDatSubsystem.h"
 #include "UI/ACERetailTextBlock.h"
 #include "TimerManager.h"
@@ -523,6 +524,16 @@ bool FACELauncherViewportTest::RunTest(const FString&)
         const FVector2D Last=Screen.AbsoluteToLocal(Geometry.LocalToAbsolute(Size));
         TestTrue(TEXT("Login controls have usable dimensions"),Size.X>50 && Size.Y>15);
         TestTrue(TEXT("Login controls are fully within the live viewport"),First.X>=0 && First.Y>=0 && Last.X<=Screen.GetLocalSize().X+1 && Last.Y<=Screen.GetLocalSize().Y+1);
+    }
+    {
+        class FStartupDisplay final : public FACEDesktopDisplay
+        {public:bool Ready=false;bool IsStartupReady()const override{return Ready;}};
+        const auto Previous=PC->DesktopDisplay;
+        auto Pending=MakeShared<FStartupDisplay>();PC->DesktopDisplay=Pending;
+        W->RemoveFromParent();PC->ShowLoginUI();
+        TestFalse(TEXT("Lobby is not painted during the initial native fullscreen repair"),W->IsInViewport());
+        Pending->Ready=true;PC->ShowLoginUI();PC->DesktopDisplay=Previous;
+        TestTrue(TEXT("The same lobby is attached once fullscreen has settled"),W->IsInViewport()&&PC->LoginWidget==W);
     }
     auto* Dat=World->GetGameInstance()->GetSubsystem<UACEDatSubsystem>();
     // The launched client's background loader owns these resources. Reloading

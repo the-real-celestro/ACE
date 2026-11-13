@@ -1315,25 +1315,6 @@ void UACECharacterAppearanceComponent::SetPreferredStyle(int32 Style)
 	}
 	WalkingMotion.Reset();
 
-	// Capture the current visual pose so the next ticks can cross-fade into the new stance.
-	StanceBlendFrom.SetNum(PartMeshes.Num());
-	for (int32 i = 0; i < PartMeshes.Num(); ++i)
-	{
-		if (PartMeshes[i])
-		{
-			StanceBlendFrom[i] = PartMeshes[i]->GetRelativeTransform();
-		}
-		else if (BindTransforms.IsValidIndex(i))
-		{
-			StanceBlendFrom[i] = BindTransforms[i];
-		}
-		else
-		{
-			StanceBlendFrom[i] = FTransform::Identity;
-		}
-	}
-	StanceBlendAlpha = 0.f;
-	PoseBlendDuration = StanceBlendDuration;
 	const uint32 PreviousStyle = PreferredStyle;
 	PreferredStyle = Expanded;
 	if (PreviousStyle != 0
@@ -1343,6 +1324,7 @@ void UACECharacterAppearanceComponent::SetPreferredStyle(int32 Style)
 		// melee weapons. The linkage owns the pause before the next Ready cycle.
 		PlayActionMotion(Expanded, 1.f, PreviousStyle, false);
 	}
+	else BeginPoseBlendFromCurrent();
 }
 
 void UACECharacterAppearanceComponent::BeginPoseBlendFromCurrent(float Duration)
@@ -1444,13 +1426,16 @@ void UACECharacterAppearanceComponent::PlayActionMotion(int32 InActionCommand, f
 		|| Cmd == 0x400000E1u; // UseMagicWand
 	const bool bCurPowerUp = (ActionCommand >= 0x1000006Fu && ActionCommand <= 0x10000078u)
 		|| (ActionCommand >= 0x1000012Bu && ActionCommand <= 0x10000134u);
+	const bool bFromCast = AnimMode == EACEAnimMode::ActionOneShot && ACEIsMagicCastCommand(ActionCommand);
+	const bool bCastRecovery = AnimMode == EACEAnimMode::ActionOneShot && bActionUsesStateTransition && ACEIsMagicCastCommand(ActionFromCommand);
 	// Scarab windups own HighFrame particle tiers (frame 9/19/29…). Never cut them short
 	// when the cast gesture arrives — queue it (and chained PowerUps) instead.
 	if (AnimMode == EACEAnimMode::ActionOneShot && !bHoldActionFinal
-		&& (bCurPowerUp || ACEIsMagicCastCommand(ActionCommand))
-		&& (bMagicCastGesture || bMagicPowerUp) && ActionCommand != Cmd)
+		&& (bCurPowerUp || bFromCast || bCastRecovery)
+		&& (bMagicCastGesture || bMagicPowerUp || Cmd == ACEMotion::Ready || (Cmd & 0x80000000u)) && ActionCommand != Cmd)
 	{
-		QueueActionMotion(static_cast<int32>(Cmd), PlayRate, Style, bHoldFinalPose);
+		if (Cmd != ACEMotion::Ready || PendingActionCommands.IsEmpty() || PendingActionCommands.Last() != Cmd)
+			QueueActionMotion(static_cast<int32>(Cmd), PlayRate, Style, bHoldFinalPose);
 		return;
 	}
 	// State echoes must not restart held poses. A newly stamped action (e.g.
@@ -1500,14 +1485,14 @@ void UACECharacterAppearanceComponent::PlayActionMotion(int32 InActionCommand, f
 		bHoldActionFinalAfterFinish = false;
 		return;
 	}
-	ActionFromCommand = bFromEmote || bFromMissile ? ActionCommand : ACEMotion::Ready;
+	ActionFromCommand = bFromEmote || bFromMissile || bFromCast ? ActionCommand : ACEMotion::Ready;
 	WalkingMotion.Reset();
-	bActionUsesStateTransition = bFromEmote || bFromMissile || (Cmd & 0x80000000u);
+	bActionUsesStateTransition = bFromEmote || bFromMissile || bFromCast || (Cmd & 0x80000000u);
 	// Falling already contains retail's takeoff link (~0.2 s). A full stance
 	// cross-fade hid it behind the previous jump's frozen endpoint.
 	// Attack links already contain their authored approach and recovery poses.
 	// A wall-clock stance blend flattens the height/arc, especially at fast speeds.
-	BeginPoseBlendFromCurrent(ACEAttackMotion::IsAttack(Cmd) ? 0.f
+	BeginPoseBlendFromCurrent(ACEAttackMotion::IsAttack(Cmd) || bMagicCastGesture || bMagicPowerUp || bFromCast ? 0.f
 		: bFromEmote || bFromMissile || ACEIsMissileSubstate(Cmd) || Cmd == 0x40000015u ? .06f : StanceBlendDuration);
 	AnimMode = EACEAnimMode::ActionOneShot;
 	ActionCommand = Cmd;
@@ -1593,6 +1578,12 @@ void UACECharacterAppearanceComponent::FinishMissileMotion()
 
 void UACECharacterAppearanceComponent::CancelHeldActionMotion()
 {
+	if (AnimMode == EACEAnimMode::ActionOneShot && (ACEIsMagicCastCommand(ActionCommand)
+		|| (ActionCommand >= 0x1000006Fu && ActionCommand <= 0x10000078u)
+		|| (ActionCommand >= 0x1000012Bu && ActionCommand <= 0x10000134u)))
+	{
+		FinishCastMotion();return;
+	}
 	// Explicit Ready or a new forward command replaces a held chat pose.
 	// Monster missile tables also contain zero-rate Aim/Reload endpoint cycles.
 	// A drudge has no Ready->Reload link, so that fallback never sets bFinished
@@ -1629,6 +1620,17 @@ void UACECharacterAppearanceComponent::FinishEmoteMotion()
 {
 	if (AnimMode == EACEAnimMode::ActionOneShot && ActionCommand != ACEMotion::Dead
 		&& ACEMotion::IsHeldRestCommand(ActionCommand)) CancelHeldActionMotion();
+}
+
+void UACECharacterAppearanceComponent::FinishCastMotion()
+{
+	if (AnimMode != EACEAnimMode::ActionOneShot) return;
+	const bool Casting=ACEIsMagicCastCommand(ActionCommand)
+		|| (ActionCommand >= 0x1000006Fu && ActionCommand <= 0x10000078u)
+		|| (ActionCommand >= 0x1000012Bu && ActionCommand <= 0x10000134u);
+	const bool QueuedCast=!PendingActionCommands.IsEmpty() && ACEIsMagicCastCommand(PendingActionCommands.Last());
+	if (Casting) PlayActionMotion(ACEMotion::Ready,1.f,ActionStyle,false);
+	else if (QueuedCast) QueueActionMotion(ACEMotion::Ready,1.f,PendingActionStyles.Last(),false);
 }
 
 bool UACECharacterAppearanceComponent::IsJumpBlockedByMotion(bool bCharging) const
@@ -2308,6 +2310,10 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 		const bool bGiveUpFailed = !bOk
 			&& !(bMagicAction && AnimTime < 2.f)
 			&& !(bChatPoseAction && AnimTime < 3.f);
+		// Cast gestures are substates with a separate authored return linkage.
+		// Resuming the idle cycle here discarded that entire second segment.
+		if (bIsMagicCast && bOk && bFinished && !bHoldActionFinal && !bHoldActionFinalAfterFinish
+			&& PendingActionCommands.IsEmpty()) QueueActionMotion(ACEMotion::Ready,1.f,ActionStyle,false);
 		if ((bFinished || bGiveUpFailed) && !bHoldActionFinal)
 		{
 			// Retail CSequence executes the authored particle hooks. Completing an
@@ -2353,9 +2359,11 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 				if (PendingActionPlayRates.Num() > 0) { PendingActionPlayRates.RemoveAt(0); }
 				if (PendingActionHolds.Num() > 0) { PendingActionHolds.RemoveAt(0); }
 				// Start next without wiping the rest of the scarab/cast queue.
-				ActionFromCommand = ACEIsEmoteSubstate(ActionCommand) || ACEIsMissileSubstate(ActionCommand) ? ActionCommand : ACEMotion::Ready;
+				ActionFromCommand = ACEIsEmoteSubstate(ActionCommand) || ACEIsMissileSubstate(ActionCommand) || ACEIsMagicCastCommand(ActionCommand) ? ActionCommand : ACEMotion::Ready;
 				bActionUsesStateTransition = ActionFromCommand != ACEMotion::Ready || (Next & 0x80000000u);
-				BeginPoseBlendFromCurrent(ACEAttackMotion::IsAttack(Next) ? 0.f : bActionUsesStateTransition ? .06f : StanceBlendDuration);
+				const bool NextMagic=ACEIsMagicCastCommand(Next) || (Next >= 0x1000006Fu && Next <= 0x10000078u)
+					|| (Next >= 0x1000012Bu && Next <= 0x10000134u);
+				BeginPoseBlendFromCurrent(ACEAttackMotion::IsAttack(Next) || NextMagic || ACEIsMagicCastCommand(ActionFromCommand) ? 0.f : bActionUsesStateTransition ? .06f : StanceBlendDuration);
 				AnimMode = EACEAnimMode::ActionOneShot;
 				ActionCommand = Next;
 				bHoldActionFinal = false;
@@ -2404,7 +2412,7 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 					WalkingMotion.Direction = ActionCommand == 0x44000007u ? 2
 						: ActionCommand == 0x45000005u ? 1 : ActionCommand == 0x45000006u ? -1 : 0;
 				}
-				BeginPoseBlendFromCurrent(ACEAttackMotion::IsAttack(ActionCommand) ? 0.f : bActionUsesStateTransition ? .06f : StanceBlendDuration);
+				BeginPoseBlendFromCurrent(ACEAttackMotion::IsAttack(ActionCommand) || ACEIsMagicCastCommand(ActionFromCommand) ? 0.f : bActionUsesStateTransition ? .06f : StanceBlendDuration);
 				ActionCommand = 0;
 				ActionFromCommand = ACEMotion::Ready;
 				bActionUsesStateTransition = false;

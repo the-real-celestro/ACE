@@ -48,6 +48,21 @@ bool FACEInputBindingsTest::RunTest(const FString&)
   auto Window=SNew(SWindow).ClientSize(FVector2D(300,80))[SAssignNew(Entry,SEditableTextBox)];
   Slate.AddWindow(Window,false);Slate.SetKeyboardFocus(Entry,EFocusCause::SetDirectly);
   TestTrue(TEXT("Plugin edit field is recognized without native chat focus"),ACEInputBindings::IsTextEntryFocused());
+  const FModifierKeysState LeftCtrl(false,false,true,false,false,false,false,false,false);
+  const FModifierKeysState RightCtrl(false,false,false,true,false,false,false,false,false);
+#if PLATFORM_MAC
+  const FModifierKeysState LeftCmd(false,false,false,false,false,false,true,false,false);
+  const FModifierKeysState RightCmd(false,false,false,false,false,false,false,true,false);
+#endif
+  Hold({});
+  TestTrue(TEXT("Quick-show reads Slate Control while an editor owns focus"),ACEInputBindings::QuickShowDown(PC,LeftCtrl));
+  TestTrue(TEXT("Either Control key reveals pinned UI without a gameplay key event"),ACEInputBindings::QuickShowDown(PC,RightCtrl));
+#if PLATFORM_MAC
+  TestTrue(TEXT("Mac Command also reveals pinned UI while typing"),ACEInputBindings::QuickShowDown(PC,LeftCmd));
+  TestTrue(TEXT("Both Mac Command keys can recover pinned controls"),ACEInputBindings::QuickShowDown(PC,RightCmd));
+#endif
+  Hold({EKeys::LeftControl});
+  TestFalse(TEXT("Releasing the real modifier clears quick-show even with stale gameplay key state"),ACEInputBindings::QuickShowDown(PC,FModifierKeysState()));
   Hold({EKeys::W,EKeys::E});
   TestFalse(TEXT("Typing forward key cannot move the player"),ACEInputBindings::Down(PC,EKeys::W));
   TestFalse(TEXT("Typing inspect key cannot trigger an action"),ACEInputBindings::Pressed(PC,EKeys::F));
@@ -96,6 +111,13 @@ bool FACEInputBindingsTest::RunTest(const FString&)
  ACEInputBindings::BeginEdit();ACEInputBindings::Set(QuickShow,0,FInputChord(EKeys::F11));ACEInputBindings::Commit();
  Hold({EKeys::LeftControl});TestFalse(TEXT("Rebinding removes the original quick-show key"),ACEInputBindings::Down(PC,QuickShow));
  Hold({EKeys::F11});TestTrue(TEXT("Rebound hold quick-shows pinned windows"),ACEInputBindings::Down(PC,QuickShow));
+ TestTrue(TEXT("UI hold path respects an ordinary rebound key"),ACEInputBindings::QuickShowDown(PC,FModifierKeysState()));
+ Hold({});
+ TestFalse(TEXT("Rebinding quick-show removes the default Slate Control alias"),ACEInputBindings::QuickShowDown(PC,FModifierKeysState(false,false,true,false,false,false,false,false,false)));
+#if PLATFORM_MAC
+ TestFalse(TEXT("Rebinding quick-show removes the default Mac Command alias"),ACEInputBindings::QuickShowDown(PC,FModifierKeysState(false,false,false,false,false,false,true,false,false)));
+#endif
+ Hold({EKeys::F11});
  ACEInputBindings::Reload();TestTrue(TEXT("Quick-show binding persists"),ACEInputBindings::Down(PC,QuickShow));
  // Shipped DAT gmDefaultMap (14000000) and DefaultMap (14000002),
  // rather than the later WASD bindings that were invented by this client.
