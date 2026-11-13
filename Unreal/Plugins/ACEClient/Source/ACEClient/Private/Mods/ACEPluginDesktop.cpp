@@ -5,6 +5,7 @@
 #include "Mods/ACEActionDeckSubsystem.h"
 #include "Mods/ACEActionDeckLayout.h"
 #include "Mods/ACEPluginOrder.h"
+#include "Mods/ACEPluginBarLayout.h"
 #include "Widgets/Images/SImage.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "ACEClientSubsystem.h"
@@ -19,7 +20,7 @@
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScaleBox.h"
-#include "Widgets/Layout/SScrollBox.h"
+#include "Widgets/Layout/SUniformGridPanel.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Brushes/SlateRoundedBoxBrush.h"
@@ -58,8 +59,8 @@ namespace
     public:
         using FArguments=SButton::FArguments;
         void Construct(const FArguments& Args){SButton::Construct(Args);}
-        void SetIdentity(const FString& Id,TAttribute<bool> InOpen,bool InHorizontal)
-        {Accent=SACEPluginIcon::Accent(Id);Open=InOpen;Horizontal=InHorizontal;}
+        void SetIdentity(const FString& Id,TAttribute<bool> InOpen,bool InHorizontal,TAttribute<float> InOpacity)
+        {Accent=SACEPluginIcon::Accent(Id);Open=InOpen;Horizontal=InHorizontal;Opacity=InOpacity;}
         void SetContextMenu(TFunction<FReply(const FGeometry&,const FPointerEvent&)> Callback){ContextMenu=MoveTemp(Callback);}
         virtual FReply OnMouseButtonDown(const FGeometry& G,const FPointerEvent& E) override
         {
@@ -82,9 +83,11 @@ namespace
             const bool Selected=Open.Get(false),Hovered=IsHovered();
             const FLinearColor Fill(IsPressed()?FColor(9,19,33):Hovered?FColor(34,54,78):Selected?FColor(22,48,66):FColor(15,25,41));
             const FLinearColor Edge=Hovered?FLinearColor(FColor(227,240,255)):Selected?Accent:FLinearColor(FColor(90,111,141));
-            const FSlateRoundedBoxBrush Tile(Fill,5.f,Edge,Selected||Hovered?2.f:1.f);
+            const FLinearColor Background=Fill.CopyWithNewOpacity(Opacity.Get(1.f));
+            const FLinearColor Outline=(Selected||Hovered)?Edge:Edge.CopyWithNewOpacity(Opacity.Get(1.f));
+            const FSlateRoundedBoxBrush Tile(Background,5.f,Outline,Selected||Hovered?2.f:1.f);
             // MakeBox does not apply the brush's fill tint (SButton normally does).
-            FSlateDrawElement::MakeBox(Out,Layer,G.ToPaintGeometry(),&Tile,ESlateDrawEffect::None,Fill*Style.GetColorAndOpacityTint());
+            FSlateDrawElement::MakeBox(Out,Layer,G.ToPaintGeometry(),&Tile,ESlateDrawEffect::None,Background*Style.GetColorAndOpacityTint());
             if(Selected)
             {
                 const FVector2D Size=G.GetLocalSize();
@@ -100,6 +103,7 @@ namespace
     private:
         FLinearColor Accent=FLinearColor::White;
         TAttribute<bool> Open;
+        TAttribute<float> Opacity;
         bool Horizontal=false;
         TFunction<FReply(const FGeometry&,const FPointerEvent&)> ContextMenu;
     };
@@ -178,6 +182,7 @@ namespace
             SLATE_ARGUMENT(TFunction<bool()>, CanManipulate)
             SLATE_ATTRIBUTE(bool, Minimized)
             SLATE_ARGUMENT(TFunction<void()>, ToggleMinimized)
+            SLATE_ARGUMENT(TFunction<FReply(const FGeometry&,const FPointerEvent&)>, ContextMenu)
             /** Codex title plaque: icon on the ring and a caps subtitle under the title. */
             SLATE_ARGUMENT(TSharedPtr<SWidget>, Icon)
             SLATE_ATTRIBUTE(FString, Subtitle)
@@ -192,11 +197,11 @@ namespace
             Move = Args._Move; Resize = Args._Resize; Raise = Args._Raise;
             Locked=Args._Locked;
             Frameless=Args._Frameless;
-            CanManipulate=Args._CanManipulate;
+            CanManipulate=Args._CanManipulate;ContextMenu=Args._ContextMenu;
             if(Frameless){ChildSlot[Args._Content.Widget];return;}
             auto Title = SNew(SHorizontalBox);
             const bool IsBar=bool(Args._ToggleMinimized);
-            if(IsBar&&Retail->Codex){ConstructCodexBar(Args);return;}
+            if(IsBar){ConstructBar(Args);return;}
             if(!IsBar&&Retail->Codex){ConstructCodex(Args);return;}
             if(IsBar)
             {
@@ -252,11 +257,11 @@ namespace
                     .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Drag to resize")))).Cursor(EMouseCursor::ResizeSouthEast)
                     .OnMouseButtonDown_Lambda([this](const FGeometry&,const FPointerEvent& E){if(E.GetEffectingButton()!=EKeys::LeftMouseButton||(CanManipulate&&!CanManipulate()))return FReply::Unhandled();Resizing=true;return FReply::Handled().CaptureMouse(SharedThis(this));})[Caption(TEXT("◢"))]]]];
         }
-        void ConstructCodexBar(const FArguments& Args)
+        void ConstructBar(const FArguments& Args)
         {
             auto Header=SNew(SBorder).Tag(TEXT("PluginBarHandle"))
                 .BorderImage(FCoreStyle::Get().GetBrush("NoBrush")).Padding(FMargin(3,1))
-                .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Drag to move the plugin bar while unlocked. Hold Quick-show if pinned."))))
+                .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Drag to move. Right-click for layout, transparency and ordering. Hold Quick-show to edit the bar."))))
                 .Cursor_Lambda([this]{return CanManipulate&&!CanManipulate()?EMouseCursor::Default:EMouseCursor::CardinalCross;})
                 .OnMouseButtonDown_Lambda([this](const FGeometry&,const FPointerEvent& E){return BeginDrag(E);})
                 [SNew(SHorizontalBox)
@@ -274,12 +279,22 @@ namespace
             ChildSlot[SNew(SOverlay)
                 +SOverlay::Slot()[SNew(SCodexChrome).Tag(TEXT("PluginBarCodexChrome")).Style(Retail).Flat(true).HeaderHidden(true)]
                 +SOverlay::Slot()[SNew(SVerticalBox)
-                    +SVerticalBox::Slot().AutoHeight()[SNew(SBox).HeightOverride(18)[Header]]
+                    +SVerticalBox::Slot().AutoHeight()[SNew(SBox).HeightOverride(ACEPluginBarLayout::Header)
+                        .Visibility_Lambda([H=Host,Mini=Args._Minimized]{return Mini.Get(false)||(H.IsValid()&&H->IsPluginQuickShow())?EVisibility::Visible:EVisibility::Collapsed;})[Header]]
                     +SVerticalBox::Slot().FillHeight(1)
-                        [SNew(SBox).Visibility_Lambda([Mini=Args._Minimized]{return Mini.Get(false)?EVisibility::Collapsed:EVisibility::Visible;})[Args._Content.Widget]]]];
+                        [SNew(SBox).Padding(ACEPluginBarLayout::Padding)
+                            .Visibility_Lambda([Mini=Args._Minimized]{return Mini.Get(false)?EVisibility::Collapsed:EVisibility::Visible;})[Args._Content.Widget]]]
+                +SOverlay::Slot().HAlign(HAlign_Right).VAlign(VAlign_Bottom)
+                    [SNew(SBorder).Tag(TEXT("PluginBarResize")).BorderImage(FCoreStyle::Get().GetBrush("NoBrush")).Padding(0)
+                        .Visibility_Lambda([H=Host,Mini=Args._Minimized]{return H.IsValid()&&H->IsPluginQuickShow()&&!Mini.Get(false)?EVisibility::Visible:EVisibility::Collapsed;})
+                        .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Drag to arrange icons into rows and columns")))).Cursor(EMouseCursor::ResizeSouthEast)
+                        .OnMouseButtonDown_Lambda([this](const FGeometry&,const FPointerEvent& E)
+                        {if(E.GetEffectingButton()!=EKeys::LeftMouseButton||(CanManipulate&&!CanManipulate()))return FReply::Unhandled();Resizing=true;return FReply::Handled().CaptureMouse(SharedThis(this));})
+                        [SNew(SACELobbyGlyph).Kind(SACELobbyGlyph::EKind::Grip).Size(10.f).Color(FACEPluginStyle::Gold(.9f))]]];
         }
         FReply BeginDrag(const FPointerEvent& E)
         {
+            if(E.GetEffectingButton()==EKeys::RightMouseButton&&ContextMenu)return ContextMenu(GetCachedGeometry(),E);
             if(E.GetEffectingButton()!=EKeys::LeftMouseButton)return FReply::Unhandled();
             if(!Move||(CanManipulate&&!CanManipulate()))return FReply::Handled();
             Dragging=true;return FReply::Handled().CaptureMouse(SharedThis(this));
@@ -396,6 +411,7 @@ namespace
         TFunction<void()> Raise;
         TAttribute<bool> Locked;
         TFunction<bool()> CanManipulate;
+        TFunction<FReply(const FGeometry&,const FPointerEvent&)> ContextMenu;
     };
 }
 
@@ -412,11 +428,12 @@ void SACEPluginDesktop::Construct(const FArguments& Args)
     Bar.Widget=SNew(SPluginFrame).Host(Host.Get()).WindowId(BarId)
         .Minimized_Lambda([H=Host](){return H.IsValid()&&H->IsPluginBarMinimized();})
         .ToggleMinimized([H=Host](){if(H.IsValid())H->SetPluginBarMinimized(!H->IsPluginBarMinimized());})
-        .CanManipulate([H=Host](){return H.IsValid()&&H->IsPluginBarUnlocked();})
+        .CanManipulate([H=Host](){return H.IsValid()&&H->IsPluginQuickShow()&&H->CanManipulatePluginWindow(BarId);})
+        .ContextMenu([this](const FGeometry&,const FPointerEvent& E){return ShowBarMenu(Windows.FindChecked(BarId).Widget.ToSharedRef(),E);})
+        .Resize([this](FVector2D D,bool Save){Resize(BarId,D,Save);})
         .Move([this](FVector2D D,bool Save){Move(BarId,D,Save);})
         .Raise([this](){Raise(BarId);})
-        [SAssignNew(BarScroll,SScrollBox).ScrollBarVisibility(EVisibility::Visible).ScrollBarThickness(FVector2D(4,4)).ScrollBarPadding(FMargin(2))
-            +SScrollBox::Slot().Padding(4)[SAssignNew(Buttons,SStackBox).Orientation(Orient_Vertical)]];
+        [SAssignNew(Buttons,SUniformGridPanel).Tag(TEXT("PluginBarGrid"))];
     Canvas->AddSlot().Expose(Bar.Slot).Alignment(FVector2D::ZeroVector).ZOrder(10000)[Bar.Widget.ToSharedRef()];
     Windows.Add(BarId,Bar);
     Refresh();
@@ -440,6 +457,7 @@ FVector2D SACEPluginDesktop::DisplaySize(const FWindow& W) const
         if(W.MapOverlay&&Host->WaypointOption(TEXT("map_minimized"),false))return FVector2D(70,26);
     }
     auto Size=W.Size;
+    if(W.PluginBar&&Host.IsValid()&&!Host->IsPluginQuickShow())Size.Y-=ACEPluginBarLayout::Header;
     if(W.Id==TEXT("thirdeye")&&Host.IsValid())
         for(const auto& P:Host->Plugins)if(P->Id==W.Id&&P->PanelSize.Y>0)
             Size.Y=FMath::Max(Size.Y,P->PanelSize.Y+ACELedger::ChromeHeaderHeight());
@@ -466,14 +484,14 @@ void SACEPluginDesktop::Layout(FWindow& W)
     const FVector2D Display=DisplaySize(W);
     const bool HiddenHeader=!W.PluginBar&&!W.MapOverlay&&W.Id!=TEXT("waypoint.arrow")&&Host.IsValid()&&Host->IsPluginWindowChromeHidden(W.Id);
     const bool LockedLedger=HiddenHeader&&!W.LedgerId.IsEmpty();
-    const double HeaderOffset=HiddenHeader?ACELedger::ChromeHeaderHeight()
-        +(W.Id==TEXT("actiondeck")?ACEActionDeckLayout::ToolbarHeight:0):0.;
+    const double HeaderOffset=W.PluginBar&&Host.IsValid()&&!Host->IsPluginQuickShow()&&!Host->IsPluginBarMinimized()?ACEPluginBarLayout::Header:
+        HiddenHeader?ACELedger::ChromeHeaderHeight()+(W.Id==TEXT("actiondeck")?ACEActionDeckLayout::ToolbarHeight:0):0.;
     // Saved placement describes the expanded window. Remove the header above
     // the content, and clamp against that same footprint in both lock states.
     // Otherwise both collapsing the header and bottom-edge clamping move rows.
     FVector2D Expanded=Display;
     if(LockedLedger)Expanded.Y+=Host->LedgerChromeHeight(W.LedgerId,false)-Host->LedgerChromeHeight(W.LedgerId,true);
-    else if(HiddenHeader)Expanded.Y+=HeaderOffset;
+    else if(HiddenHeader||W.PluginBar)Expanded.Y+=HeaderOffset;
     if(!ConstrainWindows||ViewSize.X<=0||ViewSize.Y<=0)
     {W.Slot->SetOffset(FMargin(W.Position.X,W.Position.Y+HeaderOffset,Display.X,Display.Y));return;}
     const FVector2D Size(FMath::Min(Display.X,ViewSize.X),FMath::Min(Display.Y,FMath::Max(0.,ViewSize.Y-HeaderOffset)));
@@ -489,6 +507,7 @@ void SACEPluginDesktop::Tick(const FGeometry& G,double Time,float Delta)
     const bool Constrain=ACERuntimeOptions::Get(TEXT("ConstrainUIWindows"))>.5f;
     const bool BoundsChanged=Constrain!=ConstrainWindows||!G.GetLocalSize().Equals(ViewSize);
     ConstrainWindows=Constrain;ViewSize=G.GetLocalSize();
+    if(BoundsChanged&&!ManagerOnly)Refresh();
     if(auto* Arrow=Windows.Find(TEXT("waypoint.arrow"));Arrow&&Arrow->Open&&Host.IsValid())
         Arrow->Widget->SetVisibility(Host->IsWaypointUnlocked()?EVisibility::Visible:EVisibility::HitTestInvisible);
     if(auto* Map=Windows.Find(TEXT("waypoint.dungeon"));Map&&Map->Open&&Host.IsValid())
@@ -512,6 +531,7 @@ void SACEPluginDesktop::Move(const FString& Id,FVector2D Delta,bool Save)
         if(!Delta.IsNearlyZero())
         {
             const auto Offset=W->Slot->GetOffset();W->Position=FVector2D(Offset.Left,Offset.Top)+Delta;
+            if(W->PluginBar&&!Host->IsPluginQuickShow()&&!Host->IsPluginBarMinimized())W->Position.Y-=ACEPluginBarLayout::Header;
             if(ConstrainWindows&&ViewSize.X>0&&ViewSize.Y>0)
             {const FVector2D Size=DisplaySize(*W);W->Position.X=FMath::Clamp(W->Position.X,0.,FMath::Max(0.,ViewSize.X-Size.X));W->Position.Y=FMath::Clamp(W->Position.Y,0.,FMath::Max(0.,ViewSize.Y-Size.Y));}
         }
@@ -533,6 +553,21 @@ void SACEPluginDesktop::Resize(const FString& Id,FVector2D Delta,bool Save)
     if(!Delta.IsNearlyZero()&&(!Host.IsValid()||!Host->CanManipulatePluginWindow(Id)))return;
     if(auto* W=Windows.Find(Id))
     {
+     if(W->PluginBar)
+     {
+         if(Host->IsPluginBarMinimized())return;
+         const int32 Count=Buttons->GetChildren()->Num();
+         const auto Pitch=ACEPluginBarLayout::Pitch(ACEPluginBarLayout::Tile(Host->IsPluginBarLarge(),Host->ArePluginBarLabelsVisible(),Host->IsPluginBarHorizontal(),ACERuntimeOptions::PluginTextScale()),Host->IsPluginBarLarge());
+         if(BarResizeExtent.IsNearlyZero())BarResizeExtent=W->Size;
+         BarResizeExtent+=Delta;BarResizeDelta+=Delta;
+         BarResizeExtent.X=FMath::Clamp(BarResizeExtent.X,8.+Pitch.X,8.+Pitch.X*FMath::Max(1,Count));
+         BarResizeExtent.Y=FMath::Clamp(BarResizeExtent.Y,26.+Pitch.Y,26.+Pitch.Y*FMath::Max(1,Count));
+         const bool ByRows=FMath::Abs(BarResizeDelta.Y)/Pitch.Y>FMath::Abs(BarResizeDelta.X)/Pitch.X;
+         const int32 Columns=ACEPluginBarLayout::ResizeColumns(Count,BarResizeExtent,Pitch,ByRows);
+         Host->SetPluginBarColumns(Columns,Save);
+         if(Save){BarResizeExtent=BarResizeDelta=FVector2D::ZeroVector;}
+         return;
+     }
      if(UACEPluginSubsystem::IsLedger(Id))
      {
          // Persist the list area; pinning only hides the editor chrome.
@@ -632,12 +667,12 @@ void SACEPluginDesktop::Refresh()
     const bool Large=Host->IsPluginBarLarge();
     const float TilePadding=Large?3.f:2.f;
     const float TextScale=FMath::Max(1.f,ACERuntimeOptions::PluginTextScale());
-    const FVector2D TileSize=Labels?(Horizontal?FVector2D(96,Large?78:66):FVector2D(208,Large?56:40))*TextScale
-        :FVector2D(Large?52:36,Large?52:36);
+    const FVector2D TileSize=ACEPluginBarLayout::Tile(Large,Labels,Horizontal,TextScale);
     FString Next=(Horizontal?FString(TEXT("horizontal|")):FString(TEXT("vertical|")))+FString::FromInt(Host->GetPluginOrderRevision())+TEXT("|");TSet<FString> Enabled;
     for(auto P:Host->Plugins)if(P->Enabled){Next+=P->Id+(Host->IsPluginOnBar(P->Id)?TEXT("|"):TEXT("~|"));Enabled.Add(P->Id);}
     Next+=FACEPluginStyle::ThemeName()+(Labels?TEXT("|labels|"):TEXT("|icons|"))
-        +(Large?TEXT("large|"):TEXT("small|"))+FString::SanitizeFloat(TextScale);
+        +(Large?TEXT("large|"):TEXT("small|"))+FString::SanitizeFloat(TextScale)
+        +FString::Printf(TEXT("|%d|%g|%g"),Host->GetPluginBarColumns(),ConstrainWindows?ViewSize.X:0.,ConstrainWindows?ViewSize.Y:0.);
     if(Host->Plugins.ContainsByPredicate([](const auto& P){return P->Id==TEXT("ucm");}))Enabled.Add(TEXT("ucm.log"));
     for(const TCHAR* Id:{TEXT("ucm.log"),TEXT("waypoint.map")})
         if((Enabled.Contains(Id)||(FString(Id)==TEXT("waypoint.map")&&Enabled.Contains(TEXT("waypoint"))))
@@ -652,23 +687,30 @@ void SACEPluginDesktop::Refresh()
         if(Pin&&!IsOpen(TEXT("waypoint.dungeon")))Toggle(TEXT("waypoint.dungeon"));
         else if(!Pin&&IsOpen(TEXT("waypoint.dungeon")))Hide(TEXT("waypoint.dungeon"));
     }
-    if(Next==Signature&&Buttons->NumSlots())return;
+    if(Next==Signature&&Buttons->GetChildren()->Num())return;
     Signature=Next;
     for(auto It=Windows.CreateIterator();It;++It)if(It.Key()!=BarId&&!Enabled.Contains(It.Key()))
     {Hide(It.Key(),false);Canvas->RemoveSlot(It.Value().Widget.ToSharedRef());It.RemoveCurrent();}
     Buttons->ClearChildren();
-    Buttons->SetOrientation(Horizontal?Orient_Horizontal:Orient_Vertical);
-    BarScroll->SetOrientation(Horizontal?Orient_Horizontal:Orient_Vertical);
-    BarScroll->ScrollToStart();
-    for(const FString& Id:Host->PluginDisplayOrder())
+    Buttons->SetSlotPadding(FMargin(TilePadding));
+    auto FindPlugin=[&](const FString& Id)->TSharedPtr<FACEClientPlugin>
+    {for(const auto& P:Host->Plugins)if(P->Id==Id)return P;return nullptr;};
+    TArray<FString> Visible;
+    for(const auto& Id:Host->PluginDisplayOrder())
     {
-        TSharedPtr<FACEClientPlugin> P;
-        for(const auto& Candidate:Host->Plugins)if(Candidate->Id==Id)P=Candidate;
-        const bool Manager=Id==TEXT("__manager");
-        if(!Manager&&!(P&&P->Enabled)&&!(Id==TEXT("ucm.log")&&Enabled.Contains(TEXT("ucm")))
+        const auto P=FindPlugin(Id);
+        if(Id!=TEXT("__manager")&&!(P&&P->Enabled)&&!(Id==TEXT("ucm.log")&&Enabled.Contains(TEXT("ucm")))
             &&!(Id==TEXT("waypoint.map")&&Enabled.Contains(TEXT("waypoint"))))continue;
-        // "Show on plugin bar" (Plugin Manager) hides an enabled plugin's button only.
-        if(!Manager&&!Host->IsPluginOnBar(Id.StartsWith(TEXT("waypoint."))?FString(TEXT("waypoint")):Id==TEXT("ucm.log")?FString(TEXT("ucm")):Id))continue;
+        if(Id!=TEXT("__manager")&&!Host->IsPluginOnBar(Id.StartsWith(TEXT("waypoint."))?FString(TEXT("waypoint")):Id==TEXT("ucm.log")?FString(TEXT("ucm")):Id))continue;
+        Visible.Add(Id);
+    }
+    const auto Grid=ACEPluginBarLayout::Fit(Visible.Num(),Host->GetPluginBarColumns()>0?Host->GetPluginBarColumns():Horizontal?Visible.Num():1,
+        ACEPluginBarLayout::Pitch(TileSize,Large),ConstrainWindows?ViewSize:FVector2D::ZeroVector);
+    BarColumns=Grid.Columns;
+    for(const FString& Id:Visible)
+    {
+        const auto P=FindPlugin(Id);
+        const bool Manager=Id==TEXT("__manager");
         const float IconSize=Large?(Labels?32.f:36.f):(Labels?24.f:26.f);
         auto Icon=SNew(SBox).Tag(FName(*(TEXT("PluginBarIcon.")+Id))).WidthOverride(IconSize).HeightOverride(IconSize)
             [SNew(SScaleBox).Stretch(EStretch::ScaleToFit)[WindowIcon(Host.Get(),Id)]];
@@ -707,43 +749,69 @@ void SACEPluginDesktop::Refresh()
                     return FText::FromString(Tip+TEXT("\nRight-click for bar layout, size, pin / unpin and settings.\nDrag to reorder while unlocked. Hold Quick-show if pinned."));
                 })))
                 .OnClicked_Lambda([this,Id,Manager](){if(Manager)Host->TogglePanel();else Toggle(Id);return FReply::Handled();})[Content];
-        Button->SetIdentity(Id,Open,Horizontal);
-        Button->SetContextMenu([H=Host,Id,Weak=TWeakPtr<SWidget>(Button)](const FGeometry&,const FPointerEvent& E)
-        {
-            const auto Owner=Weak.Pin();if(!H.IsValid()||!Owner)return FReply::Unhandled();
-            FMenuBuilder Menu(true,nullptr);
-            Menu.AddMenuEntry(FText::FromString(TEXT("Horizontal plugin bar")),
-                FText::FromString(TEXT("On: horizontal row. Off: vertical column.")),FSlateIcon(),
-                FUIAction(FExecuteAction::CreateLambda([H]{if(H.IsValid())H->SetPluginBarHorizontal(!H->IsPluginBarHorizontal());}),
-                    FCanExecuteAction(),FIsActionChecked::CreateLambda([H]{return H.IsValid()&&H->IsPluginBarHorizontal();})),
-                NAME_None,EUserInterfaceActionType::ToggleButton);
-            Menu.AddMenuEntry(FText::FromString(TEXT("Large plugin bar")),
-                FText::FromString(TEXT("On: larger icons and buttons. Off: small, compact bar.")),FSlateIcon(),
-                FUIAction(FExecuteAction::CreateLambda([H]{if(H.IsValid())H->SetPluginBarLarge(!H->IsPluginBarLarge());}),
-                    FCanExecuteAction(),FIsActionChecked::CreateLambda([H]{return H.IsValid()&&H->IsPluginBarLarge();})),
-                NAME_None,EUserInterfaceActionType::ToggleButton);
-            Menu.AddMenuSeparator();
-            // The pinned map is a separate overlay, controlled by Waypoint's
-            // interface option rather than the normal window's pin setting.
-            const bool MapOverlay=Id==TEXT("waypoint.map")&&H->WaypointOption(TEXT("dungeon_overlay"));
-            if(MapOverlay)
-                Menu.AddMenuEntry(FText::FromString(TEXT("Unpin map from interface")),FText::GetEmpty(),FSlateIcon(),
-                    FUIAction(FExecuteAction::CreateLambda([H]{if(H.IsValid())H->SetWaypointOption(TEXT("dungeon_overlay"),false);})));
-            Menu.AddMenuEntry(FText::FromString(H->IsPluginWindowPinned(Id)?TEXT("Unpin window"):TEXT("Pin window")),FText::GetEmpty(),FSlateIcon(),
-                FUIAction(FExecuteAction::CreateLambda([H,Id]{if(H.IsValid())H->SetPluginWindowPinned(Id,!H->IsPluginWindowPinned(Id));})));
-            Menu.AddMenuEntry(FText::FromString(TEXT("Plugin settings")),FText::GetEmpty(),FSlateIcon(),
-                FUIAction(FExecuteAction::CreateLambda([H,Id]{if(H.IsValid())H->OpenPluginSettings(Id);})));
-            FSlateApplication::Get().PushMenu(Owner.ToSharedRef(),FWidgetPath(),Menu.MakeWidget(),E.GetScreenSpacePosition(),FPopupTransitionEffect(FPopupTransitionEffect::ContextMenu));
-            return FReply::Handled();
-        });
-        Buttons->AddSlot().AutoSize().Padding(TilePadding)[SNew(SACEPluginOrderTarget).Host(Host.Get()).Id(Id).LockId(BarId).Horizontal(Horizontal)
-            .Tag(FName(*(TEXT("PluginBarOrder.")+Id)))
-            [SNew(SBox).WidthOverride(TileSize.X).HeightOverride(TileSize.Y).Clipping(EWidgetClipping::ClipToBounds)[Button]]];
+        Button->SetIdentity(Id,Open,BarColumns>1,TAttribute<float>::CreateLambda([H=Host]{return H.IsValid()?H->GetPluginWindowOpacity(BarId):1.f;}));
+        Button->SetContextMenu([this,Id,Weak=TWeakPtr<SWidget>(Button)](const FGeometry&,const FPointerEvent& E)
+        {if(auto Owner=Weak.Pin())return ShowBarMenu(Owner.ToSharedRef(),E,Id);return FReply::Unhandled();});
+        const int32 Index=Buttons->GetChildren()->Num();
+        Buttons->AddSlot(Index%BarColumns,Index/BarColumns)
+            [SNew(SACEPluginOrderTarget).Host(Host.Get()).Id(Id).LockId(BarId).Horizontal(BarColumns>1)
+                .Tag(FName(*(TEXT("PluginBarOrder.")+Id)))
+                [SNew(SBox).WidthOverride(TileSize.X).HeightOverride(TileSize.Y).Clipping(EWidgetClipping::ClipToBounds)[Button]]];
     }
     auto& Bar=Windows.FindChecked(BarId);
-    Bar.Size=Horizontal?FVector2D(8+(TileSize.X+2*TilePadding)*Buttons->NumSlots(),34+TileSize.Y+2*TilePadding)
-        :FVector2D(16+TileSize.X+2*TilePadding,26+(TileSize.Y+2*TilePadding)*Buttons->NumSlots());
+    Bar.Size=Grid.Size;
     Layout(Bar);
+}
+
+FReply SACEPluginDesktop::ShowBarMenu(TSharedRef<SWidget> Owner,const FPointerEvent& E,const FString& Id)
+{
+    if(!Host.IsValid())return FReply::Unhandled();
+    const auto H=Host;
+    FMenuBuilder Menu(true,nullptr);
+    Menu.BeginSection(NAME_None,FText::FromString(TEXT("Plugin bar")));
+    auto Preset=[&](const TCHAR* Name,bool Horizontal)
+    {
+        Menu.AddMenuEntry(FText::FromString(Name),FText::GetEmpty(),FSlateIcon(),
+            FUIAction(FExecuteAction::CreateLambda([H,Horizontal]{if(H.IsValid())H->SetPluginBarHorizontal(Horizontal);})));
+    };
+    Preset(TEXT("Single row"),true);Preset(TEXT("Single column"),false);
+    Menu.AddMenuEntry(FText::FromString(TEXT("Four columns")),FText::FromString(TEXT("Arrange sixteen icons as a 4 x 4 grid. Hold Quick-show and drag the resize corner for any other shape.")),FSlateIcon(),
+        FUIAction(FExecuteAction::CreateLambda([H]{if(H.IsValid())H->SetPluginBarColumns(4);})));
+    Menu.AddMenuEntry(FText::FromString(TEXT("Large plugin bar")),FText::GetEmpty(),FSlateIcon(),
+        FUIAction(FExecuteAction::CreateLambda([H]{if(H.IsValid())H->SetPluginBarLarge(!H->IsPluginBarLarge());}),FCanExecuteAction(),
+            FIsActionChecked::CreateLambda([H]{return H.IsValid()&&H->IsPluginBarLarge();})),NAME_None,EUserInterfaceActionType::ToggleButton);
+    Menu.AddMenuEntry(FText::FromString(TEXT("Show plugin names")),FText::GetEmpty(),FSlateIcon(),
+        FUIAction(FExecuteAction::CreateLambda([H]{if(H.IsValid())H->SetPluginBarLabelsVisible(!H->ArePluginBarLabelsVisible());}),FCanExecuteAction(),
+            FIsActionChecked::CreateLambda([H]{return H.IsValid()&&H->ArePluginBarLabelsVisible();})),NAME_None,EUserInterfaceActionType::ToggleButton);
+    Menu.AddWidget(SNew(SBox).WidthOverride(320).Padding(8)[H->MakePluginWindowControls(BarId)],FText::FromString(TEXT("Background transparency")),true);
+    if(H->IsPluginBarMinimized())Menu.AddMenuEntry(FText::FromString(TEXT("Expand plugin bar")),FText::GetEmpty(),FSlateIcon(),
+        FUIAction(FExecuteAction::CreateLambda([H]{if(H.IsValid())H->SetPluginBarMinimized(false);})));
+    Menu.EndSection();
+    if(!Id.IsEmpty())
+    {
+        // Use visible grid order so moving one position never disappears into a hidden plugin.
+        TArray<FString> Order;
+        for(int32 I=0;I<Buttons->GetChildren()->Num();++I)
+            Order.Add(Buttons->GetChildren()->GetChildAt(I)->GetTag().ToString().RightChop(15)); // PluginBarOrder.
+        const int32 Index=Order.IndexOfByKey(Id);
+        auto MoveEntry=[&](const TCHAR* Label,int32 Target,bool After)
+        {
+            if(!Order.IsValidIndex(Target))return;
+            Menu.AddMenuEntry(FText::FromString(Label),FText::FromString(TEXT("You can also hold Quick-show and drag icons into a new order.")),FSlateIcon(),
+                FUIAction(FExecuteAction::CreateLambda([H,Id,To=Order[Target],After]{if(H.IsValid())H->MovePluginInOrder(Id,To,After);})));
+        };
+        if(Index!=INDEX_NONE){MoveEntry(TEXT("Move earlier"),Index-1,false);MoveEntry(TEXT("Move later"),Index+1,true);}
+        Menu.AddMenuSeparator();
+        if(Id==TEXT("waypoint.map")&&H->WaypointOption(TEXT("dungeon_overlay")))
+            Menu.AddMenuEntry(FText::FromString(TEXT("Unpin map from interface")),FText::GetEmpty(),FSlateIcon(),
+                FUIAction(FExecuteAction::CreateLambda([H]{if(H.IsValid())H->SetWaypointOption(TEXT("dungeon_overlay"),false);})));
+        Menu.AddMenuEntry(FText::FromString(H->IsPluginWindowPinned(Id)?TEXT("Unpin window"):TEXT("Pin window")),FText::GetEmpty(),FSlateIcon(),
+            FUIAction(FExecuteAction::CreateLambda([H,Id]{if(H.IsValid())H->SetPluginWindowPinned(Id,!H->IsPluginWindowPinned(Id));})));
+        Menu.AddMenuEntry(FText::FromString(TEXT("Plugin settings")),FText::GetEmpty(),FSlateIcon(),
+            FUIAction(FExecuteAction::CreateLambda([H,Id]{if(H.IsValid())H->OpenPluginSettings(Id);})));
+    }
+    FSlateApplication::Get().PushMenu(Owner,FWidgetPath(),Menu.MakeWidget(),E.GetScreenSpacePosition(),FPopupTransitionEffect(FPopupTransitionEffect::ContextMenu));
+    return FReply::Handled();
 }
 
 void UACEPluginSubsystem::UpdateDesktopDock()
@@ -834,7 +902,19 @@ bool UACEPluginSubsystem::IsPluginBarHorizontal() const
 void UACEPluginSubsystem::SetPluginBarHorizontal(bool Horizontal)
 {
     if(!Settings)return;
-    Settings->SetBoolField(TEXT("_plugin_bar_horizontal"),Horizontal);SaveSettings();
+    Settings->SetBoolField(TEXT("_plugin_bar_horizontal"),Horizontal);Settings->RemoveField(TEXT("_plugin_bar_columns"));SaveSettings();
+    if(DesktopDock)DesktopDock->Refresh();
+}
+int32 UACEPluginSubsystem::GetPluginBarColumns() const
+{
+    double Columns=0;if(Settings)Settings->TryGetNumberField(TEXT("_plugin_bar_columns"),Columns);
+    return FMath::IsFinite(Columns)?FMath::TruncToInt(FMath::Clamp(Columns,0.,256.)):0;
+}
+void UACEPluginSubsystem::SetPluginBarColumns(int32 Columns,bool Persist)
+{
+    if(!Settings)Settings=MakeShared<FJsonObject>();
+    Settings->SetNumberField(TEXT("_plugin_bar_columns"),FMath::Clamp(Columns,0,256));
+    if(Persist)SaveSettings();
     if(DesktopDock)DesktopDock->Refresh();
 }
 bool UACEPluginSubsystem::IsPluginBarLarge() const

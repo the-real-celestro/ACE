@@ -40,6 +40,11 @@ void UACEPluginSubsystem::SetPluginOpacityGlobal(bool Global)
 }
 float UACEPluginSubsystem::GetPluginWindowOpacity(const FString& Id) const
 {
+    if(Id==TEXT("__bar"))
+    {
+        double Value=1.;if(Settings)Settings->TryGetNumberField(TEXT("_window_opacity.__bar"),Value);
+        return FMath::IsFinite(Value)?float(FMath::Clamp(Value,0.,1.)):1.f;
+    }
     const FString Window=OpacityWindow(Id);
     double Value=1.;if(Settings)Settings->TryGetNumberField(TEXT("_plugin_opacity"),Value);
     if(!Id.IsEmpty()&&!IsPluginOpacityGlobal())
@@ -85,6 +90,7 @@ bool UACEPluginSubsystem::IsPluginQuickShow() const
 }
 bool UACEPluginSubsystem::IsPluginWindowChromeHidden(const FString& Id) const
 {
+    if(Id==TEXT("__bar"))return !IsPluginQuickShow();
 #if !UE_BUILD_SHIPPING
     // Preview captures show ledgers framed; in play a locked bar shows them as a HUD readout.
     if(PreviewStep>=0&&IsLedger(Id)&&!IsPluginWindowPinned(Id))return false;
@@ -101,7 +107,7 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakePluginWindowControls(const FString&
     Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,12,0)[Text(TEXT("Background opacity"))];
     Row->AddSlot().FillWidth(1).VAlign(VAlign_Center)[SNew(SACEPluginSlider)
         .Tag(FName(*(TEXT("PluginOpacity.")+Id))).Style(&Theme->Slider).MinValue(0).MaxValue(100).StepSize(1).MouseUsesStep(true).PreventThrottling(true)
-        .IsEnabled_Lambda([H,Id]{return H.IsValid()&&(Id.IsEmpty()||!H->IsPluginOpacityGlobal());})
+        .IsEnabled_Lambda([H,Id]{return H.IsValid()&&(Id.IsEmpty()||Id==TEXT("__bar")||!H->IsPluginOpacityGlobal());})
         .Value_Lambda([H,Id]{return H.IsValid()?H->GetPluginWindowOpacity(Id)*100.f:100.f;})
         .OnValueChanged_Lambda([H,Id](float Value){if(H.IsValid())H->SetPluginWindowOpacity(Id,FMath::RoundToInt(Value)/100.f,false);})
         .OnMouseCaptureEnd_Lambda([H]{if(H.IsValid())H->SaveSettings();})
@@ -115,7 +121,7 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakePluginWindowControls(const FString&
         .IsChecked_Lambda([H]{return H.IsValid()&&H->IsPluginOpacityGlobal()?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
         .OnCheckStateChanged_Lambda([H](ECheckBoxState V){if(H.IsValid())H->SetPluginOpacityGlobal(V==ECheckBoxState::Checked);})
         [Text(TEXT("Use this opacity for all plugins"))]];
-    else
+    else if(Id!=TEXT("__bar"))
     {
         auto Options=SNew(SHorizontalBox);
         Options->AddSlot().FillWidth(1).VAlign(VAlign_Center)[SNew(SCheckBox).Tag(FName(*(TEXT("PluginPin.")+Id))).Style(&Theme->Check)

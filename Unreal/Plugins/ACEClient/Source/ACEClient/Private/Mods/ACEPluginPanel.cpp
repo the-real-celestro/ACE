@@ -338,7 +338,7 @@ namespace ACEPluginPanelPrivate
                 }),[this]{return Host.IsValid()&&Host->IsMatchWorldColor();},[this](bool V){if(Host.IsValid())Host->SetMatchWorldColor(V);},TEXT("PluginMatchWorld"))];
             Look->AddSlot().AutoHeight().Padding(0,8,0,0)[SwitchRow(TEXT("Show plugin bar"),FText::GetEmpty(),[this]{return Host.IsValid()&&Host->IsPluginBarVisible();},
                 [this](bool V){if(Host.IsValid())Host->SetPluginBarVisible(V);})];
-            Look->AddSlot().AutoHeight().Padding(0,8,0,0)[SwitchRow(TEXT("Horizontal plugin bar"),FText::FromString(TEXT("On: horizontal row. Off: vertical column.")),[this]{return Host.IsValid()&&Host->IsPluginBarHorizontal();},
+            Look->AddSlot().AutoHeight().Padding(0,8,0,0)[SwitchRow(TEXT("Horizontal plugin bar"),FText::FromString(TEXT("On: single row. Off: single column. Resize for a grid.")),[this]{return Host.IsValid()&&Host->IsPluginBarHorizontal();},
                 [this](bool V){if(Host.IsValid())Host->SetPluginBarHorizontal(V);},TEXT("PluginBarHorizontal"))];
             Look->AddSlot().AutoHeight().Padding(0,8,0,0)[SwitchRow(TEXT("Large plugin bar"),FText::FromString(TEXT("On: bigger icons and buttons. Off: small (default).")),
                 [this]{return Host.IsValid()&&Host->IsPluginBarLarge();},
@@ -348,6 +348,9 @@ namespace ACEPluginPanelPrivate
                 [this](bool V){if(Host.IsValid())Host->SetPluginBarLabelsVisible(V);},TEXT("PluginBarLabels"))];
             Look->AddSlot().AutoHeight().HAlign(HAlign_Left).Padding(0,6,0,0)[SNew(SBox).Visibility_Lambda([this]{return Host.IsValid()&&Host->IsPluginBarMinimized()?EVisibility::Visible:EVisibility::Collapsed;})
                 [Plate(TEXT("Expand bar"),[this]{Host->SetPluginBarVisible(true);Host->SetPluginBarMinimized(false);})]];
+            Look->AddSlot().AutoHeight().Padding(0,12,0,6)[CodexCaption(TEXT("Plugin bar transparency"))];
+            Look->AddSlot().AutoHeight()[Host->MakePluginWindowControls(TEXT("__bar"))];
+            Look->AddSlot().AutoHeight().Padding(0,6,0,0)[CodexText(FText::FromString(TEXT("Hold Quick-show (Control / Command) to move, resize or drag icons into a new order. Resize width for columns or height for rows.")),12,FACEPluginStyle::Muted())];
             Look->AddSlot().AutoHeight().Padding(0,10,0,0)[Host->MakePluginWindowControls(FString())];
             Pane->AddSlot().AutoHeight().Padding(0,12,0,0)[Card(Look)];
             }
@@ -443,6 +446,9 @@ namespace ACEPluginPanelPrivate
                     .Visibility_Lambda([this](){return Host->IsPluginBarMinimized()?EVisibility::Visible:EVisibility::Collapsed;})
                     .OnClicked_Lambda([this](){Host->SetPluginBarVisible(true);Host->SetPluginBarMinimized(false);return FReply::Handled();})[Label(TEXT("Expand bar"),16)]];
                 Add(BarControls);
+                Add(Label(TEXT("Plugin bar transparency"),16));
+                Add(Host->MakePluginWindowControls(TEXT("__bar")));
+                Add(Label(TEXT("Hold Quick-show (Control / Command) to move, resize and reorder. Resize to wrap icons into a grid."),14));
                 Add(Host->MakePluginWindowControls(FString()));
                 Add(SNew(SCheckBox).Tag(TEXT("PluginBarHorizontal")).Style(&FACEPluginStyle::Current()->Check).Padding(FMargin(4,8))
                     .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Arrange plugin icons in a horizontal row. Uncheck for a vertical column. Saved across logins."))))

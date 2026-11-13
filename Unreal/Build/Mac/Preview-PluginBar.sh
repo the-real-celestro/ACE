@@ -58,7 +58,7 @@ printf 'Building the updated client. Logs: %s\n' "$pluginbar_run_dir"
     "-Log=$pluginbar_run_dir/Build.log" \
     2>&1 | tee "$pluginbar_run_dir/Build-console.log"
 
-pluginbar_test_filter='ACE.Plugins.IconArtwork+ACE.Plugins.BarPresentation'
+pluginbar_test_filter='ACE.Plugins.IconArtwork+ACE.Plugins.BarLayout+ACE.Plugins.BarPresentation'
 if "$pluginbar_full_checks"; then
     pluginbar_test_filter+='+ACE.Plugins.HostAndPanel+ACE.RetailParity.KeyboardBindings'
 fi

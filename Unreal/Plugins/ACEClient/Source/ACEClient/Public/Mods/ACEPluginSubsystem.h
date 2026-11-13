@@ -284,6 +284,9 @@ public:
     void SetPluginBarMinimized(bool Minimized);
     bool IsPluginBarHorizontal() const;
     void SetPluginBarHorizontal(bool Horizontal);
+    /** Zero uses the horizontal/vertical preset; positive values persist a custom grid. */
+    int32 GetPluginBarColumns() const;
+    void SetPluginBarColumns(int32 Columns,bool Persist=true);
     bool IsPluginBarLarge() const;
     void SetPluginBarLarge(bool Large);
     bool ArePluginBarLabelsVisible() const;

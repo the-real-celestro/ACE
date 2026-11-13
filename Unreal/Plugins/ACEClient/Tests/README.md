@@ -1,5 +1,18 @@
 # Retail parity regression tests
 
+## Resizable plugin bar (2026-11-13)
+
+`bash Unreal/Build/Mac/Preview-PluginBar.sh --test-only` runs IconArtwork,
+BarLayout and BarPresentation. BarLayout checks sixteen-icon row/column/grid
+geometry, incomplete rows, resize quantization, and viewport wrapping.
+BarPresentation also checks a sixteen-target Slate grid, cross-row drops, modifier
+header/resize visibility, stable icon position during reveal, opacity independent
+of global settings, actual rendered transparency with opaque artwork, and grid /
+opacity persistence after recreating the dock. It emits additional
+`PluginBar-Checked-Grid-*.png` captures for both sizes, optional names, and a fully
+transparent background. Rendering and live interactions still require a normal
+macOS application session. No NullRHI for presentation or artwork acceptance.
+
 ## Painted plugin icons (2026-11-11)
 
 Run `ACE.Plugins.IconArtwork`, `ACE.Plugins.HostAndPanel`, and

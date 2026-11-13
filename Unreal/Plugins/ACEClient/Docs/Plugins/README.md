@@ -234,16 +234,26 @@ An open window has a bright border, a thick edge stripe and a white corner marke
 this indicates window visibility, not whether automation is running. Hover for the
 full plugin name and status. **Show plugin names** in Plugin Manager's appearance
 settings adds optional labels beside or below the icons and is saved across logins.
-Icon-only mode is the default. Its **gear** opens Plugin Manager. Its grip still moves when the UI is unlocked, and its minus button
-collapses it to a line. Hide or restore the bar with **Show plugin bar** in
-**Settings > Game Play > Plugin Manager**. In the same manager, **Horizontal plugin bar**
-switches between a horizontal row and the default vertical column. The orientation
-is saved across logins. Icon-only buttons stay square in either direction; a visible
-scrollbar appears when the bar cannot fit on screen.
-Right-click any bar icon for **Horizontal plugin bar** (off = vertical),
-**Large plugin bar** (off = small), **Pin window**, **Unpin window**, and settings.
-The same layout and size switches are in Plugin Manager's appearance settings.
-Both update the current bar immediately and are saved across logins.
+Icon-only mode is the default. Its **gear** opens Plugin Manager. Hold the
+**Quick-show pinned windows** binding (Control, or Control/Command on macOS by
+default) to reveal the bar's top controls and resize corner. Drag the grip to move
+it; drag the corner to wrap icons into rows and columns. Resizing width chooses
+columns; resizing height chooses rows. Sixteen icons can form a 4 × 4 grid, one
+row, or one column. The grid fits the viewport without a scroll container, and
+remembers your preferred column count when the viewport changes temporarily.
+The header collapses without shifting the icons. A minimized bar keeps its
+small expand handle available even without holding the modifier.
+
+Right-click an icon or the revealed/minimized handle for **Single row**, **Single
+column**, **Four columns**, **Large plugin bar**, **Show plugin names**, and a
+**Background opacity** editor. Opacity fades the panel and tile backgrounds while
+preserving painted artwork, labels and open-window markers. Bar opacity is saved
+independently of the all-plugin opacity setting. Both themes also expose this
+editor in Plugin Manager. **Horizontal plugin bar** remains a row/column preset
+in the manager; resizing or choosing four columns switches to a custom grid.
+Hide or restore the bar with **Show plugin bar** in Plugin Manager.
+Right-click an icon for **Move earlier** / **Move later**, or hold Quick-show and
+drag it to a new position. The grid and Plugin Manager share the saved order.
 The map also offers **Unpin map from interface** when its overlay is active,
 and an **Unpin** button on the expanded overlay itself. Holding Control
 (Control or Command on macOS) reveals pinned controls even while a chat or
