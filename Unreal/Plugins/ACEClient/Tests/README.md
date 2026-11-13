@@ -1,5 +1,26 @@
 # Retail parity regression tests
 
+## Painted plugin icons (2026-11-11)
+
+Run `ACE.Plugins.IconArtwork`, `ACE.Plugins.HostAndPanel`, and
+`ACE.Plugins.PublicAPI` with rendering enabled. IconArtwork verifies the staged
+atlas loads, all twenty emblems share one texture, and live badges retain it
+through garbage collection. It also checks transparent silhouettes at 26px
+(badges) and 36px (the icon-only launcher), plus the Prismatic Taper/Hyssop mapping.
+The other suites cover layout, orientation, saved optional names, drag reordering,
+and custom plugin PNGs taking precedence over the built-in artwork.
+HostAndPanel samples the actual launcher button fill in both orientations to
+catch white tiles caused by missing explicit Slate draw tints. It also checks
+the pinned map's Unpin button while the global UI lock is active.
+KeyboardBindings covers Slate-owned Control/Command holds with text focus,
+releasing a modifier despite stale gameplay input, and custom rebinding.
+`ACE.Plugins.BarPresentation` is the focused preview check: it renders the actual
+bar in both orientations, reveals a pinned ledger using Slate modifier state,
+clicks its real Unpin control, verifies release handling and clicks the map's
+Unpin button. It uses isolated settings and avoids unrelated UCM profile schemas
+and native IME windows. UV comparisons in IconArtwork allow 1e-6 of float rounding
+(less than 0.002 source texels), while preserving strict per-cell bounds.
+
 ## Toolbar icon depth (2026-10-23)
 
 Run `ACE.RetailParity.SelectionToolbar`, `ACE.RetailParity.UIScreens`,

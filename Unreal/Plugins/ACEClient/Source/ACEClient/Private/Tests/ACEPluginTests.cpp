@@ -8,12 +8,18 @@
 #include "Mods/ACEPluginDesktop.h"
 #include "Mods/ACEPluginOrder.h"
 #include "Mods/ACEPluginStyle.h"
+#include "Mods/ACEPluginIcon.h"
 #include "Mods/ACEPluginCastMotion.h"
 #include "Mods/ACEVTProfile.h"
 #include "Mods/ACEUCMProfiles.h"
 #include "ACEOpcodes.h"
 #include "ACERuntimeOptions.h"
 #include "ACEClientSubsystem.h"
+#include "ACEInputBindings.h"
+#include "GameFramework/PlayerController.h"
+#include "GameFramework/PlayerInput.h"
+#include "Engine/World.h"
+#include "Misc/ConfigCacheIni.h"
 #include "ACEDatSubsystem.h"
 #include "ACESession.h"
 #include "UI/ACEUIElementManager.h"
@@ -612,6 +618,20 @@ bool FACEPluginHostTest::RunTest(const FString&)
         H->SetWaypointMapOpacity(1.f);
         Ui->SetUiLocked(true);
     }
+    {
+        H->SetWaypointOption(TEXT("dungeon_overlay"),true);
+        const auto Overlay=H->MakeWaypointDungeonOverlay();TSharedPtr<SButton> Unpin;
+        TFunction<void(TSharedRef<SWidget>)> FindUnpin=[&](TSharedRef<SWidget> Widget)
+        {
+            if(Widget->GetTag()==TEXT("WaypointOverlayUnpin"))Unpin=StaticCastSharedRef<SButton>(Widget);
+            auto* Children=Widget->GetChildren();for(int32 I=0;I<Children->Num();++I)FindUnpin(Children->GetChildAt(I));
+        };FindUnpin(Overlay);
+        if(TestTrue(TEXT("Pinned map offers an explicit unpin button"),Unpin.IsValid()))
+        {
+            Ui->SetUiLocked(true);Ui->SetQuickShowUi(false);Unpin->SimulateClick();
+            TestFalse(TEXT("Map can be unpinned without a modifier while the interface is locked"),H->WaypointOption(TEXT("dungeon_overlay")));
+        }
+    }
     H->SetWaypointOption(TEXT("dungeon_overlay"),false);Dock->Refresh();
     TestFalse(TEXT("Normal-map-only mode hides pinned overlay"),Dock->IsOpen(TEXT("waypoint.dungeon")));
     Dock->Tick(FGeometry::MakeRoot(FVector2D(1920,1080),FSlateLayoutTransform()),2,.016f);
@@ -703,7 +723,7 @@ bool FACEPluginHostTest::RunTest(const FString&)
         H->SetPluginBarHorizontal(true);
         TestTrue(TEXT("Orientation updates the existing icon row and scroll direction"),Dock->Buttons->GetOrientation()==Orient_Horizontal&&Dock->BarScroll->GetOrientation()==Orient_Horizontal);
         TestEqual(TEXT("Horizontal orientation preserves every icon"),Dock->Buttons->NumSlots(),Count);
-        TestEqual(TEXT("Horizontal bar keeps square icon cells"),Bar.Size,FVector2D(4+34*Count,52));
+        TestEqual(TEXT("Horizontal bar gives icons separated 52px targets and scrollbar clearance"),Bar.Size,FVector2D(8+58*Count,92));
         TestEqual(TEXT("Rotating the bar keeps its saved position"),Bar.Position,Position);
         TestTrue(TEXT("Rotating the bar keeps automation and other windows active"),P->Running&&Dock->IsOpen(TEXT("monitor")));
         FString Saved;TestTrue(TEXT("Orientation saves to disk"),FFileHelper::LoadFileToString(Saved,*(Root/TEXT("settings.json"))));
@@ -714,7 +734,17 @@ bool FACEPluginHostTest::RunTest(const FString&)
         H->SetPluginBarHorizontal(false);
         TestEqual(TEXT("Changing orientation while minimized updates the handle"),Dock->DisplaySize(Bar),FVector2D(38,18));
         H->SetPluginBarMinimized(false);
-        TestEqual(TEXT("Returning to vertical restores one column"),Bar.Size,FVector2D(38,18+34*Count));
+        TestEqual(TEXT("Returning to vertical restores one column"),Bar.Size,FVector2D(74,26+58*Count));
+        TestFalse(TEXT("Names are optional; icon-only mode is the default"),H->ArePluginBarLabelsVisible());
+        H->SetPluginBarLabelsVisible(true);
+        TestEqual(TEXT("Vertical labels have room beside the icon"),Bar.Size,FVector2D(230,26+62*Count));
+        H->SetPluginBarHorizontal(true);
+        TestEqual(TEXT("Horizontal labels have room beneath the icon"),Bar.Size,FVector2D(8+102*Count,118));
+        FString LabelSettings;TestTrue(TEXT("Name preference saves to disk"),FFileHelper::LoadFileToString(LabelSettings,*(Root/TEXT("settings.json"))));
+        H->Settings=Json(*LabelSettings);
+        TestTrue(TEXT("Name preference restores from disk"),H->ArePluginBarLabelsVisible());
+        H->SetPluginBarLabelsVisible(false);H->SetPluginBarHorizontal(false);
+        TestEqual(TEXT("Switching back to icons restores the compact column"),Bar.Size,FVector2D(74,26+58*Count));
     }
     P->Running=false;Dock->Toggle(TEXT("ucm"));
     TestTrue(TEXT("Second click reopens its existing window"),Dock->IsOpen(TEXT("ucm")));
@@ -895,12 +925,28 @@ bool FACEPluginHostTest::RunTest(const FString&)
         }
         Pixels.Reset();DockTarget->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,ReadFlags);
         TestEqual(TEXT("Plugin bar and window render"),Pixels.Num(),1280*720);
+        auto CheckLauncherFill=[&]()
+        {
+            TSharedPtr<SWidget> Options;
+            TFunction<void(TSharedRef<SWidget>)> Find=[&](TSharedRef<SWidget> Widget)
+            {
+                if(Widget->GetTag()==TEXT("PluginOptions"))Options=Widget;
+                auto* Children=Widget->GetChildren();for(int32 I=0;I<Children->Num();++I)Find(Children->GetChildAt(I));
+            };Find(Dock);
+            if(!TestTrue(TEXT("Rendered launcher includes its settings button"),Options.IsValid()))return;
+            const FVector2D At=Dock->GetCachedGeometry().AbsoluteToLocal(Options->GetCachedGeometry().LocalToAbsolute(FVector2D(6,6)));
+            const int32 X=FMath::FloorToInt(At.X),Y=FMath::FloorToInt(At.Y);
+            if(!TestTrue(TEXT("Launcher fill sample is inside the target"),X>=0&&X<1280&&Y>=0&&Y<720))return;
+            const FColor Fill=Pixels[Y*1280+X];
+            TestTrue(TEXT("Launcher buttons render dark navy instead of white"),Fill.R<120&&Fill.G<140&&Fill.B<180&&Fill.A>200);
+        };CheckLauncherFill();
         Png.Reset();FImageUtils::PNGCompressImageArray(1280,720,Pixels,Png);
         FFileHelper::SaveArrayToFile(Png,*(FPaths::ProjectSavedDir()/TEXT("Automation/PluginDock.png")));
         H->SetPluginBarHorizontal(true);
         for(int Pass=0;Pass<3;++Pass){Renderer.DrawWidget(DockTarget,Dock,FVector2D(1280,720),0);FlushRenderingCommands();}
         Pixels.Reset();DockTarget->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,ReadFlags);
         Png.Reset();FImageUtils::PNGCompressImageArray(1280,720,Pixels,Png);
+        CheckLauncherFill();
         FFileHelper::SaveArrayToFile(Png,*(FPaths::ProjectSavedDir()/TEXT("Automation/PluginDock-Horizontal.png")));
         H->SetPluginBarHorizontal(false);
         TSharedPtr<SWidget> Handle,Minimize;
@@ -986,5 +1032,143 @@ bool FACEPluginHostTest::RunTest(const FString&)
         }
     }
     return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEPluginIconArtworkTest,"ACE.Plugins.IconArtwork",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACEPluginIconArtworkTest::RunTest(const FString&)
+{
+    TestEqual(TEXT("Supplies uses the Prismatic Taper cell"),SACEPluginIcon::ArtworkSlot(TEXT("supplyledger")),7);
+    TestEqual(TEXT("Hyssop remains available as an alternative"),SACEPluginIcon::ArtworkSlot(TEXT("supplyledger.hyssop")),19);
+    TestEqual(TEXT("Drag grip retains its vector control"),SACEPluginIcon::ArtworkSlot(TEXT("plugin.grip")),INDEX_NONE);
+    TestEqual(TEXT("Third-party plugins have a painted extension fallback"),SACEPluginIcon::ArtworkSlot(TEXT("third_party")),18);
+    if(!FApp::CanEverRender()||!FSlateApplication::IsInitialized())return true;
+    const TCHAR* Ids[]={TEXT("plugin.options"),TEXT("actiondeck"),TEXT("autocraft"),TEXT("derethlens"),TEXT("huntledger"),
+        TEXT("itemtools"),TEXT("looteditor"),TEXT("supplyledger"),TEXT("thirdeye"),TEXT("ucm"),TEXT("ucmmicro"),
+        TEXT("waypoint"),TEXT("wiki"),TEXT("ucm.log"),TEXT("waypoint.map"),TEXT("treestats"),TEXT("foundry"),
+        TEXT("transmog"),TEXT("third_party"),TEXT("supplyledger.hyssop")};
+    TArray<TSharedRef<SACEPluginIcon>> Icons;
+    UObject* SharedTexture=nullptr;
+    for(int32 Index=0;Index<UE_ARRAY_COUNT(Ids);++Index)
+    {
+        const TCHAR* Id=Ids[Index];
+        auto Icon=SNew(SACEPluginIcon).Id(Id);Icons.Add(Icon);
+        const FSlateBrush* Brush=Icon->PaintedBrush();
+        if(!TestNotNull(FString(Id)+TEXT(" loads the staged painted artwork"),Brush))return false;
+        if(!SharedTexture)SharedTexture=Brush->GetResourceObject();
+        TestTrue(TEXT("All badges share one atlas texture"),SharedTexture&&Brush->GetResourceObject()==SharedTexture);
+        const FBox2f UV=Brush->GetUVRegion();
+        // Subtracting adjacent float UV coordinates can differ by a few ULPs.
+        // This tolerance is less than 0.002 texels on the source atlas.
+        constexpr float UVTolerance=1.e-6f;
+        const FVector2f ExpectedMin((Index%5)/5.f,(Index/5)/4.f),ExpectedMax((Index%5+1)/5.f,(Index/5+1)/4.f);
+        TestTrue(FString(Id)+TEXT(" samples only its atlas cell"),UV.bIsValid&&UV.Min.Equals(ExpectedMin,UVTolerance)&&UV.Max.Equals(ExpectedMax,UVTolerance)
+            &&FMath::IsNearlyEqual(UV.GetSize().X,.2f,UVTolerance)&&FMath::IsNearlyEqual(UV.GetSize().Y,.25f,UVTolerance));
+    }
+    TWeakObjectPtr<UObject> RetainedTexture=SharedTexture;
+    CollectGarbage(RF_NoFlags);
+    TestTrue(TEXT("Live icons retain their shared texture through garbage collection"),RetainedTexture.IsValid());
+    FWidgetRenderer Renderer(false,true);
+    for(int32 Side:{26,36})
+    {
+        const FVector2D Size(Side,Side);auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);
+        ON_SCOPE_EXIT{Target->ReleaseResource();};
+        for(const auto& Icon:Icons)
+        {
+            for(int32 Pass=0;Pass<3;++Pass){++GFrameCounter;Renderer.DrawWidget(Target,Icon,Size,0);FlushRenderingCommands();}
+            TArray<FColor> Pixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);
+            int32 Opaque=0,Transparent=0;
+            for(const FColor Pixel:Pixels){Opaque+=Pixel.A>200;Transparent+=Pixel.A<8;}
+            TestTrue(TEXT("Painted symbol remains visible at badge and toolbar sizes"),Opaque>Side);
+            TestTrue(TEXT("Icon keeps transparent negative space around its silhouette"),Transparent>Side);
+        }
+    }
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEPluginBarPresentationTest,"ACE.Plugins.BarPresentation",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACEPluginBarPresentationTest::RunTest(const FString&)
+{
+    if(!FApp::CanEverRender()||!FSlateApplication::IsInitialized())return true;
+    const FString Root=FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir()/TEXT("Automation")/(TEXT("PluginBarFixture-")+FGuid::NewGuid().ToString(EGuidFormats::Digits)));
+    const FString PreviousIni=GGameUserSettingsIni,PreviousTheme=FACEPluginStyle::ThemeName();
+    GGameUserSettingsIni=Root/TEXT("Input.ini");FConfigFile Config;Config.NoSave=false;Config.bCanSaveAllSections=true;
+    GConfig->SetFile(GGameUserSettingsIni,&Config);ACEInputBindings::Reload();
+    const auto Init=UWorld::InitializationValues().CreatePhysicsScene(false).CreateNavigation(false).CreateAISystem(false);
+    auto* World=UWorld::CreateWorld(EWorldType::Game,false,NAME_None,nullptr,true,ERHIFeatureLevel::Num,&Init);
+    auto* PC=World->SpawnActor<APlayerController>();PC->PlayerInput=NewObject<UPlayerInput>(PC);
+    auto* GI=NewObject<UGameInstance>();GI->Init();
+    ON_SCOPE_EXIT
+    {
+        GI->Shutdown();World->DestroyWorld(false);GGameUserSettingsIni=PreviousIni;ACEInputBindings::Reload();
+        FACEPluginStyle::SetTheme(PreviousTheme);IFileManager::Get().DeleteDirectory(*Root,false,true);
+    };
+    auto* H=GI->GetSubsystem<UACEPluginSubsystem>();H->StorageRoot=Root;H->Settings=MakeShared<FJsonObject>();
+    for(const auto& Plugin:H->Plugins)Plugin->Enabled=false;
+    auto Supply=H->Find(TEXT("supplyledger"));
+    if(!TestTrue(TEXT("Supply plugin is available for the pinned-window fixture"),Supply.IsValid()))return false;
+    Supply->Enabled=true;FACEPluginStyle::SetTheme(TEXT("codex"));
+    auto* UI=GI->GetSubsystem<UACEClientSubsystem>()->GetUIElementManager();
+    UI->SetUiLocked(true);UI->SetQuickShowUi(false);
+    const auto Dock=SNew(SACEPluginDesktop).Host(H);H->DesktopDock=Dock;
+    Dock->Toggle(TEXT("supplyledger"));H->SetPluginWindowPinned(TEXT("supplyledger"),true);
+    TFunction<TSharedPtr<SWidget>(TSharedRef<SWidget>,FName)> Find=[&](TSharedRef<SWidget> Widget,FName Tag)->TSharedPtr<SWidget>
+    {
+        if(Widget->GetTag()==Tag)return Widget;
+        auto* Children=Widget->GetChildren();for(int32 I=0;I<Children->Num();++I)if(auto Found=Find(Children->GetChildAt(I),Tag))return Found;
+        return nullptr;
+    };
+    const FVector2D Size(640,480);FWidgetRenderer Renderer(false,true);
+    auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);
+    ON_SCOPE_EXIT{Target->ReleaseResource();};
+    auto Draw=[&]{for(int32 Pass=0;Pass<3;++Pass){++GFrameCounter;Renderer.DrawWidget(Target,Dock,Size,0);FlushRenderingCommands();}};
+    for(bool Horizontal:{false,true})
+    {
+        H->SetPluginBarHorizontal(Horizontal);Draw();
+        auto Button=Find(Dock,TEXT("PluginOptions"));
+        if(!TestTrue(TEXT("Real launcher settings button is rendered"),Button.IsValid()))return false;
+        const FVector2D At=Dock->GetCachedGeometry().AbsoluteToLocal(Button->GetCachedGeometry().LocalToAbsolute(FVector2D(6,6)));
+        const int32 X=FMath::FloorToInt(At.X),Y=FMath::FloorToInt(At.Y);
+        if(!TestTrue(TEXT("Background sample lies inside the render target"),X>=0&&X<640&&Y>=0&&Y<480))return false;
+        TArray<FColor> Pixels;FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);
+        Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags);
+        if(!TestEqual(TEXT("Launcher render target has the expected pixel count"),Pixels.Num(),640*480))return false;
+        const FColor Fill=Pixels[Y*640+X];
+        TestTrue(TEXT("Actual Slate button stays dark navy in both orientations"),Fill.R<120&&Fill.G<140&&Fill.B<180&&Fill.A>200);
+        TArray64<uint8> PNG;FImageUtils::PNGCompressImageArray(640,480,Pixels,PNG);
+        FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/FString::Printf(TEXT("Automation/PluginBar-Checked-%s.png"),Horizontal?TEXT("Horizontal"):TEXT("Vertical"))));
+    }
+    const FModifierKeysState Ctrl(false,false,true,false,false,false,false,false,false);
+    const FModifierKeysState RightCtrl(false,false,false,true,false,false,false,false,false);
+    TestTrue(TEXT("Slate Control reveals controls without gameplay key delivery"),ACEInputBindings::QuickShowDown(PC,Ctrl));
+    TestTrue(TEXT("Right Control also reveals controls"),ACEInputBindings::QuickShowDown(PC,RightCtrl));
+#if PLATFORM_MAC
+    TestTrue(TEXT("Mac Command reveals controls without gameplay key delivery"),ACEInputBindings::QuickShowDown(PC,FModifierKeysState(false,false,false,false,false,false,true,false,false)));
+    TestTrue(TEXT("Right Command also reveals controls"),ACEInputBindings::QuickShowDown(PC,FModifierKeysState(false,false,false,false,false,false,false,true,false)));
+#endif
+    UI->SetQuickShowUi(ACEInputBindings::QuickShowDown(PC,Ctrl));Draw();
+    TestTrue(TEXT("Revealed pinned window becomes manipulable"),H->CanManipulatePluginWindow(TEXT("supplyledger")));
+    auto Pin=Find(Dock->Windows.FindChecked(TEXT("supplyledger")).Widget.ToSharedRef(),TEXT("PluginFramePin"));
+    if(!TestTrue(TEXT("Pinned window retains a usable pin control"),Pin.IsValid()))return false;
+    bool Visible=true;for(auto Widget=Pin;Widget&&Widget.Get()!=&Dock.Get();Widget=Widget->GetParentWidget())Visible&=Widget->GetVisibility().IsVisible();
+    TestTrue(TEXT("Control hold reveals the actual pin control and its ancestors"),Visible);
+    StaticCastSharedPtr<SButton>(Pin)->SimulateClick();
+    UI->SetQuickShowUi(ACEInputBindings::QuickShowDown(PC,FModifierKeysState()));
+    TestFalse(TEXT("Clicking Unpin persists after releasing the modifier"),H->IsPluginWindowPinned(TEXT("supplyledger")));
+    TestFalse(TEXT("Modifier release ends temporary reveal"),UI->IsQuickShowUi());
+    PC->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::LeftControl,IE_Pressed,1.f));
+    PC->PlayerInput->ProcessInputStack({},.016f,false);
+    TestFalse(TEXT("Stale gameplay modifier state cannot latch the UI open"),ACEInputBindings::QuickShowDown(PC,FModifierKeysState()));
+    if(auto Waypoint=H->Find(TEXT("waypoint")))
+    {
+        Waypoint->Profile=MakeShared<FJsonObject>();H->SetWaypointOption(TEXT("dungeon_overlay"),true);
+        const auto Overlay=H->MakeWaypointDungeonOverlay();const auto Unpin=Find(Overlay,TEXT("WaypointOverlayUnpin"));
+        if(TestTrue(TEXT("Map offers a keyboard-free Unpin control"),Unpin.IsValid()))
+        {
+            StaticCastSharedPtr<SButton>(Unpin)->SimulateClick();
+            TestFalse(TEXT("Pinned map can be removed while the UI is locked"),H->WaypointOption(TEXT("dungeon_overlay")));
+        }
+    }
+    else AddError(TEXT("Waypoint plugin is missing from the pinning fixture"));
+    return !HasAnyErrors();
 }
 #endif

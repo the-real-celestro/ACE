@@ -12,6 +12,7 @@ class SScrollBox;
 class SACEPluginDesktop : public SCompoundWidget
 {
     friend class FACEPluginHostTest;
+    friend class FACEPluginBarPresentationTest;
     friend class FACELedgerTest;
     friend class FACEUCMLogTest;
     friend class FACEActionDeckTest;

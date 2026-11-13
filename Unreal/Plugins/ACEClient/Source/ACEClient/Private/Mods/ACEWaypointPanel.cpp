@@ -720,6 +720,12 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeWaypointDungeonOverlay()
             +SHorizontalBox::Slot().AutoWidth()[ZoomButton(TEXT("+"),TEXT("Zoom in"),1.25)]
             +SHorizontalBox::Slot().AutoWidth()[ZoomButton(TEXT("−"),TEXT("Zoom out"),1/1.25)]
             +SHorizontalBox::Slot().AutoWidth()[SNew(SBox).HeightOverride(26)
+                .Visibility_Lambda([H](){return H.IsValid()&&!H->WaypointOption(TEXT("map_minimized"),false)?EVisibility::Visible:EVisibility::Collapsed;})
+                [SNew(SACEPluginButton).Tag(TEXT("WaypointOverlayUnpin")).ContentPadding(FMargin(FACEPluginStyle::CompactButtonPadding)).IsFocusable(false).ButtonStyle(&Style->DockButton)
+                    .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Remove the pinned map from the interface"))))
+                    .OnClicked_Lambda([H](){if(H.IsValid())H->SetWaypointOption(TEXT("dungeon_overlay"),false);return FReply::Handled();})
+                    [SNew(SACEPluginText).Text(FText::FromString(TEXT("Unpin")))]]]
+            +SHorizontalBox::Slot().AutoWidth()[SNew(SBox).HeightOverride(26)
                 [SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::CompactButtonPadding)).IsFocusable(false).ButtonStyle(&Style->DockButton)
                     .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Minimize / restore map; direction arrow stays visible"))))
                     .OnClicked_Lambda([H](){if(H.IsValid())H->SetWaypointOption(TEXT("map_minimized"),!H->WaypointOption(TEXT("map_minimized"),false));return FReply::Handled();})
