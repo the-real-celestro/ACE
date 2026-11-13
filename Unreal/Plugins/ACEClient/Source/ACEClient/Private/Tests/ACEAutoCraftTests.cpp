@@ -261,7 +261,9 @@ bool FACEAutoCraftTest::RunTest(const FString&)
         auto& Slate=FSlateApplication::Get();const auto OldFocus=Slate.GetUserFocusedWidget(0);Slate.AddWindow(Window,false);
         FWidgetRenderer Renderer(false,true);auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);
         ON_SCOPE_EXIT{Slate.DismissAllMenus();if(OldFocus)Slate.SetUserFocus(0,OldFocus);Window->RequestDestroyWindow();Target->ReleaseResource();};
-        auto Frame=[&](){++GFrameCounter;Renderer.DrawWidget(Target,Panel,Size,0);FlushRenderingCommands();};Frame();Frame();
+        // Keep the content attached to its native window while exercising keyboard
+        // input. DrawWidget reparents it to a virtual window that macOS IME cannot find.
+        auto Frame=[&](){++GFrameCounter;Renderer.DrawWindow(Target,Window->GetHittestGrid(),Window,1.f,Size,0);FlushRenderingCommands();};Frame();Frame();
         TFunction<TSharedPtr<SWidget>(TSharedRef<SWidget>,FName,bool)> Find;
         Find=[&](TSharedRef<SWidget> Root,FName Name,bool Tag)->TSharedPtr<SWidget>
         {if(Tag?Root->GetTag()==Name:Root->GetType()==Name)return Root;auto* Children=Root->GetChildren();for(int32 I=0;I<Children->Num();++I)if(auto Found=Find(Children->GetChildAt(I),Name,Tag))return Found;return nullptr;};
