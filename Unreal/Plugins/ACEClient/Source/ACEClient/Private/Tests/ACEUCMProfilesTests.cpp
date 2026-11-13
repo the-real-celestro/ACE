@@ -371,9 +371,16 @@ bool FACEUCMRouteSaveEndToEndTest::RunTest(const FString&)
     auto Plugin=Host->Find(TEXT("ucm"));auto Session=GI->GetSubsystem<UACEClientSubsystem>()->GetSession();
     Session->State=EACESessionState::InWorld;
     auto& Slate=FSlateApplication::Get();const auto OldFocus=Slate.GetUserFocusedWidget(0);
-    // macOS text input needs a real Cocoa window; run this input test without RenderOffscreen.
-    auto Window=SNew(SWindow).ClientSize(FVector2D(900,1000));Slate.AddWindow(Window,true);
-    ON_SCOPE_EXIT{Slate.DismissAllMenus();if(OldFocus)Slate.SetUserFocus(0,OldFocus);Window->RequestDestroyWindow();};
+    auto Window=SNew(SVirtualWindow).Size(FVector2D(900,1000));Window->SetIsFocusable(true);Slate.RegisterVirtualWindow(Window);
+    ON_SCOPE_EXIT{Slate.DismissAllMenus();Slate.UnregisterVirtualWindow(Window);if(OldFocus)Slate.SetUserFocus(0,OldFocus);};
+#if PLATFORM_MAC
+    // Keep deterministic virtual layout/hit testing, with a real Cocoa surface for
+    // text input. RenderOffscreen supplies only a dummy native window on macOS.
+    auto InputWindow=SNew(SWindow).ClientSize(FVector2D(900,1000));Slate.AddWindow(InputWindow,true);
+    ON_SCOPE_EXIT{InputWindow->RequestDestroyWindow();};
+    if(!TestTrue(TEXT("Route typing requires a native Mac window (omit RenderOffscreen)"),InputWindow->GetNativeWindow()->GetOSWindowHandle()!=nullptr))return false;
+    Window->SetNativeWindow(InputWindow->GetNativeWindow());
+#endif
     FWidgetRenderer Renderer;TSharedPtr<SWidget> Panel;
     TFunction<TSharedPtr<SWidget>(const TSharedRef<SWidget>&,FName,bool)> Find;
     Find=[&](const TSharedRef<SWidget>& W,FName Name,bool Type)->TSharedPtr<SWidget>
@@ -386,9 +393,7 @@ bool FACEUCMRouteSaveEndToEndTest::RunTest(const FString&)
     auto PaintWindow=[&](const TSharedRef<SWindow>& W,const FVector2D& Size)
     {
         auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,false);
-        // Native hit testing uses desktop coordinates, including each popup's origin.
-        const auto Geometry=W->GetWindowGeometryInScreen();Renderer.ViewOffset=-W->GetPositionInScreen();
-        for(int32 I=0;I<3;++I){++GFrameCounter;Renderer.DrawWindow(Target,W->GetHittestGrid(),W,Geometry,Geometry.GetLayoutBoundingRect(),.016f);FlushRenderingCommands();}
+        for(int32 I=0;I<3;++I){++GFrameCounter;Renderer.DrawWindow(Target,W->GetHittestGrid(),W,1.f,Size,.016f);FlushRenderingCommands();}
         Target->ReleaseResource();
     };
     auto Paint=[&](){PaintWindow(Window,FVector2D(900,1000));};
