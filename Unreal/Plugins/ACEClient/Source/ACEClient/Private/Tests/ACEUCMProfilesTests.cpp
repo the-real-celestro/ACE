@@ -379,7 +379,7 @@ bool FACEUCMRouteSaveEndToEndTest::RunTest(const FString&)
     auto InputWindow=SNew(SWindow).ClientSize(FVector2D(900,1000));Slate.AddWindow(InputWindow,true);
     ON_SCOPE_EXIT{InputWindow->RequestDestroyWindow();};
     if(!TestTrue(TEXT("Route typing requires a native Mac window (omit RenderOffscreen)"),InputWindow->GetNativeWindow()->GetOSWindowHandle()!=nullptr))return false;
-    Window->SetNativeWindow(InputWindow->GetNativeWindow());
+    Window->SetNativeWindow(InputWindow->GetNativeWindow().ToSharedRef());
 #endif
     FWidgetRenderer Renderer;TSharedPtr<SWidget> Panel;
     TFunction<TSharedPtr<SWidget>(const TSharedRef<SWidget>&,FName,bool)> Find;
