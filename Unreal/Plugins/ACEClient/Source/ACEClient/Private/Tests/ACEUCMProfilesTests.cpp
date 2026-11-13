@@ -386,7 +386,9 @@ bool FACEUCMRouteSaveEndToEndTest::RunTest(const FString&)
     auto PaintWindow=[&](const TSharedRef<SWindow>& W,const FVector2D& Size)
     {
         auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,false);
-        for(int32 I=0;I<3;++I){++GFrameCounter;Renderer.DrawWindow(Target,W->GetHittestGrid(),W,1.f,Size,.016f);FlushRenderingCommands();}
+        // Native hit testing uses desktop coordinates, including each popup's origin.
+        const auto Geometry=W->GetWindowGeometryInScreen();Renderer.ViewOffset=-W->GetPositionInScreen();
+        for(int32 I=0;I<3;++I){++GFrameCounter;Renderer.DrawWindow(Target,W->GetHittestGrid(),W,Geometry,Geometry.GetLayoutBoundingRect(),.016f);FlushRenderingCommands();}
         Target->ReleaseResource();
     };
     auto Paint=[&](){PaintWindow(Window,FVector2D(900,1000));};
