@@ -279,7 +279,7 @@ bool FACEUCMProfilePanelTest::RunTest(const FString&)
     {
         if(Section==TEXT("Character")&&FACEPluginStyle::IsCodex())
             TestTrue(TEXT("Overview selects Character through its header"),Overview.Contains(TEXT("Profile\n")));
-        else TestTrue(*(TEXT("Overview contains profile selector for ")+Section),Overview.Contains(Section==TEXT("Monsters")?TEXT("Mobs\nShared\n"):Section+TEXT(": ")));
+        else TestTrue(*(TEXT("Overview contains profile selector for ")+Section),Overview.Contains(ACEUCMProfiles::DisplaySection(Section)+TEXT(": Shared\n")) || (Section!=TEXT("Monsters")&&Overview.Contains(Section+TEXT(": "))));
     }
     const FString ImportText=CollectText(Host->MakeUCMPanel(TEXT("Import")));
     TestFalse(TEXT("Import removes setups and JSON editor"),ImportText.Contains(TEXT("New setup"))||ImportText.Contains(TEXT("Save current setup"))||ImportText.Contains(TEXT("Edit advanced JSON")));
@@ -315,7 +315,7 @@ bool FACEUCMProfilePanelTest::RunTest(const FString&)
     OpenDetails(MonstersPanel);const FString Monsters=CollectText(MonstersPanel);
     TestTrue(TEXT("Mob details expose priority and retain default range"),Monsters.Contains(TEXT("Priority\n"))&&Monsters.Contains(TEXT("Attack Range: use default")));
     TestFalse(TEXT("Priority has no redundant default checkbox"),Monsters.Contains(TEXT("Priority: use default")));
-    TestTrue(TEXT("Monster search and name action exist"),Monsters.Contains(TEXT("Search"))&&Monsters.Contains(TEXT("Add\n")));
+    TestTrue(TEXT("Monster search and name action exist"),Monsters.Contains(FACEPluginStyle::IsCodex()?TEXT("Find\n"):TEXT("Search"))&&Monsters.Contains(TEXT("Add\n")));
     TestTrue(TEXT("Details exposes the complete attack profile"),Monsters.Contains(TEXT("Combat mode\n"))&&Monsters.Contains(TEXT("Imperil\n"))&&Monsters.Contains(TEXT("Ring spells\n"))&&Monsters.Contains(TEXT("Pet damage type\n"))&&Monsters.Contains(TEXT("Secondary vulnerability\n")));
     TestTrue(TEXT("Tab uses Mobs while existing initial page names remain compatible"),Monsters.Contains(TEXT("Mobs\n"))&&!Monsters.Contains(TEXT("Monsters\n")));
     TestTrue(TEXT("New initial page name opens the mob editor"),CollectText(Host->MakeUCMPanel(TEXT("Mobs"))).Contains(TEXT("Add selected mob")));
@@ -371,8 +371,9 @@ bool FACEUCMRouteSaveEndToEndTest::RunTest(const FString&)
     auto Plugin=Host->Find(TEXT("ucm"));auto Session=GI->GetSubsystem<UACEClientSubsystem>()->GetSession();
     Session->State=EACESessionState::InWorld;
     auto& Slate=FSlateApplication::Get();const auto OldFocus=Slate.GetUserFocusedWidget(0);
-    auto Window=SNew(SVirtualWindow).Size(FVector2D(900,1000));Window->SetIsFocusable(true);Slate.RegisterVirtualWindow(Window);
-    ON_SCOPE_EXIT{Slate.DismissAllMenus();Slate.UnregisterVirtualWindow(Window);if(OldFocus)Slate.SetUserFocus(0,OldFocus);};
+    // macOS text input needs a real Cocoa window; run this input test without RenderOffscreen.
+    auto Window=SNew(SWindow).ClientSize(FVector2D(900,1000));Slate.AddWindow(Window,true);
+    ON_SCOPE_EXIT{Slate.DismissAllMenus();if(OldFocus)Slate.SetUserFocus(0,OldFocus);Window->RequestDestroyWindow();};
     FWidgetRenderer Renderer;TSharedPtr<SWidget> Panel;
     TFunction<TSharedPtr<SWidget>(const TSharedRef<SWidget>&,FName,bool)> Find;
     Find=[&](const TSharedRef<SWidget>& W,FName Name,bool Type)->TSharedPtr<SWidget>

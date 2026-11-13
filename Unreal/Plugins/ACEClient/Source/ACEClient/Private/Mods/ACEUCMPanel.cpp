@@ -411,7 +411,7 @@ namespace ACEUCMPanelPrivate
             {
                 if(E.Group)Group(E.Group);
                 const FString Name=E.Name;const TCHAR* Key=E.Key;const bool Default=E.Default;
-                Rail->AddSlot().AutoHeight()[SNew(SACEPluginTab).Rail(true).Tag(TEXT("UCMTab")).Text(FText::FromString(Name))
+                Rail->AddSlot().AutoHeight()[SNew(SACEPluginTab).Rail(true).Tag(TEXT("UCMTab")).Text(FText::FromString(SectionLabel(Name)))
                     .Selected_Lambda([this,Name](){return Page==Name||(Name==TEXT("Import")&&(Page==TEXT("Files")||Page.StartsWith(TEXT("Import "))||Page==TEXT("Legacy loot")));})
                     .Dot_Lambda([this,Key,Default]()->FLinearColor
                     {
