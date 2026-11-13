@@ -258,7 +258,7 @@ bool FACEAutoCraftTest::RunTest(const FString&)
         Item(10,Arrow.Source,2);Item(11,Arrow.Target,2);Plugin->Profile->SetStringField(TEXT("category"),TEXT("All categories"));Plugin->Profile->SetStringField(TEXT("recipe"),Arrow.Id);
         Plugin->Profile->SetNumberField(TEXT("quantity"),200);H->RefreshAutoCraft(true);
         const FVector2D Size(600,850);auto Panel=H->MakeAutoCraftPanel();auto Window=SNew(SWindow).ClientSize(Size)[Panel];
-        auto& Slate=FSlateApplication::Get();const auto OldFocus=Slate.GetUserFocusedWidget(0);Slate.AddWindow(Window,false);
+        auto& Slate=FSlateApplication::Get();const auto OldFocus=Slate.GetUserFocusedWidget(0);Slate.AddWindow(Window,true);
         FWidgetRenderer Renderer(false,true);auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);
         ON_SCOPE_EXIT{Slate.DismissAllMenus();if(OldFocus)Slate.SetUserFocus(0,OldFocus);Window->RequestDestroyWindow();Target->ReleaseResource();};
         // Keep the content attached to its native window while exercising keyboard
