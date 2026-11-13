@@ -358,6 +358,14 @@ bool FACEUCMProfilePanelTest::RunTest(const FString&)
     }
     return true;
 }
+// Virtual windows normally own a dummy platform window. This test fixture can
+// borrow a native input surface while keeping virtual popup and pointer layout.
+class SACERouteInputWindow : public SVirtualWindow
+{
+public:
+    void SetInputSurface(const TSharedRef<FGenericWindow>& Surface){NativeWindow=Surface;}
+};
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMRouteSaveEndToEndTest, "ACE.Plugins.RouteSaveEndToEnd",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACEUCMRouteSaveEndToEndTest::RunTest(const FString&)
@@ -371,7 +379,7 @@ bool FACEUCMRouteSaveEndToEndTest::RunTest(const FString&)
     auto Plugin=Host->Find(TEXT("ucm"));auto Session=GI->GetSubsystem<UACEClientSubsystem>()->GetSession();
     Session->State=EACESessionState::InWorld;
     auto& Slate=FSlateApplication::Get();const auto OldFocus=Slate.GetUserFocusedWidget(0);
-    auto Window=SNew(SVirtualWindow).Size(FVector2D(900,1000));Window->SetIsFocusable(true);Slate.RegisterVirtualWindow(Window);
+    auto Window=SNew(SACERouteInputWindow).Size(FVector2D(900,1000));Window->SetIsFocusable(true);Slate.RegisterVirtualWindow(Window);
     ON_SCOPE_EXIT{Slate.DismissAllMenus();Slate.UnregisterVirtualWindow(Window);if(OldFocus)Slate.SetUserFocus(0,OldFocus);};
 #if PLATFORM_MAC
     // Keep deterministic virtual layout/hit testing, with a real Cocoa surface for
@@ -379,7 +387,7 @@ bool FACEUCMRouteSaveEndToEndTest::RunTest(const FString&)
     auto InputWindow=SNew(SWindow).ClientSize(FVector2D(900,1000));Slate.AddWindow(InputWindow,true);
     ON_SCOPE_EXIT{InputWindow->RequestDestroyWindow();};
     if(!TestTrue(TEXT("Route typing requires a native Mac window (omit RenderOffscreen)"),InputWindow->GetNativeWindow()->GetOSWindowHandle()!=nullptr))return false;
-    Window->SetNativeWindow(InputWindow->GetNativeWindow().ToSharedRef());
+    Window->SetInputSurface(InputWindow->GetNativeWindow().ToSharedRef());
 #endif
     FWidgetRenderer Renderer;TSharedPtr<SWidget> Panel;
     TFunction<TSharedPtr<SWidget>(const TSharedRef<SWidget>&,FName,bool)> Find;
