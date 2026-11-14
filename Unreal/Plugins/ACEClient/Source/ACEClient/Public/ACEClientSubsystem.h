@@ -5,6 +5,7 @@
 #include "ACETypes.h"
 #include "ACEOpcodes.h"
 #include "ACEFrameDiagnostics.h"
+#include "ACEChatText.h"
 #include "ACEClientSubsystem.generated.h"
 
 class FACESession;
@@ -17,6 +18,7 @@ struct FACEBufferedChatMessage
 	uint8 ForcedWindows = 0;
 	TOptional<FLinearColor> Color;
 	FString BoldText;
+	FACEChatAccent Accent;
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FACESessionStateChangedDyn, EACESessionState, NewState);
@@ -167,10 +169,11 @@ public:
 
 	// Retain server messages received before the gameplay HUD exists (world entry).
 	const TArray<FACEBufferedChatMessage>& GetChatHistory() const { return ChatHistory; }
-	void ReceiveChatMessage(const FString& Text, const FString& Sender, int32 Type, int32 FilterType = INDEX_NONE, uint8 ForcedWindows = 0, TOptional<FLinearColor> Color = {}, const FString& BoldText = FString());
+	void ReceiveChatMessage(const FString& Text, const FString& Sender, int32 Type, int32 FilterType = INDEX_NONE, uint8 ForcedWindows = 0, TOptional<FLinearColor> Color = {}, const FString& BoldText = FString(), const FACEChatAccent& Accent = FACEChatAccent());
 	uint8 CurrentChatWindows = 0;
 	TOptional<FLinearColor> CurrentChatColor;
 	FString ActiveChatBoldText;
+	FACEChatAccent CurrentChatAccent;
 	TArray<FACEBufferedChatMessage> ChatHistory;
 
 

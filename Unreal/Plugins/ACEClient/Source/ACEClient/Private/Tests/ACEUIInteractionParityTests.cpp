@@ -81,10 +81,45 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
     FACEBinaryReader WelcomeReader(Welcome.GetData());Session.HandleServerMessage(WelcomeReader);
     FACEBinaryWriter Joined;Joined.WriteUInt32(0x051B);Joined.WriteString16L(TEXT("General"));
     FACEBinaryReader JoinedReader(Joined.GetData());Session.HandleWeenieErrorWithString(JoinedReader);
+    const FString LootName=TEXT("Armoredillo Hide Gloves");
+    const FString LootLine=TEXT("[UNCOMMON] ")+LootName+TEXT(" - AL 287 - Value 24,162 - Work 6 - Burden 38 - Epic Armor");
+    const FACEChatAccent LootAccent={FIntPoint(11,11+LootName.Len()),FLinearColor(FColor(0x1e,0xff,0))};
+    Client->ReceiveChatMessage(LootLine,TEXT(""),ACEChatMessageType::Appraisal,INDEX_NONE,0,FLinearColor::White,FString(),LootAccent);
     auto* Binder=NewObject<UACEUIGameplayBinder>(); Binder->Initialize(Client,Manager,Canvas,nullptr);
     Canvas->SetGameplayBinder(Binder);
     TestTrue(TEXT("Login messages received before HUD creation are replayed"),Binder->ChatDisplayLines[0].ContainsByPredicate([](const auto& Line){return Line.Text.Contains(TEXT("Welcome to Asheron's Call"));}));
     TestTrue(TEXT("Early channel notices survive HUD creation"),Binder->ChatDisplayLines[0].ContainsByPredicate([](const auto& Line){return Line.Text.Contains(TEXT("entered the General"));}));
+    {
+        auto VerifyLootRow=[&]() -> UACERetailTextBlock*
+        {
+            auto* Log=Binder->GetChatLogWidget(0);
+            auto* Row=Log?Cast<UACERetailTextBlock>(Log->GetChildAt(Log->GetChildrenCount()-1)):nullptr;
+            if(!TestNotNull(TEXT("Clicked-item message has a real retail chat row"),Row))return nullptr;
+            const FString Text=Row->GetText().ToString();const int32 Begin=Text.Find(LootName);
+            if(!TestTrue(TEXT("Copied chat remains plain text with the item name intact"),Begin>=0&&Text.EndsWith(TEXT(" - Epic Armor"))))return nullptr;
+            bool Correct=true;
+            for(int32 I=0;I<Text.Len();++I)
+                Correct&=Row->GetGlyphColor(I,FLinearColor::White).Equals(I>=Begin&&I<Begin+LootName.Len()?LootAccent.Color:FLinearColor::White);
+            TestTrue(TEXT("Only name glyphs use rarity color; timestamp, bracket, stats and spells stay white"),Correct);
+            return Row;
+        };
+        VerifyLootRow(); // Buffered before HUD creation: verify styling is replayed too.
+        {
+            TGuardValue<uint32> Timestamps(Session.CharacterOptions2,Session.CharacterOptions2|0x40);
+            Client->ReceiveChatMessage(LootLine,TEXT(""),ACEChatMessageType::Appraisal,INDEX_NONE,0,FLinearColor::White,FString(),LootAccent);
+        }
+        if(auto* Row=VerifyLootRow();Row&&FApp::CanEverRender())
+        {
+            Row->SetRetailElement(Resources,nullptr,FVector2D(1,1),510,false);
+            FWidgetRenderer Renderer(false,true);const FVector2D Size(520,120);
+            auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);
+            Renderer.DrawWidget(Target,Row->TakeWidget(),Size,0);FlushRenderingCommands();
+            TArray<FColor> Pixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);TArray64<uint8> PNG;
+            FImageUtils::PNGCompressImageArray(520,120,Pixels,PNG);
+            TestTrue(TEXT("Save compact, mixed-color item click proof"),FFileHelper::SaveArrayToFile(PNG,*(ArtDirectory/TEXT("LootClickSummary.png"))));Target->ReleaseResource();
+        }
+        TestFalse(TEXT("Item accent does not leak to later messages"),Client->CurrentChatAccent.IsValid(LootLine.Len()));
+    }
     const int32 LoginLines=Binder->ChatDisplayLines[0].Num();
     Client->ReceiveChatMessage(TEXT("Live message"),FString(),ACEChatMessageType::System);
     TestEqual(TEXT("Live messages are delivered once"),Binder->ChatDisplayLines[0].Num(),LoginLines+1);

@@ -220,8 +220,14 @@ void UACEPluginSubsystem::PrintLootInspection(const FACEWorldObject& Item,const 
         if(Matched)Text+=FString::Printf(TEXT(" - Matches %s (%s)"),*Result->GetStringField(TEXT("label")),*Result->GetStringField(TEXT("action")));
         else if(InspectLootTestPolicy)Text+=TEXT(" - Does not match this rule");
         LastInspectedItem=Item.Guid;LastInspectedAt=FPlatformTime::Seconds();
+		FACEChatAccent Accent;
+		if(Review.bRated)
+		{
+			const int32 Begin=Text.Find(TEXT("] "))+2;
+			Accent={FIntPoint(Begin,Begin+ACERetailObjectNames::Name(Item).Len()),ACELootQuality::Color(Review.Grade)};
+		}
         C->ReceiveChatMessage(Text,TEXT(""),ACEChatMessageType::Appraisal,INDEX_NONE,0,
-            Review.bRated?ACELootQuality::Color(Review.Grade):FLinearColor::White,Matched?Text:FString());
+            FLinearColor::White,Matched?Text:FString(),Accent);
         if(!Review.bRated&&Review.bIdentified)
             UE_LOG(LogTemp,Display,TEXT("Loot quality unrated: WCID=%d Item=%s Tinkers=%d Reason=%s"),Item.WeenieClassId,*Name,Review.Tinkers,*Review.Reason);
         return;
@@ -260,7 +266,7 @@ void UACEPluginSubsystem::PrintLootInspection(const FACEWorldObject& Item,const 
     }
     else if(InspectLootTestPolicy)Text+=TEXT(" | Does not match this rule");
     LastInspectedItem=Item.Guid;LastInspectedAt=FPlatformTime::Seconds();
-    C->ReceiveChatMessage(Text,TEXT(""),Matched?ACEChatMessageType::Broadcast:ACEChatMessageType::Appraisal,INDEX_NONE,0,Matched?FLinearColor(.15f,1.f,.15f):FLinearColor::White,Matched?Text:FString());
+    C->ReceiveChatMessage(Text,TEXT(""),Matched?ACEChatMessageType::Broadcast:ACEChatMessageType::Appraisal,INDEX_NONE,0,FLinearColor::White,Matched?Text:FString());
 }
 uint8 UACEPluginSubsystem::FilterPluginChatWindows(const FString& Text,const FString& Sender,int32 Type) const
 {return PresentPluginChat(Text,Sender,Type).Hidden;}

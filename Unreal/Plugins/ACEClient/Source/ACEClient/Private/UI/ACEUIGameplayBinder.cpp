@@ -526,6 +526,7 @@ void UACEUIGameplayBinder::Initialize(UACEClientSubsystem* InClient, UACEUIEleme
 		TGuardValue<uint8> WindowsScope(Client->CurrentChatWindows, Message.ForcedWindows);
 		TGuardValue<TOptional<FLinearColor>> ColorScope(Client->CurrentChatColor, Message.Color);
 		TGuardValue<FString> BoldGuard(Client->ActiveChatBoldText,Message.BoldText);
+		TGuardValue<FACEChatAccent> AccentGuard(Client->CurrentChatAccent,Message.Accent);
 		HandleChatMessage(Message.Text, Message.Sender, Message.Type, Message.FilterType);
 	}
 }
@@ -6623,6 +6624,18 @@ void UACEUIGameplayBinder::HandleChatMessage(const FString& Text, const FString&
 	}
 
 	const FLinearColor Color = Client&&Client->CurrentChatColor.IsSet()?Client->CurrentChatColor.GetValue():ACERetailChat::Color(ChatType);
+	FACEChatAccent Accent;
+	if(Client&&Client->CurrentChatAccent.IsValid(Text.Len()))
+	{
+		// Locate the body after sender/timestamp formatting, rather than guessing
+		// a timestamp width or searching for the item name again.
+		const int32 BodyBegin=Line.Find(Text,ESearchCase::CaseSensitive);
+		if(BodyBegin!=INDEX_NONE)
+		{
+			Accent=Client->CurrentChatAccent;
+			Accent.Range+=FIntPoint(BodyBegin,BodyBegin);
+		}
+	}
 	// Player-attributed rows become click-to-tell targets (retail <Tell:IIDString>).
 	FString ClickSender;
 	if (!Sender.IsEmpty() && !Sender.Equals(TEXT("You"), ESearchCase::IgnoreCase)
@@ -6645,7 +6658,7 @@ void UACEUIGameplayBinder::HandleChatMessage(const FString& Text, const FString&
 	const uint8 PluginHidden = Presentation.Hidden;
 	if (!(PluginHidden & 1) && ((Presentation.Forced&1) || (PassesChatFilter(FilterType) && (MainChatTypeFilter & (1ull << (static_cast<uint32>(FilterType) & 63))) != 0)))
 	{
-		AppendChatLineToLog(0, Line, Presentation.Colors.Contains(0)?Presentation.Colors[0]:Color, ClickSender);
+		AppendChatLineToLog(0, Line, Presentation.Colors.Contains(0)?Presentation.Colors[0]:Color, ClickSender, Accent);
 	}
 	else if (!bChatStickToBottom)
 	{
@@ -6661,7 +6674,7 @@ void UACEUIGameplayBinder::HandleChatMessage(const FString& Text, const FString&
 			{
 				continue;
 			}
-			AppendChatLineToLog(W, Line, Presentation.Colors.Contains(W)?Presentation.Colors[W]:Color, ClickSender);
+			AppendChatLineToLog(W, Line, Presentation.Colors.Contains(W)?Presentation.Colors[W]:Color, ClickSender, Accent);
 		}
 	}
 }

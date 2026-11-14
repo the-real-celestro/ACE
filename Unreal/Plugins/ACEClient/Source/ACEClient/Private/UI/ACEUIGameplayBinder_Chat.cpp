@@ -707,12 +707,12 @@ void UACEUIGameplayBinder::RefreshChatRowLayout(int32 Window)
 }
 
 void UACEUIGameplayBinder::AppendChatLineToLog(int32 Window, const FString& Line,
-	const FLinearColor& Color, const FString& ClickSender)
+	const FLinearColor& Color, const FString& ClickSender, const FACEChatAccent& Accent)
 {
 	if (Window >= 0 && Window < 5)
 	{
 		auto& Lines = ChatDisplayLines[Window];
-		Lines.Add({Line, ClickSender, Color, ++ChatDisplaySerial});
+		Lines.Add({Line, ClickSender, Color, ++ChatDisplaySerial, Accent});
 		if (Lines.Num() > MaxChatLines) Lines.RemoveAt(0, Lines.Num() - MaxChatLines, EAllowShrinking::No);
 		++ChatDisplayRevision;
 	}
@@ -775,6 +775,12 @@ void UACEUIGameplayBinder::AppendChatLineToLog(int32 Window, const FString& Line
         if(Begin!=INDEX_NONE)Row->BoldRange=FIntPoint(Begin,Begin+Client->ActiveChatBoldText.Len());
     }
     Row->SetText(FText::FromString(Line));
+	if(Accent.IsValid(Line.Len()))
+	{
+		TArray<FLinearColor> Colors;Colors.Init(Color,Line.Len());
+		for(int32 I=Accent.Range.X;I<Accent.Range.Y;++I)Colors[I]=Accent.Color;
+		Row->SetTextColors(Colors);
+	}
 	Row->SetAutoWrapText(true);
 	Row->SetColorAndOpacity(FSlateColor(Color));
 	Row->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 9));

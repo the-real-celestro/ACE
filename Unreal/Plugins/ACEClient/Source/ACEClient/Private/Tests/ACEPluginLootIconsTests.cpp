@@ -188,14 +188,14 @@ bool FACEPluginLootIconsTest::RunTest(const FString&)
         const auto& Message=Client->ChatHistory.Last();
         TestTrue(TEXT("Chat names profile and matching rule"),Message.Text.Contains(Host->UCMSectionName(TEXT("Loot")))&&Message.Text.Contains(TEXT("Guts (keep)")));
         TestEqual(TEXT("Matching stat line is bold"),Message.BoldText,Message.Text);
-        TestEqual(TEXT("Matched item uses retail green chat"),Message.Type,ACEChatMessageType::Broadcast);
+        TestEqual(TEXT("Matched item retains match notification routing"),Message.Type,ACEChatMessageType::Broadcast);
         TestTrue(TEXT("Stat line includes public value and burden"),Message.Text.Contains(TEXT("Value"))&&Message.Text.Contains(TEXT("Burden")));
     }
     Host->TickLootInspection();TestEqual(TEXT("Completed inspection does not spam chat"),Client->ChatHistory.Num(),Before+1);
     Client->SelectInventoryObject(ClickItem.Guid);Host->TickLootInspection();
     TestEqual(TEXT("Duplicate selection callbacks do not print a second line"),Client->ChatHistory.Num(),Before+1);
     TestTrue(TEXT("Matched item is explicitly flagged"),Client->ChatHistory.Last().Text.StartsWith(TEXT("[MATCH]")));
-    TestTrue(TEXT("Matched item carries an explicit green color"),Client->ChatHistory.Last().Color.IsSet()&&Client->ChatHistory.Last().Color.GetValue().G>.9f);
+    TestTrue(TEXT("Matched non-equipment summary also keeps white text"),Client->ChatHistory.Last().Color.IsSet()&&Client->ChatHistory.Last().Color.GetValue()==FLinearColor::White);
 
     // Appraisal names can differ from the public name used by both the inventory
     // and the basic editor. Name (1) must refer to the same public identity.
@@ -246,8 +246,22 @@ bool FACEPluginLootIconsTest::RunTest(const FString&)
         Host->LastInspectedAt=0;Host->ObserveAppraisal(ClickAppraisal);Client->SelectInventoryObject(ClickItem.Guid);Host->TickLootInspection();
         const auto& Message=Client->ChatHistory.Last();
         TestTrue(TEXT("Click announces Legendary with per-hit damage type"),Message.Text.StartsWith(TEXT("[LEGENDARY] Fire Long Sword"))&&Message.Text.Contains(TEXT("Fire"))&&Message.Text.Contains(TEXT("Work 7")));
-        TestTrue(TEXT("Legendary chat uses the orange rarity color"),Message.Color.IsSet()&&Message.Color.GetValue().Equals(ACELootQuality::Color(ACELootScoring::Grade::Legendary)));
+        TestTrue(TEXT("Click summary uses white body text"),Message.Color.IsSet()&&Message.Color.GetValue()==FLinearColor::White);
+        TestTrue(TEXT("Only the item name receives the orange rarity accent"),Message.Accent.IsValid(Message.Text.Len())
+            &&Message.Text.Mid(Message.Accent.Range.X,Message.Accent.Range.Y-Message.Accent.Range.X)==TEXT("Fire Long Sword")
+            &&Message.Accent.Color.Equals(ACELootQuality::Color(ACELootScoring::Grade::Legendary)));
         FFileHelper::SaveStringToFile(Message.Text,*(FPaths::ProjectSavedDir()/TEXT("LootQuality-chat-summary.txt")));
+    }
+    {
+        FACEWorldObject Gloves;Gloves.Name=TEXT("Armoredillo Hide Gloves");Gloves.Value=24162;Gloves.Burden=38;
+        FACEQualityReview Armor;Armor.bEquipment=true;Armor.bIdentified=true;Armor.bRated=true;Armor.Grade=ACELootScoring::Grade::Uncommon;
+        Armor.CurrentStats={{TEXT("Armor"),TEXT("Armor level"),TEXT("287")},{TEXT("Work"),TEXT("Workmanship"),TEXT("6")}};
+        for(const TCHAR* Key:{TEXT("Armor13"),TEXT("Armor14"),TEXT("Armor15"),TEXT("Armor16"),TEXT("Armor17"),TEXT("Armor18"),TEXT("Armor19"),TEXT("Armor165")})
+            Armor.CurrentStats.Add({Key,TEXT("Damage-type protection"),TEXT("229")});
+        Armor.SpellNames={TEXT("Epic Armor")};Armor.SpellGrades.Add(TEXT("Epic Armor"),ACELootScoring::Grade::Epic);
+        const FString Summary=ACELootQuality::ChatSummary(Gloves,Armor);
+        TestEqual(TEXT("Armor click summary retains AL, value, work, burden and useful spells without eight protection types"),Summary,
+            FString(TEXT("[UNCOMMON] Armoredillo Hide Gloves - AL 287 - Work 6 - Value 24,162 - Burden 38 - Epic Armor")));
     }
     TestFalse(TEXT("Inspecting loot never starts UCM"),Policy->Running);
     return true;

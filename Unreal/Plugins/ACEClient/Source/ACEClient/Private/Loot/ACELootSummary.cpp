@@ -24,6 +24,8 @@ FString ACELootQuality::ChatSummary(const FACEWorldObject& Item,const FACEQualit
     bool HasDamage=false,HasValue=false;
     for(const auto& S:R.CurrentStats)
     {
+        // Keep overall AL in click summaries; damage-type protection stays in Examine/hover.
+        if(S.Key.StartsWith(TEXT("Armor"))&&S.Key.Mid(5).IsNumeric())continue;
         if(S.Key==TEXT("Variance")||S.Key==TEXT("Mana")||S.Key==TEXT("Spellcraft")||S.Value==TEXT("—"))continue;
         if(S.Value.EndsWith(TEXT("%")))
         {double V=0;if(LexTryParseString(V,*S.Value.LeftChop(1))&&FMath::IsNearlyZero(V))continue;}

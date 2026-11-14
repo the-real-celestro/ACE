@@ -344,7 +344,8 @@ bool FACEVRChatTest::RunTest(const FString&)
         Binder->AppendChatLineToLog(0, TEXT("Old Friend tells you, \"I found a Copper Ring for you.\""), TellColor, TEXT("Old Friend"));
         Binder->AppendChatLineToLog(0, TEXT("You give Copper Ring to Old Friend."), FLinearColor(.9f, .85f, .6f), FString());
         Binder->AppendChatLineToLog(0, TEXT("[Fellowship] Ranger says, \"Ready when you are!\""), FLinearColor(.5f, 1.f, .6f), TEXT("Ranger"));
-        Binder->AppendChatLineToLog(0, TEXT("You receive 1,250 experience."), FLinearColor(.85f, .9f, 1.f), FString());
+        Binder->AppendChatLineToLog(0, TEXT("[UNCOMMON] Armoredillo Hide Gloves - AL 287 - Work 6 - Epic Armor"), FLinearColor::White, FString(),
+            {FIntPoint(11,11+FString(TEXT("Armoredillo Hide Gloves")).Len()),FLinearColor(FColor(0x1e,0xff,0))});
         PositionedChat->Entry->SetChatText(TEXT("@tell Old Friend, Thank you!"));
         PositionedChat->bStickToBottom = false; PositionedChat->Log->SetScrollOffset(0.f);
         for (const bool Locked : {true, false})

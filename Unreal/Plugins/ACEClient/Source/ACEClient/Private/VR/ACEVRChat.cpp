@@ -111,6 +111,20 @@ bool UACEVRChat::Refresh()
     {
         if(!DisplayedLines.IsEmpty() && Line.Serial<=DisplayedLines.Last())continue;
         DisplayedLines.Add(Line.Serial);
+        if(Line.Accent.IsValid(Line.Text.Len()))
+        {
+            static const auto AccentStyles=MakeShared<FSlateStyleSet>(TEXT("ACEChatAccents"));
+            const FName Key(*(TEXT("ChatAccent.")+Line.Accent.Color.ToFColorSRGB().ToHex()));
+            AccentStyles->Set(Key,FTextBlockStyle().SetFont(FCoreStyle::GetDefaultFontStyle("Regular",24)).SetColorAndOpacity(Line.Accent.Color));
+            auto Escape=[](FString S){S.ReplaceInline(TEXT("&"),TEXT("&amp;"));S.ReplaceInline(TEXT("<"),TEXT("&lt;"));S.ReplaceInline(TEXT(">"),TEXT("&gt;"));return S;};
+            const auto Range=Line.Accent.Range;
+            const FString Markup=Escape(Line.Text.Left(Range.X))+TEXT("<")+Key.ToString()+TEXT(">")
+                +Escape(Line.Text.Mid(Range.X,Range.Y-Range.X))+TEXT("</>")+Escape(Line.Text.Mid(Range.Y));
+            const FTextBlockStyle RowStyle=FTextBlockStyle().SetFont(FCoreStyle::GetDefaultFontStyle("Regular",24)).SetColorAndOpacity(Line.Color);
+            Lines->AddSlot().AutoHeight().Padding(0,3)[SNew(SRichTextBlock).Text(FText::FromString(Markup)).TextStyle(&RowStyle)
+                .DecoratorStyleSet(&AccentStyles.Get()).WrapTextAt(700.f)];
+            continue;
+        }
         const auto CoordinateLinks=ACEWaypoint::FindCoordinates(Line.Text);
         auto* PluginHost=GetGameInstance()->GetSubsystem<UACEPluginSubsystem>();
         if(PluginHost && PluginHost->IsWaypointEnabled() && !CoordinateLinks.IsEmpty())

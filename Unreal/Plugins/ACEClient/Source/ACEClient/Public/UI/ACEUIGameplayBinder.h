@@ -6,6 +6,7 @@ class UACEUICharGenBinder;
 #include "UObject/Object.h"
 #include "ACETypes.h"
 #include "ACECharacterCreation.h"
+#include "ACEChatText.h"
 #include "ACEUIGameplayBinder.generated.h"
 
 class UACEClientSubsystem;
@@ -52,6 +53,7 @@ struct FACEChatDisplayLine
 	FString Text, Sender;
 	FLinearColor Color;
 	uint64 Serial = 0;
+	FACEChatAccent Accent;
 };
 
 /**
@@ -1467,7 +1469,7 @@ private:
 	void FocusChatEntryWindow(int32 Window);
 	/** Append an already-formatted line to one window's log. */
 	void AppendChatLineToLog(int32 Window, const FString& Line, const FLinearColor& Color,
-		const FString& ClickSender);
+		const FString& ClickSender, const FACEChatAccent& Accent = FACEChatAccent());
 	/** Place FloatyChat1-4 logs / entries / titles on their DAT elements. */
 	void PlaceFloatyChatOverlays();
 	/** Click-to-tell: chat row hit → prefill "@tell Name, " (retail Tell tag click). */
