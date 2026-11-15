@@ -395,6 +395,11 @@ bool FACEUCMRouteSaveEndToEndTest::RunTest(const FString&)
     };
     auto PaintWindow=[&](const TSharedRef<SWindow>& W,const FVector2D& Size)
     {
+#if PLATFORM_MAC
+        // Native popups have their own DPI scale, clipping and desktop origin.
+        // Use their normal Slate paint pass so input and hit-test geometry agree.
+        for(int32 I=0;I<3;++I){++GFrameCounter;Slate.Tick();Slate.DrawWindows();FlushRenderingCommands();}
+#else
         auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,false);
         // Paint in texture-local space, but keep cached input geometry in desktop space.
         // The hit-test grid stores local cells and applies its desktop origin at lookup.
@@ -405,6 +410,7 @@ bool FACEUCMRouteSaveEndToEndTest::RunTest(const FString&)
         for(int32 I=0;I<3;++I){++GFrameCounter;Renderer.DrawWindow(Args,Target,W,Geometry,Geometry.GetLayoutBoundingRect(),.016f);FlushRenderingCommands();}
         W->GetHittestGrid().SetHittestArea(Origin,Size);
         Target->ReleaseResource();
+#endif
     };
     auto Paint=[&](){PaintWindow(Window,FVector2D(900,1000));};
     auto Page=[&](const TCHAR* Name){Slate.DismissAllMenus();Panel=Host->MakeUCMPanel(Name);Window->SetContent(Panel.ToSharedRef());Paint();};
