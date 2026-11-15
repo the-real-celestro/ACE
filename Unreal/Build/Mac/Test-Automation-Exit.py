@@ -11,6 +11,21 @@ spec.loader.exec_module(module)
 
 
 class NormalAutomationExitTests(unittest.TestCase):
+    # Keep Unreal's early allocator scopes valid without changing unrelated subprocess commands.
+    def test_mac_startup_tracker(self):
+        command = ['/fixture/ACUnreal', '-unattended']
+        self.assertEqual(module.startup_command(command, 'darwin'), command + ['-llm'])
+        self.assertEqual(command, ['/fixture/ACUnreal', '-unattended'])
+        self.assertEqual(module.startup_command(command, 'linux'), command)
+        self.assertEqual(module.startup_command([sys.executable, '-c', 'pass'], 'darwin'), [sys.executable, '-c', 'pass'])
+
+    # A caller cannot accidentally reintroduce the startup teardown race.
+    def test_tracker_override(self):
+        command = ['/fixture/UnrealEditor-Cmd', '-LLM']
+        self.assertEqual(module.startup_command(command, 'darwin'), command)
+        with self.assertRaises(ValueError):
+            module.startup_command(['/fixture/ACUnreal', '-nollm'], 'darwin')
+
     # A tiny subprocess emulates the engine's graceful termination handler, without opening a game.
     def exercise(self, result, timeout=5):
         with tempfile.TemporaryDirectory(prefix='ace-normal-exit-') as folder:

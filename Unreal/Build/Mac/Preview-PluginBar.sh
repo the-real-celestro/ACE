@@ -32,12 +32,13 @@ pluginbar_builder="$pluginbar_engine/Engine/Build/BatchFiles/Mac/Build.sh"
 pluginbar_editor="$pluginbar_engine/Engine/Binaries/Mac/UnrealEditor.app/Contents/MacOS/UnrealEditor"
 pluginbar_test_editor="$pluginbar_engine/Engine/Binaries/Mac/UnrealEditor-Cmd"
 pluginbar_atlas="$pluginbar_project_root/Plugins/ACEClient/Resources/Icons/PluginIcons.png"
+pluginbar_test_runner="$pluginbar_project_root/Build/Mac/Run-Automation.py"
 
 if [[ "$(uname -s)" != Darwin ]]; then
     printf 'This command requires macOS.\n' >&2
     exit 2
 fi
-for pluginbar_required in "$pluginbar_project" "$pluginbar_builder" "$pluginbar_editor" "$pluginbar_test_editor" "$pluginbar_atlas"; do
+for pluginbar_required in "$pluginbar_project" "$pluginbar_builder" "$pluginbar_editor" "$pluginbar_test_editor" "$pluginbar_atlas" "$pluginbar_test_runner"; do
     if [[ ! -f "$pluginbar_required" ]]; then
         printf 'Required file is missing: %s\n' "$pluginbar_required" >&2
         exit 2
@@ -59,22 +60,23 @@ printf 'Building the updated client. Logs: %s\n' "$pluginbar_run_dir"
     2>&1 | tee "$pluginbar_run_dir/Build-console.log"
 
 pluginbar_test_filter='ACE.Plugins.IconArtwork+ACE.Plugins.BarLayout+ACE.Plugins.BarPresentation'
+pluginbar_test_count=3
 if "$pluginbar_full_checks"; then
     pluginbar_test_filter+='+ACE.Plugins.HostAndPanel+ACE.RetailParity.KeyboardBindings'
+    pluginbar_test_count=5
 fi
 printf 'Checking painted icons, pinned-window input and launcher backgrounds.\n'
 # No NullRHI: this test must exercise the actual texture/Slate rendering path.
 # The isolated test profile neither logs into a server nor changes your settings.
-"$pluginbar_test_editor" "$pluginbar_project" -game -unattended -RenderOffscreen \
+python3 "$pluginbar_test_runner" --log "$pluginbar_run_dir/Tests-console.log" \
+    --expected "$pluginbar_test_count" -- \
+    "$pluginbar_test_editor" "$pluginbar_project" -game -unattended -RenderOffscreen \
     -nosound -NoSplash -NoP4 -NoLiveCoding \
     "-UserDir=$pluginbar_run_dir/TestUser" \
     "-ExecCmds=Automation RunTests $pluginbar_test_filter" \
-    '-TestExit=Automation Test Queue Empty' \
-    "-ReportExportPath=$pluginbar_run_dir/Report" \
-    "-ABSLOG=$pluginbar_run_dir/Tests.log" \
-    2>&1 | tee "$pluginbar_run_dir/Tests-console.log"
+    "-ReportExportPath=$pluginbar_run_dir/Report"
 
-python3 - "$pluginbar_run_dir/Tests.log" "$pluginbar_test_filter" <<'PY'
+python3 - "$pluginbar_run_dir/Tests-console.engine.log" "$pluginbar_test_filter" <<'PY'
 from pathlib import Path
 import re
 import sys

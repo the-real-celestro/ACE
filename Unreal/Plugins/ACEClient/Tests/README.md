@@ -4,7 +4,9 @@
 
 Use `Unreal/Build/Mac/Run-Automation.py --log /path/to/check.log --expected N --`
 followed by the executable and its ordinary automation arguments. Queue
-`Automation RunTests ...` without `SoftQuit` or `TestExit`. The runner waits for
+`Automation RunTests ...` without `SoftQuit` or `TestExit`. Mac Unreal launches
+keep the early memory tracker enabled (`-llm`), avoiding UE 5.8 clearing tag state
+while Cocoa still has an allocator scope open during startup. The runner waits for
 the exported report, requests a normal engine shutdown through the process's
 SIGTERM handler, and checks both the process exit and individual test results.
 A failed assertion remains a failed run without setting the engine's critical

@@ -6,13 +6,28 @@ from pathlib import Path
 import re
 import signal
 import subprocess
+import sys
 import time
+
+
+def startup_command(command, platform):
+    command = list(command)
+    if platform == 'darwin' and Path(command[0]).name in ('ACUnreal', 'UnrealEditor', 'UnrealEditor-Cmd'):
+        # UE 5.8 disables/clears its early memory tracker during Engine::Init.
+        # Cocoa can still have an allocator tag scope open on the main thread;
+        # keeping tracking enabled prevents PopTag from using cleared state.
+        if any(arg.lower() == '-nollm' for arg in command):
+            raise ValueError('Mac automation keeps the startup memory tracker enabled; remove -nollm.')
+        if not any(arg.lower() == '-llm' for arg in command):
+            command.append('-llm')
+    return command
 
 
 # Only signal the process we launched. Unreal handles the first SIGTERM as a normal Quit.
 def run_automation(command, log, expected, timeout=420, shutdown_timeout=60):
     if any('softquit' in arg.lower() or arg.lower().startswith('-testexit') for arg in command):
         raise ValueError('Do not use SoftQuit or TestExit; failed SoftQuit runs mark the engine critical on Mac.')
+    command = startup_command(command, sys.platform)
     log = Path(log)
     engine_log = log.with_suffix('.engine.log')
     log.parent.mkdir(parents=True, exist_ok=True)
