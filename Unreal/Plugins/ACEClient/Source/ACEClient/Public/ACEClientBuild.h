@@ -6,7 +6,7 @@ class UWorld;
 namespace ACEClientBuild
 {
 	inline constexpr int32 ReleaseNumber = 157;
-	inline constexpr int32 DustyReleaseNumber = 2;
+	inline constexpr int32 DustyReleaseNumber = 3;
 	inline FString DisplayVersion() { return FString::Printf(TEXT("v%d.%d"), ReleaseNumber, DustyReleaseNumber); }
 	inline constexpr const TCHAR* DesktopProductName = TEXT("AC:Unreal");
 	inline constexpr const TCHAR* VRProductName = TEXT("AC:VR");
