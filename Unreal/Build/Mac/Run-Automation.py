@@ -41,9 +41,12 @@ def run_automation(command, log, expected, timeout=420, shutdown_timeout=60):
     passed = sorted(set(re.findall(r'Result=\{Success\} Name=\{([^}]+)\}', text)))
     failed = sorted(set(re.findall(r'Result=\{Fail\} Name=\{([^}]+)\}', text)))
     bad_shutdown = any(marker in text for marker in ('Fatal error', 'Assertion failed', 'Ensure condition failed', 'Setting GIsCriticalError'))
-    success = normal_shutdown and not timed_out and process.returncode == 0 and not failed and not bad_shutdown and len(passed) == expected
+    # UI-interaction checks can exercise the real Quit button before the runner signals.
+    normal_exit = normal_shutdown or 'LogInit: Display: PreExit Game.' in text
+    success = normal_exit and not timed_out and process.returncode == 0 and not failed and not bad_shutdown and len(passed) == expected
     return dict(success=success, exit_code=process.returncode, passed=passed, failed=failed,
-                normal_shutdown_requested=normal_shutdown, timed_out=timed_out, bad_shutdown=bad_shutdown,
+                normal_shutdown_requested=normal_shutdown, normal_shutdown_verified=normal_exit,
+                timed_out=timed_out, bad_shutdown=bad_shutdown,
                 log=str(log), engine_log=str(engine_log))
 
 

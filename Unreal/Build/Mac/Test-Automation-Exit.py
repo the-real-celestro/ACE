@@ -49,6 +49,16 @@ while True:time.sleep(.05)
         self.assertFalse(record['success'])
         self.assertTrue(record['timed_out'])
 
+    # A UI test that presses the actual Quit button can finish without an external signal.
+    def test_application_quits_normally(self):
+        with tempfile.TemporaryDirectory(prefix='ace-ui-exit-') as folder:
+            record = module.run_automation([sys.executable, '-c',
+                "print('Test Completed. Result={Success} Name={Fixture}'); print('LogInit: Display: PreExit Game.')"],
+                Path(folder) / 'run.log', 1)
+            self.assertTrue(record['success'])
+            self.assertTrue(record['normal_shutdown_verified'])
+            self.assertFalse(record['normal_shutdown_requested'])
+
 
 if __name__ == '__main__':
     unittest.main()
