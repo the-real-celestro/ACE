@@ -17,6 +17,8 @@ This release combines the Mac client features on Thwargle's v157 source base
 - Native ACPedia search and Examine links, account/launcher improvements, expired
   inventory cleanup, closed-chest escape and complete item-casting motion.
 - Upstream v156/v157 UCM automation, equipment and vendor improvements are retained.
+- Mac test runs retain failure reports while closing normally, avoiding critical
+  graphics teardown after a failed check. Route-input checks use their own native window.
 
 The release branch merges the plugin-bar and Mac release histories and records
 the older ACPedia proof of concept already restored and expanded in the hover

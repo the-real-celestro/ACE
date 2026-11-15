@@ -1,5 +1,21 @@
 # Retail parity regression tests
 
+## Mac automation shutdown
+
+Use `Unreal/Build/Mac/Run-Automation.py --log /path/to/check.log --expected N --`
+followed by the executable and its ordinary automation arguments. Queue
+`Automation RunTests ...` without `SoftQuit` or `TestExit`. The runner waits for
+the exported report, requests a normal engine shutdown through the process's
+SIGTERM handler, and checks both the process exit and individual test results.
+A failed assertion remains a failed run without setting the engine's critical
+error flag during graphics teardown. It never force-kills an instance or signals
+a process it did not launch. `Test-Automation-Exit.py` verifies successful, failed
+and timed-out subprocesses without opening the game.
+
+`RouteSaveEndToEnd` and `AutoCraft.Production` require real Cocoa windows, so omit
+`-RenderOffscreen` for those checks. The route fixture owns the same native Slate
+window as its text field instead of borrowing a second window's input surface.
+
 ## Resizable plugin bar (2026-11-13)
 
 `bash Unreal/Build/Mac/Preview-PluginBar.sh --test-only` runs IconArtwork,
