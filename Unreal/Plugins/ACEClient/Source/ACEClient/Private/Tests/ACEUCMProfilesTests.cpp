@@ -398,7 +398,7 @@ bool FACEUCMRouteSaveEndToEndTest::RunTest(const FString&)
 #if PLATFORM_MAC
         // Native popups have their own DPI scale, clipping and desktop origin.
         // Use their normal Slate paint pass so input and hit-test geometry agree.
-        for(int32 I=0;I<3;++I){++GFrameCounter;Slate.Tick();Slate.DrawWindows();FlushRenderingCommands();}
+        for(int32 I=0;I<3;++I){++GFrameCounter;Slate.Tick();FlushRenderingCommands();}
 #else
         auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,false);
         // Paint in texture-local space, but keep cached input geometry in desktop space.
