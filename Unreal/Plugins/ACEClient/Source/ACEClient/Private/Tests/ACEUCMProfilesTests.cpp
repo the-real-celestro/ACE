@@ -418,10 +418,13 @@ bool FACEUCMRouteSaveEndToEndTest::RunTest(const FString&)
         // Use its real hit-test grid without depending on the OS foreground window.
         const FWidgetPath Path(Owner->GetHittestGrid().GetBubblePath(P,0.f,false,0));
         if(!TestTrue(*FString::Printf(TEXT("Rendered route control %s has a hit-test path at %s"),*Widget->GetTag().ToString(),*P.ToString()),Path.IsValid()))return false;
+        if(!TestTrue(*FString::Printf(TEXT("Hit-test path reaches route control %s (leaf %s)"),*Widget->GetTag().ToString(),*Path.GetLastWidget()->GetTag().ToString()),Path.ContainsWidget(Widget.Get())))return false;
         Slate.RoutePointerMoveEvent(Path,FPointerEvent(0,P,P,{},EKeys::Invalid,0,FModifierKeysState()),false);
+        if(!TestTrue(*FString::Printf(TEXT("Pointer hovers route control %s"),*Widget->GetTag().ToString()),Widget->IsHovered()))return false;
         Slate.RoutePointerDownEvent(Path,FPointerEvent(0,P,P,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState()));
         Slate.RoutePointerUpEvent(Path,FPointerEvent(0,P,P,{},EKeys::LeftMouseButton,0,FModifierKeysState()));
-        Paint();return true;
+        // Advance menu dismissal state and native layout between separate clicks.
+        Slate.Tick();Paint();return true;
     };
     auto Button=[&](const TCHAR* Caption){return Click(Find(Panel.ToSharedRef(),FName(*(FString(TEXT("UCMChoice."))+Caption)),false));};
     auto Key=[&](FKey K){Slate.ProcessKeyDownEvent(FKeyEvent(K,FModifierKeysState(),0,false,0,0));Slate.ProcessKeyUpEvent(FKeyEvent(K,FModifierKeysState(),0,false,0,0));};
@@ -473,7 +476,7 @@ bool FACEUCMRouteSaveEndToEndTest::RunTest(const FString&)
         auto Entry=Find(MenuWindow.ToSharedRef(),FName(*(TEXT("UCMMenu.")+Name)),false);
         if(!TestTrue(TEXT("Saved route appears in the actual dropdown"),Entry.IsValid()))return false;
         if(!Click(Entry))return false;
-        TestEqual(TEXT("Dropdown activates saved route"),Host->UCMSectionName(TEXT("Routes")),Name);return true;
+        return TestEqual(TEXT("Dropdown activates saved route"),Host->UCMSectionName(TEXT("Routes")),Name);
     };
     Page(TEXT("Route"));
     // Exercise ordinary UI typing, not SetText/SaveProfile shortcuts. Both click
