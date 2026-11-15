@@ -26,6 +26,7 @@
 #include "Widgets/SWindow.h"
 #include "Widgets/SVirtualWindow.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Input/HittestGrid.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMProfileStorageTest, "ACE.Plugins.LinkedProfiles",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
@@ -407,7 +408,9 @@ bool FACEUCMRouteSaveEndToEndTest::RunTest(const FString&)
         const auto& G=Widget->GetCachedGeometry();const auto P=G.LocalToAbsolute(G.GetLocalSize()*.5);
         const auto Owner=Slate.FindWidgetWindow(Widget.ToSharedRef());
         if(!TestTrue(TEXT("Route control belongs to a window"),Owner.IsValid()))return false;
-        const auto Path=Slate.LocateWindowUnderMouse(P,{Owner.ToSharedRef()},false,0);
+        // The rendered fixture can be in a background/hidden Mac application.
+        // Use its real hit-test grid without depending on the OS foreground window.
+        const FWidgetPath Path(Owner->GetHittestGrid().GetBubblePath(P,0.f,false,0));
         if(!TestTrue(*FString::Printf(TEXT("Rendered route control %s has a hit-test path at %s"),*Widget->GetTag().ToString(),*P.ToString()),Path.IsValid()))return false;
         Slate.RoutePointerMoveEvent(Path,FPointerEvent(0,P,P,{},EKeys::Invalid,0,FModifierKeysState()),false);
         Slate.RoutePointerDownEvent(Path,FPointerEvent(0,P,P,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState()));
