@@ -27,6 +27,7 @@
 #include "Widgets/SVirtualWindow.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Input/HittestGrid.h"
+#include "Types/PaintArgs.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMProfileStorageTest, "ACE.Plugins.LinkedProfiles",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
@@ -395,9 +396,14 @@ bool FACEUCMRouteSaveEndToEndTest::RunTest(const FString&)
     auto PaintWindow=[&](const TSharedRef<SWindow>& W,const FVector2D& Size)
     {
         auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,false);
-        // Native windows and popups hit-test in desktop coordinates, not texture coordinates.
-        const auto Geometry=W->GetWindowGeometryInScreen();Renderer.ViewOffset=-W->GetPositionInScreen();
-        for(int32 I=0;I<3;++I){++GFrameCounter;Renderer.DrawWindow(Target,W->GetHittestGrid(),W,Geometry,Geometry.GetLayoutBoundingRect(),.016f);FlushRenderingCommands();}
+        // Paint in texture-local space, but keep cached input geometry in desktop space.
+        // The hit-test grid stores local cells and applies its desktop origin at lookup.
+        const FVector2D Origin(W->GetPositionInScreen());
+        const auto Geometry=FGeometry::MakeRoot(Size,FSlateLayoutTransform(1.f));
+        const FPaintArgs Args(nullptr,W->GetHittestGrid(),Origin,FApp::GetCurrentTime(),.016f);
+        Renderer.ViewOffset=FVector2D::ZeroVector;
+        for(int32 I=0;I<3;++I){++GFrameCounter;Renderer.DrawWindow(Args,Target,W,Geometry,Geometry.GetLayoutBoundingRect(),.016f);FlushRenderingCommands();}
+        W->GetHittestGrid().SetHittestArea(Origin,Size);
         Target->ReleaseResource();
     };
     auto Paint=[&](){PaintWindow(Window,FVector2D(900,1000));};
