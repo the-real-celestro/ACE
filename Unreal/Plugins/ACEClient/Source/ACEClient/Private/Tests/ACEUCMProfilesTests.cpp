@@ -464,6 +464,9 @@ bool FACEUCMRouteSaveEndToEndTest::RunTest(const FString&)
         auto Open=Find(Choice.ToSharedRef(),TEXT("SButton"),true);
         if(!Click(Open))return false;
         if(!TestTrue(TEXT("Route dropdown opens"),Combo->IsOpen()))return false;
+        // Native auto-sized popup windows are arranged on the next Slate tick.
+        // Give the menu its normal layout pass before querying entry geometry.
+        Slate.Tick();
         auto MenuWindow=Combo->GetMenuWindow();
         if(!TestTrue(TEXT("Route dropdown has a visible popup"),MenuWindow.IsValid()))return false;
         PaintWindow(MenuWindow.ToSharedRef(),MenuWindow->GetClientSizeInScreen());
